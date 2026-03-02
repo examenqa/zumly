@@ -294,8 +294,8 @@ class EditorPanel(QWidget):
 
         self._container.addLayout(info_row)
 
-        # Debug overlay state (managed via settings menu)
-        self._debug_overlay_enabled = False
+        # Debug overlay state (managed via settings menu) — on by default
+        self._debug_overlay_enabled = True
 
         # Encoder preference (auto-detected best available)
         self._encoder_id: str = _best_encoder()

@@ -371,6 +371,7 @@ class MainWindow(QMainWindow):
         self._preview.setVisible(False)
         self._preview.zoom_at_requested.connect(self._on_preview_zoom_at)
         self._preview.centroid_picked.connect(self._on_centroid_picked)
+        self._preview.centroid_dragged.connect(self._on_centroid_dragged)
 
         # Keyframe whose centroid is being repositioned via preview click
         self._centroid_target_kf_id: str = ""
@@ -397,6 +398,9 @@ class MainWindow(QMainWindow):
         self._timeline.segment_deleted.connect(self._delete_zoom_section)
         self._timeline.play_pause_clicked.connect(self._on_play_pause)
         self._timeline.click_event_deleted.connect(self._on_click_event_deleted)
+        self._timeline.add_zoom_requested.connect(
+            lambda t: self._add_keyframe(t, self._editor.zoom_level)
+        )
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
@@ -417,6 +421,9 @@ class MainWindow(QMainWindow):
         self._editor.redo_requested.connect(self._redo)
         self._editor.encoder_changed.connect(self._on_encoder_changed)
         content.addWidget(self._editor)
+
+        # Enable zoom debug overlay by default
+        self._preview.set_debug_overlay(True)
 
         root.addLayout(content, 1)
 
@@ -1184,8 +1191,8 @@ class MainWindow(QMainWindow):
         # Auto-add a matching zoom-out keyframe if this is a zoom-in
         # so the zoom doesn't span the entire remaining timeline
         if zoom > 1.01 and not self._recording:
-            zoom_out_time = min(timestamp + 3000, self._rec_duration_ms)
-            zoom_out_dur = 1200.0  # slower zoom-out for smooth feel
+            zoom_out_time = min(timestamp + 1500, self._rec_duration_ms)
+            zoom_out_dur = 600.0  # transition back to 1×
 
             # Clamp zoom-out so it doesn't overlap the next zoom-in
             next_zoom_in = next(
@@ -1269,17 +1276,16 @@ class MainWindow(QMainWindow):
                 self._drag_undo_pushed = True
             self._mark_dirty()
 
-        # Clamp so it doesn't cross its neighbours
+        # Clamp so it doesn’t cross its neighbours
+        MIN_KF_GAP_MS = 100  # keep keyframes at least 100ms apart
         prev_kf = kfs[moved_idx - 1] if moved_idx > 0 else None
         next_kf = kfs[moved_idx + 1] if moved_idx + 1 < len(kfs) else None
 
         if prev_kf is not None:
-            # Must stay after previous keyframe (+ its transition duration)
-            earliest = prev_kf.timestamp + prev_kf.duration
+            earliest = prev_kf.timestamp + MIN_KF_GAP_MS
             new_time_ms = max(new_time_ms, earliest)
         if next_kf is not None:
-            # Must end before next keyframe starts
-            latest = next_kf.timestamp - moved_kf.duration
+            latest = next_kf.timestamp - MIN_KF_GAP_MS
             new_time_ms = min(new_time_ms, max(0, latest))
 
         moved_kf.timestamp = new_time_ms
@@ -1308,29 +1314,36 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
         menu.setStyleSheet(
-            "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58; padding: 4px; }"
-            "QMenu::item { padding: 6px 20px; }"
-            "QMenu::item:selected { background: #8b5cf6; }"
+            "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "        border-radius: 6px; padding: 4px 0; }"
+            "QMenu::item { padding: 6px 16px; }"
+            "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
+            "QMenu::item:disabled { color: #6c6890; }"
+            "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
         )
 
+        # Section header
+        header = menu.addAction(f"🔍  Zoom  ({target_kf.zoom:.2f}×)")
+        header.setEnabled(False)
+        menu.addSeparator()
+
         for label, level in ZOOM_DEPTHS.items():
-            check = " ✓" if abs(target_kf.zoom - level) < 0.01 else ""
-            act = menu.addAction(f"{label} ({level}×){check}")
+            check = "  ✓" if abs(target_kf.zoom - level) < 0.01 else ""
+            act = menu.addAction(f"    {label}  ({level}×){check}")
             act.triggered.connect(
                 lambda checked, z=level: self._set_segment_zoom(start_kf_id, z)
             )
 
         menu.addSeparator()
 
-        # Centroid repositioning — click preview to set new center
-        centroid_label = f"📍 Set centroid  ({target_kf.x:.2f}, {target_kf.y:.2f})"
-        centroid_act = menu.addAction(centroid_label)
+        # Centroid repositioning
+        centroid_act = menu.addAction("📍  Pick zoom center on preview\u2026")
         centroid_act.triggered.connect(
             lambda: self._enter_centroid_pick(start_kf_id)
         )
 
         menu.addSeparator()
-        del_act = menu.addAction("🗑 Delete zoom section")
+        del_act = menu.addAction("🗑  Delete zoom section")
         del_act.triggered.connect(lambda: self._delete_zoom_section(start_kf_id))
 
         menu.exec(self.cursor().pos())
@@ -1355,13 +1368,21 @@ class MainWindow(QMainWindow):
         """Start centroid-pick mode: next preview click sets the keyframe's pan."""
         self._centroid_target_kf_id = kf_id
         self._preview.enter_centroid_pick_mode()
+        self._status_text.setText(
+            "Click on the preview to set the zoom center. "
+            "Press <b>Esc</b> to cancel."
+        )
+        self._status_dot.setObjectName("StatusDotRecording")
+        self._status_dot.style().unpolish(self._status_dot)
+        self._status_dot.style().polish(self._status_dot)
 
     def _on_centroid_picked(self, pan_x: float, pan_y: float) -> None:
         """Apply the picked centroid to the target keyframe."""
         kf_id = self._centroid_target_kf_id
         self._centroid_target_kf_id = ""
-        if not kf_id:
-            return
+        self._restore_status_bar()
+        if not kf_id or pan_x < 0 or pan_y < 0:
+            return  # cancelled (Escape) or invalid
         self._zoom_engine.push_undo()
         for kf in self._zoom_engine.keyframes:
             if kf.id == kf_id:
@@ -1369,6 +1390,40 @@ class MainWindow(QMainWindow):
                 kf.y = pan_y
                 break
         self._mark_dirty()
+        self._zoom_engine.update(self._playback_time)
+        self._preview.set_zoom(
+            self._zoom_engine.current_zoom,
+            self._zoom_engine.current_pan_x,
+            self._zoom_engine.current_pan_y,
+        )
+        self._refresh_editor()
+
+    def _cancel_centroid_pick(self) -> None:
+        """Cancel centroid-pick mode (Escape key or programmatic)."""
+        if self._centroid_target_kf_id:
+            self._centroid_target_kf_id = ""
+            self._preview.cancel_centroid_pick()
+            self._restore_status_bar()
+
+    def _restore_status_bar(self) -> None:
+        """Reset the status bar to its default state."""
+        self._status_text.setText("Ready")
+        self._status_dot.setObjectName("StatusDotReady")
+        self._status_dot.style().unpolish(self._status_dot)
+        self._status_dot.style().polish(self._status_dot)
+
+    def _on_centroid_dragged(self, kf_id: str, pan_x: float, pan_y: float) -> None:
+        """Handle live-dragging of a centroid marker on the debug overlay."""
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == kf_id:
+                # Push undo once at drag start
+                if not self._preview._centroid_drag_undo_pushed:
+                    self._zoom_engine.push_undo()
+                    self._preview._centroid_drag_undo_pushed = True
+                kf.x = pan_x
+                kf.y = pan_y
+                self._mark_dirty()
+                break
         self._zoom_engine.update(self._playback_time)
         self._preview.set_zoom(
             self._zoom_engine.current_zoom,

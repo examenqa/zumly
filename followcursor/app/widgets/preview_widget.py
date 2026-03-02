@@ -29,11 +29,14 @@ class PreviewWidget(QWidget):
     zoom_at_requested = Signal(float, float, float, float)
     # Signal: (pan_x, pan_y) — emitted when centroid-pick mode click occurs
     centroid_picked = Signal(float, float)
+    # Signal: (kf_id, pan_x, pan_y) — emitted while dragging a centroid marker
+    centroid_dragged = Signal(str, float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("PreviewWidget")
         self.setMinimumSize(480, 270)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -65,6 +68,13 @@ class PreviewWidget(QWidget):
 
         # centroid-pick mode: when True, next left-click picks centroid
         self._centroid_pick_mode: bool = False
+
+        # centroid drag state (overlay markers)
+        self._centroid_drag_kf_id: str = ""  # keyframe being dragged
+        self._centroid_drag_undo_pushed: bool = False
+
+        # Enable mouse tracking for hover cursor changes
+        self.setMouseTracking(True)
 
         # playback state
         self._video_cap: Optional[cv2.VideoCapture] = None
@@ -151,26 +161,81 @@ class PreviewWidget(QWidget):
         """Enter centroid-pick mode: next left-click picks a pan coordinate."""
         self._centroid_pick_mode = True
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocus()  # so we receive Escape key
+        self.update()  # trigger banner repaint
 
     def cancel_centroid_pick(self) -> None:
         """Cancel centroid-pick mode without emitting."""
         self._centroid_pick_mode = False
         self.unsetCursor()
+        self.update()  # remove banner
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        """Handle Escape to cancel centroid-pick mode."""
+        if event.key() == Qt.Key.Key_Escape and self._centroid_pick_mode:
+            self._centroid_pick_mode = False
+            self.unsetCursor()
+            self.update()
+            # Notify parent to restore status bar
+            self.centroid_picked.emit(-1.0, -1.0)
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        if (
-            self._centroid_pick_mode
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Centroid-pick mode takes priority
+            if self._centroid_pick_mode:
+                pan_x, pan_y = self._click_to_pan(
+                    event.position().x(), event.position().y()
+                )
+                self._centroid_pick_mode = False
+                self.unsetCursor()
+                if pan_x >= 0:
+                    self.centroid_picked.emit(pan_x, pan_y)
+                return
+            # Check if click hits a debug overlay centroid marker
+            if self._debug_overlay and self._debug_keyframes:
+                hit_id = self._centroid_hit_test(
+                    event.position().x(), event.position().y()
+                )
+                if hit_id:
+                    self._centroid_drag_kf_id = hit_id
+                    self._centroid_drag_undo_pushed = False
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._centroid_drag_kf_id:
             pan_x, pan_y = self._click_to_pan(
                 event.position().x(), event.position().y()
             )
-            self._centroid_pick_mode = False
-            self.unsetCursor()
             if pan_x >= 0:
-                self.centroid_picked.emit(pan_x, pan_y)
+                self.centroid_dragged.emit(
+                    self._centroid_drag_kf_id, pan_x, pan_y
+                )
             return
-        super().mousePressEvent(event)
+        # Hover cursor: show open hand when over a centroid marker
+        if self._debug_overlay and self._debug_keyframes:
+            hit_id = self._centroid_hit_test(
+                event.position().x(), event.position().y()
+            )
+            if hit_id:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            elif not self._centroid_pick_mode:
+                self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._centroid_drag_kf_id
+        ):
+            self._centroid_drag_kf_id = ""
+            self._centroid_drag_undo_pushed = False
+            self.unsetCursor()
+            return
+        super().mouseReleaseEvent(event)
 
     def load_video(
         self, path: str, actual_fps: float = 0.0, duration_ms: float = 0.0,
@@ -322,13 +387,15 @@ class PreviewWidget(QWidget):
 
         menu = QMenu(self)
         menu.setStyleSheet(
-            "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58; }"
-            "QMenu::item:selected { background: #8b5cf6; }"
+            "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "        border-radius: 6px; padding: 4px 0; }"
+            "QMenu::item { padding: 6px 16px; }"
+            "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
         )
 
         time_ms = self._current_time_ms
 
-        act_zoom = menu.addAction("🔍 Add Zoom here")
+        act_zoom = menu.addAction("🔍  Add Zoom here")
         act_zoom.triggered.connect(
             lambda: self.zoom_at_requested.emit(time_ms, 1.5, pan_x, pan_y)
         )
@@ -429,7 +496,107 @@ class PreviewWidget(QWidget):
 
         return nx, ny
 
-    # ── painting ────────────────────────────────────────────────────
+    def _screen_geometry(self) -> tuple:
+        """Return (cx, cy, W, H, scr_x, scr_y, scr_w, scr_h) in widget coords.
+
+        Computes the canvas rect and screen rect matching the compositor,
+        used for debug overlay hit-testing and rendering.  Returns all zeros
+        if geometry can't be computed.
+        """
+        from ..frames import DEFAULT_FRAME
+
+        if self._frame is None:
+            return (0, 0, 0, 0, 0, 0, 0, 0)
+
+        cx, cy, W, H = self._canvas_rect()
+        iw, ih = self._frame.width(), self._frame.height()
+        if iw <= 0 or ih <= 0 or W <= 0 or H <= 0:
+            return (0, 0, 0, 0, 0, 0, 0, 0)
+
+        fp = self._frame_preset or DEFAULT_FRAME
+        video_aspect = iw / ih
+
+        if fp.is_none:
+            if W / H > video_aspect:
+                scr_h = H
+                scr_w = H * video_aspect
+            else:
+                scr_w = W
+                scr_h = W / video_aspect
+            scr_x = (W - scr_w) / 2
+            scr_y = (H - scr_h) / 2
+        else:
+            pad_x = W * fp.padding
+            pad_y = H * fp.padding
+            avail_w = W - 2 * pad_x
+            avail_h = H - 2 * pad_y
+            preliminary_scale = avail_w / 900.0
+            bw_est = fp.bezel_width * preliminary_scale
+            dev_h = avail_h
+            scr_h = dev_h - 2 * bw_est
+            scr_w = scr_h * video_aspect
+            dev_w = scr_w + 2 * bw_est
+            if dev_w > avail_w:
+                dev_w = avail_w
+                scr_w = dev_w - 2 * bw_est
+                scr_h = scr_w / video_aspect
+                dev_h = scr_h + 2 * bw_est
+            scale = dev_w / 900.0
+            bw = fp.bezel_width * scale
+            scr_x = (W - dev_w) / 2 + bw
+            scr_y = (H - dev_h) / 2 + bw
+
+        return (cx, cy, W, H, scr_x, scr_y, scr_w, scr_h)
+
+    def _centroid_hit_test(self, wx: float, wy: float) -> str:
+        """Check if widget position (wx, wy) is over a debug centroid marker.
+
+        Returns the keyframe ID if hit, else empty string.
+        """
+        cx, cy, W, H, scr_x, scr_y, scr_w, scr_h = self._screen_geometry()
+        if W <= 0:
+            return ""
+
+        t = self._current_time_ms
+        zoom = self._zoom
+        pan_x = self._pan_x
+        pan_y = self._pan_y
+        fx = scr_x + pan_x * scr_w
+        fy = scr_y + pan_y * scr_h
+
+        sorted_kfs = sorted(self._debug_keyframes, key=lambda k: k.timestamp)
+        for i, kf in enumerate(sorted_kfs):
+            if kf.zoom <= 1.01:
+                continue
+            zoom_out_end = kf.timestamp + 5000
+            for nkf in sorted_kfs[i + 1:]:
+                if nkf.zoom <= 1.01:
+                    zoom_out_end = nkf.timestamp + nkf.duration
+                    break
+            if not (kf.timestamp - 500 <= t <= zoom_out_end):
+                continue
+
+            # Compute screen position of this centroid (same as _draw_debug_overlay)
+            scene_x = scr_x + kf.x * scr_w
+            scene_y = scr_y + kf.y * scr_h
+            if zoom > 1.001:
+                px = (scene_x - fx) * zoom + W / 2
+                py = (scene_y - fy) * zoom + H / 2
+            else:
+                px = scene_x
+                py = scene_y
+
+            # Translate to widget coords
+            px += cx
+            py += cy
+
+            dist = ((wx - px) ** 2 + (wy - py) ** 2) ** 0.5
+            if dist <= 14.0:  # generous grab radius
+                return kf.id
+
+        return ""
+
+    # \u2500\u2500 painting \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         from ..compositor import compose_scene, draw_empty_bg
@@ -486,6 +653,10 @@ class PreviewWidget(QWidget):
         # Debug overlay: zoom target markers
         if self._debug_overlay and self._debug_keyframes:
             self._draw_debug_overlay(painter)
+
+        # Centroid-pick banner
+        if self._centroid_pick_mode:
+            self._draw_centroid_pick_banner(painter)
 
         painter.end()
 
@@ -716,6 +887,26 @@ class PreviewWidget(QWidget):
             painter.setPen(QColor(255, 255, 255, 200))
             painter.drawText(QPointF(22, leg_y + 10), txt)
             leg_y += 18
+
+    def _draw_centroid_pick_banner(self, painter: QPainter) -> None:
+        """Draw a translucent banner at the top of the preview during pick mode."""
+        W = float(self.width())
+        banner_text = "Click to set zoom center  ·  Esc to cancel"
+        font = QFont()
+        font.setPixelSize(13)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(banner_text) + 32
+        th = fm.height() + 12
+        bx = (W - tw) / 2
+        by = 10.0
+        pill = QRectF(bx, by, tw, th)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(139, 92, 246, 220))  # purple, semi-opaque
+        painter.drawRoundedRect(pill, th / 2, th / 2)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, banner_text)
 
     # ── internal ────────────────────────────────────────────────────
 

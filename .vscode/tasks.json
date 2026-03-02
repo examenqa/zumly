@@ -46,6 +46,21 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
+		},
+		{
+			"label": "Run Tests",
+			"type": "process",
+			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
+			"args": ["-m", "pytest", "tests/", "-v", "--tb=short"],
+			"options": {
+				"cwd": "${workspaceFolder}/followcursor"
+			},
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
 		}
 	]
 }

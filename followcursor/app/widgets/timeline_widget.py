@@ -41,6 +41,7 @@ class _TimelineTrack(QWidget):
     segment_clicked = Signal(str)        # start keyframe id of clicked segment
     segment_deleted = Signal(str)        # start keyframe id of segment to delete
     click_event_deleted = Signal(int)    # index of click event to delete
+    add_zoom_requested = Signal(float)   # timestamp ms — add zoom at this time
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()             # emitted when any drag completes
 
@@ -69,6 +70,7 @@ class _TimelineTrack(QWidget):
 
         # Drag state for zoom segment resizing / moving
         self._drag_kf_id: str | None = None    # which keyframe is being dragged
+        self._drag_edge_is_right: bool = False  # True when dragging right edge of segment
         self._dragging: bool = False
         self._drag_mode: str = ""              # "edge" | "body" | "trim_start" | "trim_end"
         self._drag_body_ids: list = []          # [start_kf_id, end_kf_id] for body drag
@@ -90,8 +92,16 @@ class _TimelineTrack(QWidget):
         self._drag_actually_moved: bool = False
         self._pending_select_id: str = ""       # segment to select on release if no drag
 
+    _MENU_STYLE = (
+        "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+        "        border-radius: 6px; padding: 4px 0; }"
+        "QMenu::item { padding: 6px 16px; }"
+        "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
+        "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
+    )
+
     def _on_right_click(self, pos) -> None:
-        """Right-click on a zoom segment or click event opens context menu."""
+        """Right-click on a zoom segment, click event, or empty space."""
         mx, my = pos.x(), pos.y()
         # Check zoom segment first
         seg_info = self._segment_body_hit_info(mx, my)
@@ -105,13 +115,21 @@ class _TimelineTrack(QWidget):
             self._selected_click_idx = click_idx
             self.update()
             menu = QMenu(self)
-            menu.setStyleSheet(
-                "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58; padding: 4px; }"
-                "QMenu::item { padding: 6px 20px; }"
-                "QMenu::item:selected { background: #8b5cf6; }"
-            )
-            del_act = menu.addAction("🗑 Delete click event")
+            menu.setStyleSheet(self._MENU_STYLE)
+            del_act = menu.addAction("🗑  Delete click event")
             del_act.triggered.connect(lambda: self._delete_selected_click())
+            menu.exec(self.mapToGlobal(pos))
+            return
+        # Empty space — offer to add a zoom section
+        if self.duration > 0 and self.width() > 0:
+            ratio = max(0.0, min(1.0, mx / self.width()))
+            time_ms = ratio * self.duration
+            menu = QMenu(self)
+            menu.setStyleSheet(self._MENU_STYLE)
+            act_zoom = menu.addAction("🔍  Add Zoom here")
+            act_zoom.triggered.connect(
+                lambda: self.add_zoom_requested.emit(time_ms)
+            )
             menu.exec(self.mapToGlobal(pos))
 
     # ── painting ────────────────────────────────────────────────────
@@ -507,17 +525,17 @@ class _TimelineTrack(QWidget):
 
     # ── mouse events ────────────────────────────────────────────────
 
-    def _edge_hit_test(self, x: float, y: float) -> str | None:
+    def _edge_hit_test(self, x: float, y: float) -> tuple | None:
         """Check if the mouse is over a segment edge handle.
-        Returns the keyframe id to drag, or None."""
+        Returns (keyframe_id, is_right_edge) or None."""
         if y < self._seg_top or y > self._seg_top + self._seg_h:
             return None
         grab = self.EDGE_GRAB_PX
         for sx, ex, start_id, end_id in self._segments:
             if abs(x - sx) <= grab and start_id:
-                return start_id
+                return (start_id, False)
             if abs(x - ex) <= grab and end_id:
-                return end_id
+                return (end_id, True)
         return None
 
     def _segment_body_hit_info(self, x: float, y: float) -> tuple | None:
@@ -538,11 +556,13 @@ class _TimelineTrack(QWidget):
             my = event.position().y()
             # Check zoom segment edge drag first — takes priority over trim handles so
             # that blocks touching the video boundaries (x=0 or x=width) remain resizable.
-            kf_id = self._edge_hit_test(mx, my)
-            if kf_id:
+            edge_hit = self._edge_hit_test(mx, my)
+            if edge_hit:
+                kf_id, is_right = edge_hit
                 self._dragging = True
                 self._drag_mode = "edge"
                 self._drag_kf_id = kf_id
+                self._drag_edge_is_right = is_right
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
                 return
@@ -621,6 +641,13 @@ class _TimelineTrack(QWidget):
             elif self._drag_mode == "edge" and self._drag_kf_id:
                 ratio = max(0.0, min(1.0, mx / self.width()))
                 new_time = ratio * self.duration
+                # Right-edge drags: mouse is at the visual edge which is
+                # kf.timestamp + kf.duration, so subtract duration to get
+                # the actual timestamp the keyframe should move to.
+                if self._drag_edge_is_right:
+                    kf = next((k for k in self.keyframes if k.id == self._drag_kf_id), None)
+                    if kf:
+                        new_time = new_time - kf.duration
                 self.keyframe_moved.emit(self._drag_kf_id, new_time)
                 return
             elif self._drag_mode == "body" and self._drag_body_ids:
@@ -643,9 +670,9 @@ class _TimelineTrack(QWidget):
                 return
 
         # Update cursor based on hover over edge handles, trim handles, or segment body
-        kf_id = self._edge_hit_test(mx, my)
+        edge_hit = self._edge_hit_test(mx, my)
         trim_hit = self._trim_hit_test(mx)
-        if kf_id:
+        if edge_hit:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
         elif trim_hit:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
@@ -718,6 +745,7 @@ class TimelineWidget(QWidget):
     segment_deleted = Signal(str)       # start kf id of segment to delete
     play_pause_clicked = Signal()       # toggle playback
     click_event_deleted = Signal(int)   # click event index to delete
+    add_zoom_requested = Signal(float)  # timestamp ms — add zoom at this time
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()            # emitted when any drag completes
 
@@ -783,6 +811,7 @@ class TimelineWidget(QWidget):
         self._track.segment_clicked.connect(self.segment_clicked)
         self._track.segment_deleted.connect(self.segment_deleted)
         self._track.click_event_deleted.connect(self.click_event_deleted)
+        self._track.add_zoom_requested.connect(self.add_zoom_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
         layout.addWidget(self._track)

@@ -178,7 +178,8 @@ The generated keyframes appear as color-coded segments on the timeline.
 
 Add zoom keyframes by hand for precise control:
 
-- **Right-click the preview** → **🔍 Add Zoom here** — adds a keyframe at the clicked position and the current playback time
+- **Right-click the preview** — **🔍  Add Zoom here** — adds a keyframe at the clicked position and the current playback time
+- **Right-click the timeline** (empty space) — **🔍  Add Zoom here** — adds a zoom section centered on the recorded cursor position at that time
 - **Editor Panel** → **🔍 Add Zoom** — adds a keyframe at the current playback position, centered on the cursor's recorded location at that time
 
 Each keyframe stores:
@@ -520,6 +521,7 @@ For additional editing beyond what FollowCursor offers, you can hand off your re
 | **Left-click** | Zoom segment | Select segment |
 | **Left-click** | Click event dot | Select click event |
 | **Right-click** | Preview | Add zoom at click position |
+| **Right-click** | Timeline (empty space) | Add zoom section at that time |
 | **Right-click** | Zoom segment | Context menu (depth, centroid, delete) |
 | **Drag edge** | Zoom segment | Resize segment duration |
 | **Drag body** | Zoom segment | Move segment in time |
@@ -583,5 +585,5 @@ A red pulsing border overlay that appears around the captured monitor during rec
 
 Click the **⚙** cog icon at the bottom of the editor panel (next to the ℹ️ session info label) to open the settings popup menu. Available settings:
 
-- **Show zoom debug overlay** — Toggle colored markers on the preview showing where activity was detected and why zoom keyframes were placed. Useful for fine-tuning keyframe positions and verifying zoom transitions visually.
+- **Show zoom debug overlay** — Toggle colored markers on the preview showing where activity was detected and why zoom keyframes were placed. Useful for fine-tuning keyframe positions and verifying zoom transitions visually. **Enabled by default.**
 - **Video encoder** — Submenu listing all detected H.264 encoders (GPU-accelerated and software). A checkmark shows the current selection. See [Video Encoder](#video-encoder) for details.

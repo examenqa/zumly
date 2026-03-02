@@ -110,7 +110,10 @@ followcursor/                    ← repo root
 - **Pan-while-zoomed chains**: consecutive clusters within `PAN_MERGE_GAP_MS` (1500ms) are grouped — camera zooms in at the first cluster, pans smoothly to each subsequent cluster while staying zoomed, then zooms out only after the last cluster. Chains are capped at `MAX_CHAIN_LENGTH = 4` clusters. Gap is measured from actual activity end to next activity start (hold period excluded). Pan duration scales with distance (`PAN_TRANSITION_MS = 400`–`PAN_TRANSITION_MAX_MS = 700` ms)
 - **Overlap prevention**: after generating keyframes, a post-processing pass ensures each zoom-out completes before the next zoom-in starts — overlapping transitions are shortened or shifted
 - Dampened panning: `_dampen_pan()` accepts `from_x`/`from_y` to compute the minimal shift from the current viewport position (not always from center). Viewport is clamped so it never flies off the source edge.
-- Manual keyframes via right-click on timeline or editor panel
+- Manual keyframes via right-click on timeline (empty space or zoom segment), preview, or editor panel
+- **Manual zoom defaults**: hold time 1500ms, zoom-out transition 600ms. Overlap prevention clamps the zoom-out to stay before the next zoom-in.
+- **Segment edge dragging**: right-edge drags account for the zoom-out keyframe's transition duration so the visual edge follows the mouse. Minimum keyframe gap during drag: 100ms.
+- **Debug overlay**: enabled by default — shows colored zoom markers on the preview
 - **Undo/redo**: `ZoomEngine` has snapshot-based undo/redo (deep-copy, MAX_UNDO=50). `push_undo()` called before every mutation. Drag operations debounced via `_drag_undo_pushed` flag.
 - **Dirty tracking**: `_unsaved_changes` flag set by `_mark_dirty()` after every mutation; cleared on save
 
