@@ -329,7 +329,7 @@ def draw_clicks_cv(
         return
 
     fh, fw = frame_bgr.shape[:2]
-    max_r = max(20, int(fh * 0.015))
+    max_r = max(20, int(fh * 0.025))
 
     for click in click_events:
         age = time_ms - click.timestamp

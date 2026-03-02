@@ -565,7 +565,9 @@ class VideoExporter(QObject):
                     engine.add_keyframe(kf)
 
                 # Pre-build cursor template for overlay
-                cursor_h_px = max(16, int(h * 0.015))
+                # Use scr_h (screen area height) with same factor as preview
+                # compositor (screen_rect_h * 0.032) for visual consistency
+                cursor_h_px = max(16, int(scr_h * 0.032))
                 c_bgr, c_alpha = _build_cursor_template(cursor_h_px)
                 m_left = monitor_rect.get("left", 0)
                 m_top = monitor_rect.get("top", 0)

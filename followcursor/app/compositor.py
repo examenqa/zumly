@@ -210,9 +210,20 @@ def compose_scene(
     elif not _zoom_video_only and zoom > 1.001:
         fx = scr_x + pan_x * scr_w
         fy = scr_y + pan_y * scr_h
+        # Clamp so the zoomed device stays within the canvas, matching
+        # the export pipeline's clamping behaviour.
+        ox = fx * zoom - W / 2
+        oy = fy * zoom - H / 2
+        max_ox = W * zoom - W
+        max_oy = H * zoom - H
+        ox = max(0.0, min(ox, max_ox))
+        oy = max(0.0, min(oy, max_oy))
+        # Derive the clamped focal point for the painter transform
+        fx_c = (ox + W / 2) / zoom
+        fy_c = (oy + H / 2) / zoom
         painter.translate(W / 2, H / 2)
         painter.scale(zoom, zoom)
-        painter.translate(-fx, -fy)
+        painter.translate(-fx_c, -fy_c)
 
     # ── device body (outer shell) ───────────────────────────────────
     if not fp.is_none:
