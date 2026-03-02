@@ -1842,6 +1842,40 @@ class MainWindow(QMainWindow):
             dlg.addButton("Don\u2019t Save", QMessageBox.ButtonRole.DestructiveRole)
             btn_cancel = dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
             dlg.setDefaultButton(btn_cancel)
+            dlg.setStyleSheet("""
+                QMessageBox {
+                    background-color: #1a1829;
+                    color: #e4e4ed;
+                }
+                QMessageBox QLabel {
+                    color: #e4e4ed;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    height: 32px;
+                    min-width: 80px;
+                    padding: 0 18px;
+                    border-radius: 6px;
+                    border: 1px solid #3d3b55;
+                    background-color: #28263e;
+                    color: #e4e4ed;
+                    font-size: 13px;
+                    font-weight: 500;
+                }
+                QPushButton:hover {
+                    background-color: #353350;
+                    border-color: #4e4c68;
+                }
+                QPushButton:default {
+                    background-color: #8b5cf6;
+                    border: none;
+                    color: white;
+                    font-weight: 600;
+                }
+                QPushButton:default:hover {
+                    background-color: #9d74f7;
+                }
+            """)
             dlg.exec()
             clicked = dlg.clickedButton()
             if clicked == btn_cancel:
