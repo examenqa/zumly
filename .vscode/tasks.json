@@ -5,7 +5,9 @@
 			"label": "Run",
 			"type": "process",
 			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
-			"args": ["main.py"],
+			"args": [
+				"main.py"
+			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
 			},
@@ -37,7 +39,13 @@
 			"label": "Install Dependencies",
 			"type": "process",
 			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
-			"args": ["-m", "pip", "install", "-r", "requirements.txt"],
+			"args": [
+				"-m",
+				"pip",
+				"install",
+				"-r",
+				"requirements.txt"
+			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
 			},
@@ -51,7 +59,13 @@
 			"label": "Run Tests",
 			"type": "process",
 			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
-			"args": ["-m", "pytest", "tests/", "-v", "--tb=short"],
+			"args": [
+				"-m",
+				"pytest",
+				"tests/",
+				"-v",
+				"--tb=short"
+			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
 			},
@@ -61,6 +75,26 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
+		},
+		{
+			"label": "Profile Imports",
+			"type": "shell",
+			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_imports.py"
+		},
+		{
+			"label": "Profile Startup",
+			"type": "shell",
+			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_startup.py"
+		},
+		{
+			"label": "Profile Init",
+			"type": "shell",
+			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_init.py"
+		},
+		{
+			"label": "Profile Init2",
+			"type": "shell",
+			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_init2.py"
 		}
 	]
 }

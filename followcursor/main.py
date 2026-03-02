@@ -88,19 +88,8 @@ def main() -> None:
     app.setApplicationName("FollowCursor")
     app.setApplicationVersion(__version__)
 
-    # Build QIcon from painted pixmaps
+    # Build QIcon from painted pixmaps (fast QPainter-based icon)
     icon = create_app_icon()
-
-    # Also generate a real .ico file and add it — Windows taskbar needs this
-    try:
-        ico_path = get_ico_path()
-        ico_icon = QIcon(ico_path)
-        # Merge: the .ico gets priority for the taskbar
-        for sz in ico_icon.availableSizes():
-            icon.addPixmap(ico_icon.pixmap(sz))
-    except Exception:
-        pass  # fall back to QPainter-rendered pixmaps
-
     app.setWindowIcon(icon)
 
     # dark palette base (QSS handles the rest)
@@ -118,6 +107,19 @@ def main() -> None:
 
     window = MainWindow()
     window.show()
+
+    # Merge the .ico file AFTER the window is visible (saves ~78ms from startup)
+    def _load_ico():
+        try:
+            ico_path = get_ico_path()
+            ico_icon = QIcon(ico_path)
+            for sz in ico_icon.availableSizes():
+                icon.addPixmap(ico_icon.pixmap(sz))
+            app.setWindowIcon(icon)
+        except Exception:
+            pass
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(0, _load_ico)
 
     # Install native event filter for taskbar close support
     if sys.platform == "win32":

@@ -1,5 +1,7 @@
 {
 	"terminal.integrated.automationProfile.windows": {
 		"path": "cmd.exe"
-	}
+	},
+	"terminal.integrated.defaultProfile.linux": "",
+	"terminal.integrated.defaultProfile.windows": "Command Prompt"
 }

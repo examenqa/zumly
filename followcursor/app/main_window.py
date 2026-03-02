@@ -41,7 +41,7 @@ from .keyboard_tracker import KeyboardTracker
 from .click_tracker import ClickTracker
 from .screen_recorder import ScreenRecorder
 from .global_hotkeys import GlobalHotkeys
-from .video_exporter import VideoExporter
+# VideoExporter imported lazily to avoid pulling in cv2/numpy at startup
 from .project_file import PROJ_EXT
 from .backgrounds import PRESETS as BG_PRESETS
 from .frames import FRAME_PRESETS
@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
         self._click_tracker = ClickTracker(parent=self)
         self._recorder = ScreenRecorder(parent=self)
         self._hotkeys = GlobalHotkeys(parent=self)
-        self._exporter = VideoExporter(parent=self)
+        self._exporter = None  # Created lazily via _ensure_exporter()
         self._border_overlay = RecordingBorderOverlay()
 
         self._recording = False
@@ -438,10 +438,7 @@ class MainWindow(QMainWindow):
 
         self._hotkeys.record_toggle_pressed.connect(self._on_record_toggle)
 
-        self._exporter.progress.connect(self._on_export_progress)
-        self._exporter.finished.connect(self._on_export_finished)
-        self._exporter.error.connect(self._on_export_error)
-        self._exporter.status.connect(self._on_export_status)
+        self._connect_exporter_signals_if_ready()
 
         # countdown overlay (covers the central widget)
         self._countdown = CountdownOverlay(central)
@@ -452,13 +449,8 @@ class MainWindow(QMainWindow):
         self._processing_overlay = ProcessingOverlay(central)
         self._processing_overlay.setVisible(False)
 
-        # ── system tray icon ────────────────────────────────────────
-        self._tray_icon = QSystemTrayIcon(create_app_icon(), self)
-        tray_menu = QMenu()
-        tray_menu.addAction("Show FollowCursor", self._restore_from_tray)
-        tray_menu.addAction("Stop Recording", self._stop_recording)
-        self._tray_icon.setContextMenu(tray_menu)
-        self._tray_icon.activated.connect(self._on_tray_activated)
+        # ── deferred tray icon (created after window shows) ─────────
+        self._tray_icon = None
 
         # Apply persisted background / frame presets to UI
         if self._bg_preset:
@@ -473,14 +465,40 @@ class MainWindow(QMainWindow):
         if saved_encoder:
             self._editor.set_encoder_by_id(saved_encoder)
 
-        # Show encoder in status bar
-        self._update_encoder_label(self._editor.encoder_id)
-
         # Show initial title (Untitled project)
         self._update_title()
 
         # Register persistent Ctrl+Shift+R hotkey
         self._hotkeys.register_record_hotkey()
+
+        # Deferred init — runs right after the event loop starts
+        # (tray icon, encoder label, etc.)
+        QTimer.singleShot(0, self._deferred_init)
+
+    # ════════════════════════════════════════════════════════════════
+    #  Deferred initialization (runs after window.show())
+    # ════════════════════════════════════════════════════════════════
+
+    def _deferred_init(self) -> None:
+        """Complete heavy initialization after the window is visible.
+
+        Called via ``QTimer.singleShot(0, ...)`` so the window paints
+        immediately.  Creates the system tray icon, updates the encoder
+        label, and pre-imports heavy modules in the background.
+        """
+        self._ensure_tray_icon()
+        self._update_encoder_label(self._editor.encoder_id)
+
+    def _ensure_tray_icon(self) -> None:
+        """Create the system tray icon on first use."""
+        if self._tray_icon is not None:
+            return
+        self._tray_icon = QSystemTrayIcon(create_app_icon(), self)
+        tray_menu = QMenu()
+        tray_menu.addAction("Show FollowCursor", self._restore_from_tray)
+        tray_menu.addAction("Stop Recording", self._stop_recording)
+        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.activated.connect(self._on_tray_activated)
 
     # ════════════════════════════════════════════════════════════════
     #  UI builders
@@ -972,13 +990,16 @@ class MainWindow(QMainWindow):
 
     def _minimize_to_tray(self) -> None:
         """Hide the window and show a tray icon."""
-        self._tray_icon.show()
-        self._tray_icon.setToolTip("FollowCursor — Recording… (Ctrl+Shift+R to stop)")
+        self._ensure_tray_icon()
+        if self._tray_icon:
+            self._tray_icon.show()
+            self._tray_icon.setToolTip("FollowCursor — Recording… (Ctrl+Shift+R to stop)")
         self.hide()
 
     def _restore_from_tray(self) -> None:
         """Show the window again and hide the tray icon."""
-        self._tray_icon.hide()
+        if self._tray_icon:
+            self._tray_icon.hide()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -1563,7 +1584,7 @@ class MainWindow(QMainWindow):
                 fps = self._recorder.actual_fps
                 if self._actual_fps_override > 0:
                     fps = self._actual_fps_override
-                self._exporter.export(
+                self._ensure_exporter().export(
                     self._video_path, path,
                     self._zoom_engine.keyframes,
                     fps,
@@ -1627,6 +1648,23 @@ class MainWindow(QMainWindow):
         if 0 <= index < len(self._click_events):
             self._click_events.pop(index)
             self._refresh_editor()
+
+    # ── lazy exporter ───────────────────────────────────────────────
+
+    def _ensure_exporter(self):
+        """Lazily import and create the VideoExporter on first use."""
+        if self._exporter is None:
+            from .video_exporter import VideoExporter
+            self._exporter = VideoExporter(parent=self)
+            self._exporter.progress.connect(self._on_export_progress)
+            self._exporter.finished.connect(self._on_export_finished)
+            self._exporter.error.connect(self._on_export_error)
+            self._exporter.status.connect(self._on_export_status)
+        return self._exporter
+
+    def _connect_exporter_signals_if_ready(self) -> None:
+        """No-op — signals are connected lazily in _ensure_exporter."""
+        pass
 
     def _on_export_progress(self, pct: float) -> None:
         self._title_bar.set_export_text(f"Exporting {int(pct * 100)}%\u2026")

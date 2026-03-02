@@ -7,6 +7,8 @@ for lossless AVI encoding.  Non-recording mode emits QImage preview
 frames via the ``frame_ready`` signal.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import threading
@@ -16,11 +18,17 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 import ctypes
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 
-import numpy as np
-import cv2
-import mss
+# Heavy imports deferred to first use for faster startup
+# import numpy as np   — imported lazily
+# import cv2           — imported lazily
+# import mss           — imported lazily
+
+if TYPE_CHECKING:
+    import numpy as np
+    import cv2
+    import mss
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
@@ -154,6 +162,7 @@ class ScreenRecorder(QObject):
     @staticmethod
     def get_monitors() -> List[dict]:
         """Return a list of available monitors with dimensions and positions."""
+        import mss
         with mss.mss() as sct:
             monitors: List[dict] = []
             for i, m in enumerate(sct.monitors):
@@ -174,6 +183,9 @@ class ScreenRecorder(QObject):
     @staticmethod
     def capture_thumbnail(monitor_index: int) -> Optional[QImage]:
         """Grab a single frame from a monitor and return a scaled thumbnail."""
+        import cv2
+        import numpy as np
+        import mss
         try:
             with mss.mss() as sct:
                 monitor = sct.monitors[monitor_index]
@@ -329,6 +341,9 @@ class ScreenRecorder(QObject):
         capture (pass window_hwnd).  The WGC callback writes BGRA frames
         into a shared buffer; this loop polls it at the target FPS.
         """
+        import cv2
+        import numpy as np
+        import mss
         self._backend = "WGC"
         self.capture_backend_changed.emit("WGC")
 
@@ -522,6 +537,9 @@ class ScreenRecorder(QObject):
 
     def _capture_loop_mss(self) -> None:
         """GDI-based monitor capture via mss (fallback)."""
+        import cv2
+        import numpy as np
+        import mss
         try:
             with mss.mss() as sct:
                 monitor = sct.monitors[self._monitor_index]
@@ -611,6 +629,9 @@ class ScreenRecorder(QObject):
 
     def _capture_loop_window(self) -> None:
         """Capture loop for a specific window — prefers WGC, falls back to mss."""
+        import cv2
+        import numpy as np
+        import mss
         if _winmm:
             _winmm.timeBeginPeriod(1)
         try:

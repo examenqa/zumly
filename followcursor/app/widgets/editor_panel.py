@@ -297,8 +297,10 @@ class EditorPanel(QWidget):
         # Debug overlay state (managed via settings menu) — on by default
         self._debug_overlay_enabled = True
 
-        # Encoder preference (auto-detected best available)
-        self._encoder_id: str = _best_encoder()
+        # Encoder preference — deferred detection for faster startup.
+        # Actual detection happens lazily on first settings menu open or export.
+        self._encoder_id: str = "libx264"
+        self._encoder_detected: bool = False
 
         self._mouse_track: List[MousePosition] = []
         self._key_events: List[KeyEvent] = []
@@ -330,6 +332,7 @@ class EditorPanel(QWidget):
         # Encoder submenu
         encoder_menu = menu.addMenu("Video encoder")
         encoder_menu.setStyleSheet(menu.styleSheet())
+        self._ensure_encoder_detected()
         available = _detect_encoders()
         for enc_id in available:
             label = _encoder_name(enc_id)
@@ -349,7 +352,19 @@ class EditorPanel(QWidget):
     @property
     def encoder_id(self) -> str:
         """The currently selected ffmpeg encoder ID."""
+        self._ensure_encoder_detected()
         return self._encoder_id
+
+    def _ensure_encoder_detected(self) -> None:
+        """Lazily detect the best available encoder on first access."""
+        if self._encoder_detected:
+            return
+        self._encoder_detected = True
+        best = _best_encoder()
+        if self._encoder_id == "libx264" and best != "libx264":
+            self._encoder_id = best
+            self.encoder_changed.emit(best)
+            logger.info("Auto-detected encoder: %s", _encoder_name(best))
 
     def set_encoder_by_id(self, enc_id: str) -> None:
         """Programmatically set the encoder (e.g. from QSettings)."""

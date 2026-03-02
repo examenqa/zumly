@@ -1,13 +1,21 @@
 """Preview widget — displays live capture or video playback with floating window effect."""
 
+from __future__ import annotations
+
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, TYPE_CHECKING
 import bisect
 import time as _time
 
 logger = logging.getLogger(__name__)
-import cv2
-import numpy as np
+
+# Heavy imports deferred to first use for faster startup
+# import cv2   — imported lazily
+# import numpy — imported lazily
+
+if TYPE_CHECKING:
+    import cv2
+    import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, Signal, QPointF, QRectF
 from PySide6.QtGui import QImage, QPainter, QColor, QFont, QPen
@@ -252,6 +260,7 @@ class PreviewWidget(QWidget):
         like huffyuv.
         """
         self.stop_playback()
+        import cv2
         self._video_cap = cv2.VideoCapture(path)
         if not self._video_cap.isOpened():
             self._video_cap = None
@@ -319,6 +328,7 @@ class PreviewWidget(QWidget):
 
     def seek_to(self, time_ms: float) -> None:
         """Jump video playback to the given timestamp."""
+        import cv2
         if self._video_cap and self._video_cap.isOpened():
             self._playback_pos_ms = time_ms
             target_frame = self._time_to_frame(time_ms)
@@ -335,6 +345,7 @@ class PreviewWidget(QWidget):
 
     def play(self) -> None:
         """Start video playback from the current position."""
+        import cv2
         if self._video_cap and not self._playing:
             # If at/near the end of the video, wrap back to the start
             if self._playback_pos_ms >= self._video_duration_ms - 100:
@@ -664,6 +675,8 @@ class PreviewWidget(QWidget):
 
     def _blur_frame(self, frame: QImage) -> QImage:
         """Apply heavy Gaussian blur to a QImage for the recording overlay."""
+        import cv2
+        import numpy as np
         frame = frame.convertToFormat(QImage.Format.Format_RGB888)
         w, h = frame.width(), frame.height()
         bpl = frame.bytesPerLine()
@@ -964,6 +977,7 @@ class PreviewWidget(QWidget):
 
     @staticmethod
     def _numpy_to_qimage(frame: np.ndarray) -> QImage:
+        import cv2
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, c = rgb.shape
         return QImage(rgb.data, w, h, rgb.strides[0], QImage.Format.Format_RGB888).copy()

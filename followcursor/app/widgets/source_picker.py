@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QImage
 
-from ..screen_recorder import ScreenRecorder
+# ScreenRecorder imported lazily inside methods to avoid pulling in
+# cv2/numpy/mss at startup.
 
 
 # ── background workers ──────────────────────────────────────────
@@ -33,6 +34,7 @@ class _MonitorThumbWorker(QThread):
         self._monitors = monitors
 
     def run(self):
+        from ..screen_recorder import ScreenRecorder
         for mon in self._monitors:
             thumb_qimg = ScreenRecorder.capture_thumbnail(mon["index"])
             pix = QPixmap.fromImage(thumb_qimg) if thumb_qimg else None
@@ -202,6 +204,7 @@ class SourcePickerDialog(QDialog):
         grid = QGridLayout(grid_widget)
         grid.setSpacing(16)
 
+        from ..screen_recorder import ScreenRecorder
         monitors = ScreenRecorder.get_monitors()
         for i, mon in enumerate(monitors):
             mon["type"] = "monitor"
