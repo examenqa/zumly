@@ -342,7 +342,7 @@ class _TimelineTrack(QWidget):
                     j += 1
                 if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
                     end_kf = sorted_kfs[j]
-                    end_ms = end_kf.timestamp + end_kf.duration
+                    end_ms = min(end_kf.timestamp + end_kf.duration, self.duration)
                     end_id = end_kf.id
                     i = j + 1
                 else:
