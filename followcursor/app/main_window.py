@@ -1212,9 +1212,12 @@ class MainWindow(QMainWindow):
                     zoom_out_time = max(timestamp + 200, boundary - 200)
                     zoom_out_dur = max(0, boundary - zoom_out_time)
 
-            # Only add if there's no existing zoom-out after this zoom-in
+            # Only add if there's no existing zoom-out between this
+            # zoom-in and the next zoom-in (scoped check)
+            search_end = next_zoom_in.timestamp if next_zoom_in else float("inf")
             has_zoom_out = any(
-                k.timestamp > timestamp and k.zoom <= 1.01
+                k.timestamp > timestamp and k.timestamp <= search_end
+                and k.zoom <= 1.01
                 for k in self._zoom_engine.keyframes
             )
             if not has_zoom_out:

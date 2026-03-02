@@ -87,7 +87,7 @@ class EditorPanel(QWidget):
         self._container.setContentsMargins(16, 20, 16, 16)
         self._container.setSpacing(12)
 
-        self._current_zoom_level = ZOOM_DEPTHS["Subtle"]
+        self._current_zoom_level = ZOOM_DEPTHS["Medium"]
         self._trim_start_ms: float = 0.0
         self._trim_end_ms: float = 0.0
         self._duration: float = 0.0
