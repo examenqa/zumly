@@ -349,7 +349,7 @@ All hooks run in dedicated threads with their own Win32 message loops. `CallNext
 
 The app uses `Qt.WindowType.FramelessWindowHint` with a custom `TitleBar` widget that handles:
 
-- Drag-to-move
+- Drag-to-move (OS-native via `QWindow.startSystemMove()` for Windows Aero Snap support)
 - Double-click to maximize/restore
 - Minimize / maximize / close buttons
 - Export button

@@ -1,6 +1,6 @@
 """Custom frameless title bar — Clipchamp-inspired."""
 
-from PySide6.QtCore import Qt, QPoint, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
 
 from ..version import __version__
@@ -18,7 +18,6 @@ class TitleBar(QWidget):
     def __init__(self, window: QWidget) -> None:
         super().__init__(window)
         self._window = window
-        self._drag_pos: QPoint | None = None
         self.setObjectName("TitleBar")
         self.setFixedHeight(46)
 
@@ -97,20 +96,13 @@ class TitleBar(QWidget):
     def _close(self) -> None:
         self._window.close()
 
-    # ── drag to move ─────────────────────────────────────────────
+    # ── drag to move (OS-native for Aero Snap support) ────────────
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint()
-
-    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
-        if self._drag_pos is not None:
-            delta = event.globalPosition().toPoint() - self._drag_pos
-            self._window.move(self._window.pos() + delta)
-            self._drag_pos = event.globalPosition().toPoint()
-
-    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
-        self._drag_pos = None
+            handle = self._window.windowHandle()
+            if handle:
+                handle.startSystemMove()
 
     def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
         self._maximize()
