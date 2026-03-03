@@ -32,10 +32,17 @@ class _MonitorThumbWorker(QThread):
     def __init__(self, monitors: list, parent=None):
         super().__init__(parent)
         self._monitors = monitors
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Request early termination."""
+        self._cancelled = True
 
     def run(self):
         from ..screen_recorder import ScreenRecorder
         for mon in self._monitors:
+            if self._cancelled:
+                return
             thumb_qimg = ScreenRecorder.capture_thumbnail(mon["index"])
             pix = QPixmap.fromImage(thumb_qimg) if thumb_qimg else None
             self.thumbnail_ready.emit(mon["index"], pix)
@@ -50,12 +57,19 @@ class _WindowThumbWorker(QThread):
     def __init__(self, windows: list, parent=None):
         super().__init__(parent)
         self._windows = windows
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Request early termination."""
+        self._cancelled = True
 
     def run(self):
         import numpy as np
         from ..window_utils import capture_window_thumbnail
 
         for win in self._windows:
+            if self._cancelled:
+                return
             thumb = capture_window_thumbnail(win["hwnd"])
             if thumb is not None:
                 h, w, c = thumb.shape
@@ -65,6 +79,18 @@ class _WindowThumbWorker(QThread):
                 pix = None
             self.thumbnail_ready.emit(win["hwnd"], pix)
         self.all_done.emit()
+
+
+def _stop_thumb_worker(worker: QThread | None) -> None:
+    """Safely stop and wait for a thumbnail worker thread."""
+    if worker is None:
+        return
+    if hasattr(worker, "cancel"):
+        worker.cancel()
+    if worker.isRunning():
+        worker.quit()
+        worker.wait(3000)  # wait up to 3 s
+    worker.deleteLater()
 
 
 # ── source card ─────────────────────────────────────────────────
@@ -146,6 +172,8 @@ class SourcePickerDialog(QDialog):
         self._window_cards: List[_SourceCard] = []
         self._card_by_monitor: dict[int, _SourceCard] = {}
         self._card_by_hwnd: dict[int, _SourceCard] = {}
+        self._mon_worker: _MonitorThumbWorker | None = None
+        self._win_worker: _WindowThumbWorker | None = None
         self.chosen_source: dict = {}  # returned to caller
 
         layout = QVBoxLayout(self)
@@ -266,6 +294,10 @@ class SourcePickerDialog(QDialog):
     # ── window list ─────────────────────────────────────────────
 
     def _refresh_windows(self) -> None:
+        # Stop any previous thumbnail worker before starting a new one
+        _stop_thumb_worker(self._win_worker)
+        self._win_worker = None
+
         for card in self._window_cards:
             card.setParent(None)
             card.deleteLater()
@@ -326,3 +358,11 @@ class SourcePickerDialog(QDialog):
 
     def _confirm(self) -> None:
         self.accept()
+
+    def done(self, result: int) -> None:
+        """Stop background thumbnail workers before closing the dialog."""
+        _stop_thumb_worker(self._mon_worker)
+        self._mon_worker = None
+        _stop_thumb_worker(self._win_worker)
+        self._win_worker = None
+        super().done(result)

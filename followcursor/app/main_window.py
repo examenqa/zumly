@@ -1767,12 +1767,16 @@ class MainWindow(QMainWindow):
             f'style="color: #a78bfa; text-decoration: underline;">{name}</a>'
         )
         self._status_text.setOpenExternalLinks(True)
+        self._save_worker.deleteLater()
+        self._save_worker = None
 
     def _on_save_failed(self, error: str) -> None:
         """Background save failed."""
         self._unsaved_changes = True
         self._update_title()
         self._status_text.setText(f"Save error: {error}")
+        self._save_worker.deleteLater()
+        self._save_worker = None
 
     def _load_session(self) -> None:
         """Open a .fcproj file and restore the full session on a background thread."""
