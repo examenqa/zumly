@@ -376,6 +376,7 @@ class MainWindow(QMainWindow):
         self._preview = PreviewWidget()
         self._preview.setVisible(False)
         self._preview.zoom_at_requested.connect(self._on_preview_zoom_at)
+        self._preview.pan_point_requested.connect(self._on_preview_pan_point)
         self._preview.centroid_picked.connect(self._on_centroid_picked)
         self._preview.centroid_dragged.connect(self._on_centroid_dragged)
 
@@ -1417,13 +1418,6 @@ class MainWindow(QMainWindow):
             lambda: self._enter_centroid_pick(start_kf_id)
         )
 
-        # Pan point — only if click is inside the segment's time range
-        if end_kf and click_time_ms > target_kf.timestamp + 200 and click_time_ms < end_kf.timestamp - 200:
-            pan_act = menu.addAction("📌  Add pan point here")
-            pan_act.triggered.connect(
-                lambda: self._add_pan_point(start_kf_id, click_time_ms)
-            )
-
         menu.addSeparator()
         del_act = menu.addAction("🗑  Delete zoom section")
         del_act.triggered.connect(lambda: self._delete_zoom_section(start_kf_id))
@@ -1453,6 +1447,12 @@ class MainWindow(QMainWindow):
         (x, y) from the mouse track at that timestamp.  This creates a
         smooth pan-while-zoomed path through intermediate points.
         """
+        pan_x, pan_y = self._lookup_mouse_pan(time_ms)
+        self._add_pan_point_at(segment_start_id, time_ms, pan_x, pan_y)
+
+    def _add_pan_point_at(self, segment_start_id: str, time_ms: float,
+                          pan_x: float, pan_y: float) -> None:
+        """Add a pan waypoint with explicit (pan_x, pan_y) coordinates."""
         # Find the segment's start keyframe to inherit its zoom level
         start_kf = None
         for kf in self._zoom_engine.keyframes:
@@ -1461,8 +1461,6 @@ class MainWindow(QMainWindow):
                 break
         if start_kf is None:
             return
-
-        pan_x, pan_y = self._lookup_mouse_pan(time_ms)
 
         self._zoom_engine.push_undo()
         pan_kf = ZoomKeyframe.create(
@@ -1695,6 +1693,25 @@ class MainWindow(QMainWindow):
         if zoom > 1.0:
             zoom = self._editor.zoom_level
         self._add_keyframe(time_ms, zoom, pan_x, pan_y)
+
+    def _on_preview_pan_point(self, time_ms: float, pan_x: float, pan_y: float) -> None:
+        """Handle right-click 'Add pan point here' from preview widget.
+
+        Finds the zoom segment that contains *time_ms* and delegates to
+        ``_add_pan_point`` with the clicked position as the pan target.
+        """
+        sorted_kfs = sorted(self._zoom_engine.keyframes, key=lambda k: k.timestamp)
+        for i, kf in enumerate(sorted_kfs):
+            if kf.zoom > 1.01:
+                # Find segment end
+                end_kf = None
+                for j in range(i + 1, len(sorted_kfs)):
+                    if sorted_kfs[j].zoom <= 1.01:
+                        end_kf = sorted_kfs[j]
+                        break
+                if end_kf and kf.timestamp < time_ms < end_kf.timestamp:
+                    self._add_pan_point_at(kf.id, time_ms, pan_x, pan_y)
+                    return
 
     # ── playback / timeline ─────────────────────────────────────────
 

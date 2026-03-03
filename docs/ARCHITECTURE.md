@@ -164,7 +164,7 @@ Pan path points are intermediate `ZoomKeyframe` entries placed between a segment
 
 Since the zoom engine already interpolates between consecutive keyframes, no engine changes are needed — pan points are simply regular keyframes with `reason="Pan point"` and a shorter transition duration (400 ms). The timeline draws numbered yellow circle markers at each pan point position. Users can:
 
-- **Add** pan points via right-click on a zoom segment → "📌 Add pan point here"
+- **Add** pan points via right-click on the preview surface while zoomed in → "📌  Add pan point here"
 - **Reorder** via the context menu (Move earlier/later swaps timestamps) or by dragging markers horizontally
 - **Reposition** the camera target via "📍 Pick center on preview"
 - **Delete** individual pan points

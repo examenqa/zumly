@@ -35,6 +35,8 @@ class PreviewWidget(QWidget):
 
     # Signal: (timestamp_ms, zoom_level, pan_x, pan_y)
     zoom_at_requested = Signal(float, float, float, float)
+    # Signal: (timestamp_ms, pan_x, pan_y) — right-click "Add pan point here"
+    pan_point_requested = Signal(float, float, float)
     # Signal: (pan_x, pan_y) — emitted when centroid-pick mode click occurs
     centroid_picked = Signal(float, float)
     # Signal: (kf_id, pan_x, pan_y) — emitted while dragging a centroid marker
@@ -387,7 +389,11 @@ class PreviewWidget(QWidget):
     # ── right-click context menu ────────────────────────────────────
 
     def _show_context_menu(self, pos) -> None:
-        """Show single 'Add Zoom here' menu at click position."""
+        """Show context menu at click position.
+
+        When not zoomed: offers 'Add Zoom here'.
+        When zoomed in: offers 'Add Pan point here'.
+        """
         if self._frame is None:
             return
 
@@ -406,10 +412,18 @@ class PreviewWidget(QWidget):
 
         time_ms = self._current_time_ms
 
-        act_zoom = menu.addAction("🔍  Add Zoom here")
-        act_zoom.triggered.connect(
-            lambda: self.zoom_at_requested.emit(time_ms, 1.5, pan_x, pan_y)
-        )
+        if self._zoom > 1.01:
+            # Inside a zoom segment — offer pan point
+            act_pan = menu.addAction("📌  Add pan point here")
+            act_pan.triggered.connect(
+                lambda: self.pan_point_requested.emit(time_ms, pan_x, pan_y)
+            )
+        else:
+            # Not zoomed — offer zoom
+            act_zoom = menu.addAction("🔍  Add Zoom here")
+            act_zoom.triggered.connect(
+                lambda: self.zoom_at_requested.emit(time_ms, 1.5, pan_x, pan_y)
+            )
 
         menu.exec(self.mapToGlobal(pos))
 

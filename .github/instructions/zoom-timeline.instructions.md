@@ -44,10 +44,11 @@ applyTo: "**/{zoom_engine,activity_analyzer,timeline_widget,editor_panel}.py"
 
 - Intermediate `ZoomKeyframe` entries with same zoom level but different `(x, y)` — creates panning path within a zoomed segment
 - Regular keyframes with `reason="Pan point"` — no engine changes needed
+- Added via right-click on the preview surface while zoomed in (not from the timeline segment menu)
+- Preview emits `pan_point_requested(time_ms, pan_x, pan_y)` signal; main window finds the containing segment and creates the keyframe
 - Timeline draws numbered yellow circle markers with dashed connecting line
 - Right-click: pick center on preview, move earlier/later (swap timestamps), delete
 - Draggable horizontally within segment bounds
-- `segment_clicked` signal carries `(start_kf_id, click_time_ms)` for context menu positioning
 
 ## Manual Keyframes
 

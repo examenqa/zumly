@@ -203,7 +203,6 @@ On the timeline, zoom keyframes appear as colored segments. You can interact wit
 - **Right-click a segment** to open the context menu with options:
   - Set depth (zoom level)
   - Set centroid (pan center)
-  - Add pan point (see below)
   - Delete zoom section
 
 ### Zoom Depth Levels
@@ -235,10 +234,10 @@ When a zoom segment is long, you can add **pan path points** to smoothly redirec
 
 **Adding a pan point:**
 
-1. **Right-click** inside a zoom segment on the timeline
-2. Select **📌 Add pan point here**
-3. A numbered yellow circle marker appears at that position on the timeline
-4. The pan point's initial center is set to the recorded cursor position at that timestamp
+1. While viewing a zoom segment in the preview, **right-click** on the video surface at the position you want the camera to pan to
+2. Select **📌  Add pan point here** (only appears while zoomed in)
+3. A numbered yellow circle marker appears on the timeline
+4. The pan point's center is set to the clicked position on the video
 
 **Editing pan points:**
 
