@@ -1053,6 +1053,34 @@ class MainWindow(QMainWindow):
 
     def _on_auto_keyframes(self, keyframes) -> None:
         """Handle auto-generated keyframes from activity analysis."""
+        # Confirm if there are existing zoom keyframes that will be replaced
+        existing = [kf for kf in self._zoom_engine.keyframes if kf.zoom > 1.01]
+        if existing:
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("Replace existing zooms?")
+            dlg.setIcon(QMessageBox.Icon.Warning)
+            dlg.setText(
+                f"You have <b>{len(existing)}</b> existing zoom section"
+                f"{'s' if len(existing) != 1 else ''}.<br><br>"
+                "Auto-generating will <b>replace all</b> of them with "
+                f"<b>{sum(1 for kf in keyframes if kf.zoom > 1.0)}</b> "
+                "new section(s)."
+            )
+            dlg.addButton("Replace", QMessageBox.ButtonRole.AcceptRole)
+            btn_cancel = dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            dlg.setDefaultButton(btn_cancel)
+            dlg.setStyleSheet(
+                "QMessageBox { background: #1b1a2e; }"
+                "QMessageBox QLabel { color: #e4e4ed; font-size: 13px; }"
+                "QPushButton { min-width: 80px; min-height: 28px;"
+                "  background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+                "  border-radius: 6px; padding: 4px 16px; }"
+                "QPushButton:hover { background: #8b5cf6; }"
+            )
+            dlg.exec()
+            if dlg.clickedButton() == btn_cancel:
+                return
+
         # Clear existing and add all generated keyframes
         self._zoom_engine.push_undo()
         self._zoom_engine.clear()

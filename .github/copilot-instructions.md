@@ -106,6 +106,7 @@ followcursor/                    ← repo root
 - Default transition duration: 600ms
 - **Anticipation**: zoom-in and pan transitions complete `ANTICIPATION_MS` (200ms) *before* the activity starts, so the viewer sees the trigger from the beginning
 - Activity analyzer generates keyframes from typing clusters and click events (mouse settlements are **not** used as zoom triggers)
+- **Auto-generate confirmation**: when the user clicks "Auto-generate zoom keyframes" and zoom sections already exist, a `QMessageBox` confirmation dialog warns that existing zooms will be replaced. The user can choose "Replace" or "Cancel"
 - **Signal priority**: clicks (`WEIGHT_CLICK = 1.2`) > typing (`WEIGHT_TYPING = 1.0`). Single clicks generate zoom events.
 - **Keyboard tracking**: each keystroke records timestamp + cursor position (`GetCursorPos`). Modifier keys (Ctrl, Shift, Alt, Win, CapsLock, NumLock, ScrollLock) and app-hotkey keys (R, =, -) are excluded so they don't inflate typing activity signals. `KeyEvent` has optional `x`/`y` fields (backward-compatible with old projects that lack them).
 - **Typing position**: when `KeyEvent` objects carry `x`/`y`, the activity analyzer uses those coordinates directly for the typing zone position instead of inferring from the mouse track

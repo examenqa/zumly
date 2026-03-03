@@ -172,6 +172,7 @@ The analyzer uses **spatial-aware clustering** — clicks and typing events that
    - **Medium** — up to 6 clusters, 4-second gap
    - **High** — up to 10 clusters, 2.5-second gap
 4. Click **✨ Auto-generate zoom keyframes**
+5. If you already have zoom sections, a confirmation dialog asks whether to **Replace** them or **Cancel**
 
 The generated keyframes appear as color-coded segments on the timeline.
 
