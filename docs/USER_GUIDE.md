@@ -485,7 +485,7 @@ Save your work to continue editing later:
 - Use **Ctrl+S** or the save option in the UI
 - The project is saved as a **`.fcproj`** file
 - If you’ve previously saved the project, **Ctrl+S** saves to the same file without prompting
-- **Incremental re-save**: when saving to an existing project file, only the metadata (keyframes, clicks, zoom settings, etc.) is updated — the video is copied byte-for-byte from the old file, making re-saves significantly faster
+- **Incremental re-save**: when saving to an existing project file, only the metadata (keyframes, clicks, zoom settings, etc.) is updated — the video data is never read or copied, making re-saves near-instant regardless of video size
 - The current project filename appears in the **title bar** (with a **●** dot indicator when there are unsaved changes)
 - When you export, the default filename matches the project name (e.g., `MyProject.mp4` instead of a generic timestamp-based name)
 

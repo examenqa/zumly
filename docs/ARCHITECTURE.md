@@ -450,7 +450,7 @@ The JSON includes:
 
 ### Incremental Save
 
-When re-saving to an existing `.fcproj`, `save_project(metadata_only=True)` rewrites only `project.json` while copying the video entry byte-for-byte from the old ZIP. This avoids expensive re-reads of the source AVI and makes Ctrl+S saves near-instant. The implementation uses a temporary file + `os.replace()` for atomic replacement, falling through to a full save on any error.
+When re-saving to an existing `.fcproj`, `save_project(metadata_only=True)` rewrites only `project.json` without reading or copying the video data. Full saves always write the video entry first at file offset 0; metadata saves then modify the ZIP in-place by seeking past the video's raw bytes and overwriting just the JSON local-file-header, central directory, and EOCD record. Total I/O is O(JSON_size) — typically a few KB — regardless of video size. If the in-place layout precondition isn't met (e.g. old-format files with JSON first), a streaming fallback copies the video in 8 MB chunks to a new ZIP.
 
 ---
 

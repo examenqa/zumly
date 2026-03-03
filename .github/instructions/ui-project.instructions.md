@@ -12,7 +12,7 @@ applyTo: "**/{main_window,compositor,theme,backgrounds,frames,project_file,model
 ## Project Path & Title Bar
 
 - `_project_path` tracks the current .fcproj file path; Ctrl+S re-saves without dialog
-- **Incremental save**: `save_project(metadata_only=True)` rewrites only `project.json` while copying the video entry byte-for-byte from the old ZIP — avoids expensive re-reads of the source AVI
+- **Incremental save**: `save_project(metadata_only=True)` rewrites only `project.json` in the ZIP without touching the video. Full saves write the video entry first (offset 0) so that metadata saves can modify the file in-place: the raw video bytes stay untouched and only the JSON + central directory are rewritten at the end of the file. Falls back to streaming copy (8 MB chunks) for old-layout files where the video isn't first.
 - **Export filename**: defaults to project name (e.g. `MyProject.mp4`) instead of generic `followcursor-{duration}.mp4`
 - `TitleBar.set_title(name, unsaved)` updates the logo label to show project name + unsaved indicator
 - Close confirmation dialog (Save / Don't Save / Cancel) when `_unsaved_changes` is True
