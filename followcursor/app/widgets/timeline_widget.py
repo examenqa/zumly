@@ -38,9 +38,10 @@ class _TimelineTrack(QWidget):
 
     clicked = Signal(float)  # time ratio 0–1
     keyframe_moved = Signal(str, float)  # keyframe id, new timestamp (ms)
-    segment_clicked = Signal(str)        # start keyframe id of clicked segment
+    segment_clicked = Signal(str, float) # (start kf id, click timestamp ms)
     segment_deleted = Signal(str)        # start keyframe id of segment to delete
     click_event_deleted = Signal(int)    # index of click event to delete
+    pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)   # timestamp ms — add zoom at this time
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()             # emitted when any drag completes
@@ -72,10 +73,11 @@ class _TimelineTrack(QWidget):
         self._drag_kf_id: str | None = None    # which keyframe is being dragged
         self._drag_edge_is_right: bool = False  # True when dragging right edge of segment
         self._dragging: bool = False
-        self._drag_mode: str = ""              # "edge" | "body" | "trim_start" | "trim_end"
+        self._drag_mode: str = ""              # "edge" | "body" | "trim_start" | "trim_end" | "pan_point"
         self._drag_body_ids: list = []          # [start_kf_id, end_kf_id] for body drag
         self._drag_body_offset: float = 0.0     # ms offset from click to segment start
         self._drag_body_seg_duration: float = 0  # original segment duration in ms
+        self._drag_pan_seg_id: str = ""         # segment start id for pan point drag
         self._segments: List[tuple] = []       # [(start_x, end_x, start_kf_id, end_kf_id)]
         self._seg_top: int = 0
         self._seg_h: int = 0
@@ -84,6 +86,10 @@ class _TimelineTrack(QWidget):
         self._selected_click_idx: int = -1     # index into click_events, -1 = none
         self._click_top: int = 0               # y-offset for click track
         self._click_h: int = 0                 # height of click track
+
+        # Pan point markers — populated during paintEvent for hit-testing
+        # Each entry: (center_x, center_y, radius, kf_id, segment_start_id)
+        self._pan_point_markers: List[tuple] = []
 
         # Zoom segment selection
         self._selected_segment_id: str = ""     # start kf id of selected segment
@@ -101,13 +107,23 @@ class _TimelineTrack(QWidget):
     )
 
     def _on_right_click(self, pos) -> None:
-        """Right-click on a zoom segment, click event, or empty space."""
+        """Right-click on a pan point, zoom segment, click event, or empty space."""
         mx, my = pos.x(), pos.y()
-        # Check zoom segment first
+        # Check pan point markers first (higher priority than segment body)
+        for cx, cy, r, pp_kf_id, seg_start_id in self._pan_point_markers:
+            if (mx - cx) ** 2 + (my - cy) ** 2 <= (r + 3) ** 2:
+                self.pan_point_clicked.emit(pp_kf_id, seg_start_id)
+                return
+        # Check zoom segment
         seg_info = self._segment_body_hit_info(mx, my)
         if seg_info:
             start_id, end_id, sx, ex = seg_info
-            self.segment_clicked.emit(start_id)
+            # Compute the click timestamp from x position
+            click_time_ms = 0.0
+            if self.duration > 0 and self.width() > 0:
+                ratio = max(0.0, min(1.0, mx / self.width()))
+                click_time_ms = ratio * self.duration
+            self.segment_clicked.emit(start_id, click_time_ms)
             return
         # Check click event marker
         click_idx = self._click_hit_test(mx, my)
@@ -324,6 +340,7 @@ class _TimelineTrack(QWidget):
     def _draw_zoom_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
         """Draw rounded-rect zoom segment blocks with internal zoom-in/out markers."""
         self._segments = []
+        self._pan_point_markers = []
         if not self.keyframes or self.duration <= 0:
             return
 
@@ -450,6 +467,48 @@ class _TimelineTrack(QWidget):
                 text_rect = QRectF(label_left, top, label_w, h)
                 painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "🔍 Zoom")
 
+            # ── Pan point markers (numbered circles for intermediate kfs) ──
+            pan_points = []
+            if kf_in and self.duration > 0:
+                for pp_kf in sorted_kfs:
+                    if (pp_kf.id != start_id
+                        and pp_kf.zoom > 1.01
+                        and pp_kf.timestamp > kf_in.timestamp
+                        and (kf_out is None or pp_kf.timestamp < kf_out.timestamp)):
+                        pp_x = (pp_kf.timestamp / self.duration) * w
+                        pan_points.append((pp_x, pp_kf))
+
+            if pan_points:
+                # Draw connecting line through all pan points
+                pan_line_y = top + h / 2
+                painter.setPen(QPen(QColor("#facc15"), 1.5, Qt.PenStyle.DashLine))
+                all_xs = [pan_points[0][0]] + [p[0] for p in pan_points]
+                for idx in range(len(all_xs) - 1):
+                    painter.drawLine(QPointF(all_xs[idx], pan_line_y),
+                                     QPointF(all_xs[idx + 1], pan_line_y))
+
+                # Draw numbered circle markers
+                pp_font = QFont()
+                pp_font.setFamily("Segoe UI Variable")
+                pp_font.setPixelSize(9)
+                pp_font.setWeight(QFont.Weight.Bold)
+                painter.setFont(pp_font)
+                for pp_idx, (pp_x, pp_kf) in enumerate(pan_points, start=1):
+                    radius = 7
+                    cy = top + h / 2
+                    # Record for hit-testing
+                    self._pan_point_markers.append((pp_x, cy, radius, pp_kf.id, start_id))
+                    # Circle background
+                    painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+                    painter.setBrush(QBrush(QColor("#facc15")))
+                    painter.drawEllipse(QPointF(pp_x, cy), radius, radius)
+                    # Number label
+                    painter.setPen(QPen(QColor("#1b1a2e")))
+                    num_rect = QRectF(pp_x - radius, cy - radius, radius * 2, radius * 2)
+                    painter.drawText(num_rect, Qt.AlignmentFlag.AlignCenter, str(pp_idx))
+                # Restore font
+                painter.setFont(font)
+
             # Draw edge handles (vertical bars at edges)
             handle_color = QColor("#c4b5fd") if not self._dragging else QColor("#e9d5ff")
             painter.setPen(Qt.PenStyle.NoPen)
@@ -554,6 +613,16 @@ class _TimelineTrack(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self.width() > 0:
             mx = event.position().x()
             my = event.position().y()
+            # Check pan point marker drag first (highest priority)
+            for cx, cy, r, pp_kf_id, seg_start_id in self._pan_point_markers:
+                if (mx - cx) ** 2 + (my - cy) ** 2 <= (r + 3) ** 2:
+                    self._dragging = True
+                    self._drag_mode = "pan_point"
+                    self._drag_kf_id = pp_kf_id
+                    self._drag_pan_seg_id = seg_start_id
+                    self._selected_click_idx = -1
+                    self._selected_segment_id = ""
+                    return
             # Check zoom segment edge drag first — takes priority over trim handles so
             # that blocks touching the video boundaries (x=0 or x=width) remain resizable.
             edge_hit = self._edge_hit_test(mx, my)
@@ -668,11 +737,40 @@ class _TimelineTrack(QWidget):
                 if end_id:
                     self.keyframe_moved.emit(end_id, new_end)
                 return
+            elif self._drag_mode == "pan_point" and self._drag_kf_id:
+                ratio = max(0.0, min(1.0, mx / self.width()))
+                new_time = ratio * self.duration
+                # Clamp to segment bounds: find start and end of parent segment
+                seg_start_kf = next((k for k in self.keyframes if k.id == self._drag_pan_seg_id), None)
+                if seg_start_kf:
+                    sorted_kfs = sorted(self.keyframes, key=lambda k: k.timestamp)
+                    seg_end_kf = None
+                    found_start = False
+                    for k in sorted_kfs:
+                        if k.id == self._drag_pan_seg_id:
+                            found_start = True
+                            continue
+                        if found_start and k.zoom <= 1.01:
+                            seg_end_kf = k
+                            break
+                    min_t = seg_start_kf.timestamp + 100
+                    max_t = (seg_end_kf.timestamp - 100) if seg_end_kf else self.duration - 100
+                    new_time = max(min_t, min(new_time, max_t))
+                self.keyframe_moved.emit(self._drag_kf_id, new_time)
+                return
 
-        # Update cursor based on hover over edge handles, trim handles, or segment body
+        # Update cursor based on hover over edge handles, trim handles, pan points, or segment body
+        # Check pan point hover
+        pan_hover = False
+        for cx, cy, r, pp_kf_id, seg_start_id in self._pan_point_markers:
+            if (mx - cx) ** 2 + (my - cy) ** 2 <= (r + 3) ** 2:
+                pan_hover = True
+                break
         edge_hit = self._edge_hit_test(mx, my)
         trim_hit = self._trim_hit_test(mx)
-        if edge_hit:
+        if pan_hover:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif edge_hit:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
         elif trim_hit:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
@@ -741,10 +839,11 @@ class TimelineWidget(QWidget):
 
     seek_requested = Signal(float)      # time in ms
     keyframe_moved = Signal(str, float) # kf id, new timestamp ms
-    segment_clicked = Signal(str)       # start kf id of clicked segment
+    segment_clicked = Signal(str, float) # (start kf id, click timestamp ms)
     segment_deleted = Signal(str)       # start kf id of segment to delete
     play_pause_clicked = Signal()       # toggle playback
     click_event_deleted = Signal(int)   # click event index to delete
+    pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)  # timestamp ms — add zoom at this time
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()            # emitted when any drag completes
@@ -811,6 +910,7 @@ class TimelineWidget(QWidget):
         self._track.segment_clicked.connect(self.segment_clicked)
         self._track.segment_deleted.connect(self.segment_deleted)
         self._track.click_event_deleted.connect(self.click_event_deleted)
+        self._track.pan_point_clicked.connect(self.pan_point_clicked)
         self._track.add_zoom_requested.connect(self.add_zoom_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)

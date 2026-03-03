@@ -83,14 +83,18 @@ class _SaveProjectWorker(QThread):
     """Background thread that writes a .fcproj ZIP file.
 
     Bundling the AVI can take noticeable time; the GUI thread stays
-    responsive while this runs.
+    responsive while this runs.  When *metadata_only* is True, only
+    the JSON metadata is rewritten — the existing video entry is
+    carried over byte-for-byte from the old ZIP.
     """
     done = CoreSignal(str)     # saved file path on success
     failed = CoreSignal(str)   # error message on failure
 
     def __init__(self, path: str, video_path: str, session,
                  monitor_rect, actual_fps: float,
-                 bg_preset, frame_preset, parent=None) -> None:
+                 bg_preset, frame_preset,
+                 metadata_only: bool = False,
+                 parent=None) -> None:
         super().__init__(parent)
         self._path = path
         self._video_path = video_path
@@ -99,6 +103,7 @@ class _SaveProjectWorker(QThread):
         self._actual_fps = actual_fps
         self._bg_preset = bg_preset
         self._frame_preset = frame_preset
+        self._metadata_only = metadata_only
 
     def run(self) -> None:  # noqa: D401
         try:
@@ -107,6 +112,7 @@ class _SaveProjectWorker(QThread):
                 self._path, self._video_path, self._session,
                 self._monitor_rect, self._actual_fps,
                 self._bg_preset, self._frame_preset,
+                metadata_only=self._metadata_only,
             )
             self.done.emit(self._path)
         except Exception as exc:
@@ -396,6 +402,7 @@ class MainWindow(QMainWindow):
         self._timeline.keyframe_moved.connect(self._on_keyframe_moved)
         self._timeline.segment_clicked.connect(self._on_segment_clicked)
         self._timeline.segment_deleted.connect(self._delete_zoom_section)
+        self._timeline.pan_point_clicked.connect(self._on_pan_point_clicked)
         self._timeline.play_pause_clicked.connect(self._on_play_pause)
         self._timeline.click_event_deleted.connect(self._on_click_event_deleted)
         self._timeline.add_zoom_requested.connect(
@@ -1332,15 +1339,22 @@ class MainWindow(QMainWindow):
         )
         self._refresh_editor()
 
-    def _on_segment_clicked(self, start_kf_id: str) -> None:
-        """Handle clicking on a zoom segment body — show depth picker + delete."""
+    def _on_segment_clicked(self, start_kf_id: str, click_time_ms: float = 0.0) -> None:
+        """Handle clicking on a zoom segment body — show depth picker + pan point + delete."""
         from .widgets.editor_panel import ZOOM_DEPTHS
 
         # Find the keyframe
         target_kf = None
-        for kf in self._zoom_engine.keyframes:
+        end_kf = None
+        sorted_kfs = sorted(self._zoom_engine.keyframes, key=lambda k: k.timestamp)
+        for i, kf in enumerate(sorted_kfs):
             if kf.id == start_kf_id:
                 target_kf = kf
+                # Find segment end (first kf with zoom <= 1.01 after start)
+                for j in range(i + 1, len(sorted_kfs)):
+                    if sorted_kfs[j].zoom <= 1.01:
+                        end_kf = sorted_kfs[j]
+                        break
                 break
         if target_kf is None:
             return
@@ -1375,6 +1389,13 @@ class MainWindow(QMainWindow):
             lambda: self._enter_centroid_pick(start_kf_id)
         )
 
+        # Pan point — only if click is inside the segment's time range
+        if end_kf and click_time_ms > target_kf.timestamp + 200 and click_time_ms < end_kf.timestamp - 200:
+            pan_act = menu.addAction("📌  Add pan point here")
+            pan_act.triggered.connect(
+                lambda: self._add_pan_point(start_kf_id, click_time_ms)
+            )
+
         menu.addSeparator()
         del_act = menu.addAction("🗑  Delete zoom section")
         del_act.triggered.connect(lambda: self._delete_zoom_section(start_kf_id))
@@ -1397,8 +1418,154 @@ class MainWindow(QMainWindow):
         )
         self._refresh_editor()
 
-    def _enter_centroid_pick(self, kf_id: str) -> None:
-        """Start centroid-pick mode: next preview click sets the keyframe's pan."""
+    def _add_pan_point(self, segment_start_id: str, time_ms: float) -> None:
+        """Add a pan waypoint inside a zoom segment at *time_ms*.
+
+        The new keyframe inherits the segment's zoom level but gets its
+        (x, y) from the mouse track at that timestamp.  This creates a
+        smooth pan-while-zoomed path through intermediate points.
+        """
+        # Find the segment's start keyframe to inherit its zoom level
+        start_kf = None
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == segment_start_id:
+                start_kf = kf
+                break
+        if start_kf is None:
+            return
+
+        pan_x, pan_y = self._lookup_mouse_pan(time_ms)
+
+        self._zoom_engine.push_undo()
+        pan_kf = ZoomKeyframe.create(
+            timestamp=time_ms,
+            zoom=start_kf.zoom,
+            x=pan_x,
+            y=pan_y,
+            duration=400.0,   # smooth pan transition
+            reason="Pan point",
+        )
+        self._zoom_engine.add_keyframe(pan_kf)
+        self._mark_dirty()
+
+        self._zoom_engine.update(self._playback_time)
+        self._preview.set_zoom(
+            self._zoom_engine.current_zoom,
+            self._zoom_engine.current_pan_x,
+            self._zoom_engine.current_pan_y,
+        )
+        self._refresh_editor()
+
+    def _on_pan_point_clicked(self, pan_kf_id: str, segment_start_id: str) -> None:
+        """Right-click on a pan point marker — show context menu."""
+        # Find the pan point keyframe
+        target_kf = None
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == pan_kf_id:
+                target_kf = kf
+                break
+        if target_kf is None:
+            return
+
+        # Count pan points in this segment to show the number
+        sorted_kfs = sorted(self._zoom_engine.keyframes, key=lambda k: k.timestamp)
+        start_kf = None
+        end_kf = None
+        for i, kf in enumerate(sorted_kfs):
+            if kf.id == segment_start_id:
+                start_kf = kf
+                for j in range(i + 1, len(sorted_kfs)):
+                    if sorted_kfs[j].zoom <= 1.01:
+                        end_kf = sorted_kfs[j]
+                        break
+                break
+
+        pan_points_in_seg = []
+        if start_kf:
+            for kf in sorted_kfs:
+                if (kf.id != segment_start_id
+                    and kf.zoom > 1.01
+                    and kf.timestamp > start_kf.timestamp
+                    and (end_kf is None or kf.timestamp < end_kf.timestamp)):
+                    pan_points_in_seg.append(kf)
+
+        pp_number = next(
+            (idx + 1 for idx, kf in enumerate(pan_points_in_seg) if kf.id == pan_kf_id),
+            0,
+        )
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "        border-radius: 6px; padding: 4px 0; }"
+            "QMenu::item { padding: 6px 16px; }"
+            "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
+            "QMenu::item:disabled { color: #6c6890; }"
+            "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
+        )
+
+        header = menu.addAction(f"📌  Pan point {pp_number}")
+        header.setEnabled(False)
+        menu.addSeparator()
+
+        # Pick center on preview
+        pick_act = menu.addAction("📍  Pick center on preview\u2026")
+        pick_act.triggered.connect(lambda: self._enter_centroid_pick(pan_kf_id))
+
+        # Move earlier / later (reorder)
+        if pp_number > 1:
+            earlier_act = menu.addAction("⬅  Move earlier")
+            prev_kf = pan_points_in_seg[pp_number - 2]
+            earlier_act.triggered.connect(
+                lambda: self._swap_pan_point_times(pan_kf_id, prev_kf.id)
+            )
+        if pp_number < len(pan_points_in_seg):
+            later_act = menu.addAction("➡  Move later")
+            next_kf = pan_points_in_seg[pp_number]
+            later_act.triggered.connect(
+                lambda: self._swap_pan_point_times(pan_kf_id, next_kf.id)
+            )
+
+        menu.addSeparator()
+        del_act = menu.addAction("🗑  Delete pan point")
+        del_act.triggered.connect(lambda: self._delete_pan_point(pan_kf_id))
+
+        menu.exec(self.cursor().pos())
+
+    def _swap_pan_point_times(self, kf_id_a: str, kf_id_b: str) -> None:
+        """Swap the timestamps of two pan point keyframes to reorder them."""
+        self._zoom_engine.push_undo()
+        kf_a = kf_b = None
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == kf_id_a:
+                kf_a = kf
+            elif kf.id == kf_id_b:
+                kf_b = kf
+        if kf_a and kf_b:
+            kf_a.timestamp, kf_b.timestamp = kf_b.timestamp, kf_a.timestamp
+            self._mark_dirty()
+            self._zoom_engine.update(self._playback_time)
+            self._preview.set_zoom(
+                self._zoom_engine.current_zoom,
+                self._zoom_engine.current_pan_x,
+                self._zoom_engine.current_pan_y,
+            )
+            self._refresh_editor()
+
+    def _delete_pan_point(self, kf_id: str) -> None:
+        """Delete a pan point keyframe."""
+        self._zoom_engine.push_undo()
+        self._zoom_engine.keyframes = [
+            kf for kf in self._zoom_engine.keyframes if kf.id != kf_id
+        ]
+        self._mark_dirty()
+        self._zoom_engine.update(self._playback_time)
+        self._preview.set_zoom(
+            self._zoom_engine.current_zoom,
+            self._zoom_engine.current_pan_x,
+            self._zoom_engine.current_pan_y,
+        )
+        self._refresh_editor()
         self._centroid_target_kf_id = kf_id
         self._preview.enter_centroid_pick_mode()
         self._status_text.setText(
@@ -1563,7 +1730,12 @@ class MainWindow(QMainWindow):
         """Export the recording as an H.264 MP4 or GIF via the video exporter."""
         if not self._video_path or not os.path.isfile(self._video_path):
             return
-        default_name = f"followcursor-{int(self._rec_duration_ms)}.mp4"
+        # Derive default filename from project name if available
+        if self._project_path:
+            base = os.path.splitext(os.path.basename(self._project_path))[0]
+            default_name = f"{base}.mp4"
+        else:
+            default_name = f"followcursor-{int(self._rec_duration_ms)}.mp4"
         default_path = os.path.join(self._last_export_dir, default_name) if self._last_export_dir else default_name
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -1753,12 +1925,22 @@ class MainWindow(QMainWindow):
         if path:
             self._last_project_dir = os.path.dirname(path)
             self._status_text.setOpenExternalLinks(False)
-            self._status_text.setText("Saving project\u2026")
+            # Use metadata-only save when re-saving an existing project
+            # (the video is already in the ZIP — no need to rebundle it)
+            is_resave = (
+                not save_as
+                and self._project_path == path
+                and os.path.isfile(path)
+            )
+            self._status_text.setText(
+                "Saving metadata\u2026" if is_resave else "Saving project\u2026"
+            )
             # Run on background thread so the UI stays responsive
             self._save_worker = _SaveProjectWorker(
                 path, self._video_path, session,
                 self._monitor_rect, self._recorder.actual_fps,
                 self._bg_preset, self._frame_preset,
+                metadata_only=is_resave,
                 parent=self,
             )
             self._save_worker.done.connect(self._on_save_done)

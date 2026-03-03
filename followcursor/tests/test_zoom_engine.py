@@ -312,3 +312,87 @@ class TestZoomEngineUndoRedo:
         engine.click_events[0] = ClickEvent(x=999, y=999, timestamp=999)
         engine.undo()
         assert engine.click_events[0].x == 10
+
+
+# ── Pan point interpolation ────────────────────────────────────────
+
+
+class TestPanPointInterpolation:
+    """Verify that intermediate pan-point keyframes interpolate correctly."""
+
+    def test_pan_point_between_zoom_in_out(self) -> None:
+        """A pan point at t=2000 should redirect the camera mid-zoom."""
+        engine = ZoomEngine()
+        # Zoom-in at t=1000
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=1.5, x=0.3, y=0.3, duration=400)
+        )
+        # Pan point at t=2000
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=2000, zoom=1.5, x=0.7, y=0.7, duration=400,
+                                reason="Pan point")
+        )
+        # Zoom-out at t=3500
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3500, zoom=1.0, x=0.5, y=0.5, duration=600)
+        )
+
+        # After zoom-in transition completes (1000+400=1400), should be at (0.3, 0.3)
+        z, px, py = engine.compute_at(1500)
+        assert z == pytest.approx(1.5)
+        assert px == pytest.approx(0.3, abs=0.05)
+        assert py == pytest.approx(0.3, abs=0.05)
+
+        # After pan point transition completes (2000+400=2400), should be at (0.7, 0.7)
+        z, px, py = engine.compute_at(2500)
+        assert z == pytest.approx(1.5)
+        assert px == pytest.approx(0.7, abs=0.05)
+        assert py == pytest.approx(0.7, abs=0.05)
+
+    def test_multiple_pan_points(self) -> None:
+        """Multiple pan points create a path through the zoomed view."""
+        engine = ZoomEngine()
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=2.0, x=0.2, y=0.2, duration=300)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=2000, zoom=2.0, x=0.5, y=0.5, duration=300,
+                                reason="Pan point")
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3000, zoom=2.0, x=0.8, y=0.8, duration=300,
+                                reason="Pan point")
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=4000, zoom=1.0, x=0.5, y=0.5, duration=600)
+        )
+
+        # After first pan completes
+        _, px1, py1 = engine.compute_at(2400)
+        assert px1 == pytest.approx(0.5, abs=0.05)
+
+        # After second pan completes
+        _, px2, py2 = engine.compute_at(3400)
+        assert px2 == pytest.approx(0.8, abs=0.05)
+
+    def test_pan_point_zoom_remains_constant(self) -> None:
+        """Pan points should maintain the same zoom level as the segment."""
+        engine = ZoomEngine()
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=1.8, x=0.3, y=0.3, duration=400)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=2000, zoom=1.8, x=0.7, y=0.7, duration=400,
+                                reason="Pan point")
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3500, zoom=1.0, x=0.5, y=0.5, duration=600)
+        )
+
+        # Zoom should stay at 1.8 between zoom-in completion and zoom-out start
+        z1, _, _ = engine.compute_at(1500)
+        z2, _, _ = engine.compute_at(2500)
+        z3, _, _ = engine.compute_at(3000)
+        assert z1 == pytest.approx(1.8)
+        assert z2 == pytest.approx(1.8)
+        assert z3 == pytest.approx(1.8)

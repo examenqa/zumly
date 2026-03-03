@@ -31,8 +31,14 @@ def save_project(
     actual_fps: float = 30.0,
     bg_preset: Optional[BackgroundPreset] = None,
     frame_preset: Optional[FramePreset] = None,
+    metadata_only: bool = False,
 ) -> str:
     """Bundle session + raw video into a .fcproj ZIP file.
+
+    When *metadata_only* is True and the output file already exists,
+    only the project.json is rewritten — the existing video entry is
+    copied byte-for-byte from the old ZIP, avoiding an expensive
+    re-read of the source AVI.
 
     Returns the final output path.
     """
@@ -49,10 +55,30 @@ def save_project(
     if frame_preset:
         data["framePreset"] = frame_preset.to_dict()
 
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_STORED) as zf:
-        zf.writestr(_JSON_NAME, json.dumps(data, indent=2))
-        if video_path and os.path.isfile(video_path):
-            zf.write(video_path, _VIDEO_NAME)
+    json_bytes = json.dumps(data, indent=2)
+
+    if metadata_only and os.path.isfile(output_path):
+        # Fast path: rewrite JSON, carry over the video entry untouched
+        tmp_path = output_path + ".tmp"
+        try:
+            with zipfile.ZipFile(output_path, "r") as zf_old, \
+                 zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf_new:
+                zf_new.writestr(_JSON_NAME, json_bytes)
+                if _VIDEO_NAME in zf_old.namelist():
+                    video_info = zf_old.getinfo(_VIDEO_NAME)
+                    zf_new.writestr(video_info, zf_old.read(_VIDEO_NAME))
+            # Atomic-ish replace
+            os.replace(tmp_path, output_path)
+        except Exception:
+            # If anything went wrong, fall through to full save
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+    else:
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_STORED) as zf:
+            zf.writestr(_JSON_NAME, json_bytes)
+            if video_path and os.path.isfile(video_path):
+                zf.write(video_path, _VIDEO_NAME)
 
     return output_path
 

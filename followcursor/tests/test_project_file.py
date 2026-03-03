@@ -213,3 +213,44 @@ class TestLoadProject:
         out = save_project(str(tmp_dir / "nofr"), dummy_video, full_session)
         result = load_project(out)
         assert result["frame_preset"] is None
+
+
+# ── metadata_only save ──────────────────────────────────────────────
+
+
+class TestMetadataOnlySave:
+    def test_metadata_only_preserves_video(self, tmp_dir, dummy_video, full_session) -> None:
+        """metadata_only=True should keep the video bytes identical."""
+        out = save_project(str(tmp_dir / "meta"), dummy_video, full_session)
+        with zipfile.ZipFile(out, "r") as zf:
+            original_video = zf.read(_VIDEO_NAME)
+
+        # Modify session metadata and re-save with metadata_only
+        full_session.duration = 9999.0
+        save_project(out, dummy_video, full_session, metadata_only=True)
+
+        with zipfile.ZipFile(out, "r") as zf:
+            assert zf.read(_VIDEO_NAME) == original_video
+            data = json.loads(zf.read(_JSON_NAME))
+            assert data["duration"] == 9999.0
+
+    def test_metadata_only_updates_json(self, tmp_dir, dummy_video, full_session) -> None:
+        """metadata_only save should write updated keyframes."""
+        out = save_project(str(tmp_dir / "meta2"), dummy_video, full_session)
+        # Add a new keyframe
+        full_session.keyframes.append(
+            ZoomKeyframe.create(timestamp=2000, zoom=2.0, x=0.6, y=0.7, reason="Pan point")
+        )
+        save_project(out, dummy_video, full_session, metadata_only=True)
+        with zipfile.ZipFile(out, "r") as zf:
+            data = json.loads(zf.read(_JSON_NAME))
+        assert len(data["keyframes"]) == 3
+
+    def test_metadata_only_on_missing_file_does_full_save(self, tmp_dir, dummy_video, full_session) -> None:
+        """If the file doesn't exist yet, metadata_only should do a full save."""
+        out_path = str(tmp_dir / "new.fcproj")
+        out = save_project(out_path, dummy_video, full_session, metadata_only=True)
+        assert os.path.isfile(out)
+        with zipfile.ZipFile(out, "r") as zf:
+            assert _JSON_NAME in zf.namelist()
+            assert _VIDEO_NAME in zf.namelist()

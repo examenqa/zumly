@@ -158,6 +158,17 @@ time_ms → find active keyframe → elapsed/duration → ease_out(t) → lerp(p
 
 Returns `(zoom, pan_x, pan_y)` — consumed by both the live preview and the video exporter.
 
+### Pan Path Points
+
+Pan path points are intermediate `ZoomKeyframe` entries placed between a segment's zoom-in and zoom-out keyframes. They share the same zoom level as the segment start but have different `(x, y)` positions, creating a smooth panning path within the zoomed view.
+
+Since the zoom engine already interpolates between consecutive keyframes, no engine changes are needed — pan points are simply regular keyframes with `reason="Pan point"` and a shorter transition duration (400 ms). The timeline draws numbered yellow circle markers at each pan point position. Users can:
+
+- **Add** pan points via right-click on a zoom segment → "📌 Add pan point here"
+- **Reorder** via the context menu (Move earlier/later swaps timestamps) or by dragging markers horizontally
+- **Reposition** the camera target via "📍 Pick center on preview"
+- **Delete** individual pan points
+
 ### Undo / Redo
 
 `ZoomEngine` maintains snapshot-based undo/redo stacks (max depth 50). Each snapshot captures both the zoom keyframe list and the click event list so that click deletions are fully undoable. Before any mutation (keyframe edit or click deletion), the caller invokes `push_undo()` which stores a `copy.deepcopy()` of both lists. `undo()` swaps the current state with the top of the undo stack (pushing the current state onto redo), and `redo()` does the reverse.
@@ -248,9 +259,14 @@ Source AVI → frame-by-frame decode (OpenCV) →
   apply zoom/pan (content-only or whole-canvas, depending on frame preset) →
   draw cursor overlay (virtual screen-rect mapping, clipped to screen area) →
   draw click ripple effects (virtual screen-rect mapping, clipped to screen area) →
-  pipe to ffmpeg → MP4 (H.264, encoder selected at runtime, yuv420p)
-                 → GIF  (palettegen + paletteuse filtergraph, 15 fps, loops forever)
+  ┌── bounded queue (depth 16) ──┐
+  │ writer thread drains frames  │ → pipe to ffmpeg stdin
+  └──────────────────────────────┘
+  → MP4 (H.264, encoder selected at runtime, yuv420p)
+  → GIF  (palettegen + paletteuse filtergraph, 15 fps, loops forever)
 ```
+
+A dedicated **writer thread** drains composed frames from a bounded queue (depth 16) into ffmpeg's stdin pipe while the main compositor thread prepares the next frame. This overlaps CPU compositing with GPU encoding so that hardware encoders (NVENC, QuickSync, AMF) stay fed and don't sit idle waiting for the next frame.
 
 ### GIF export
 
@@ -431,6 +447,10 @@ The JSON includes:
 - Monitor geometry
 - Actual FPS
 - Background and frame preset names
+
+### Incremental Save
+
+When re-saving to an existing `.fcproj`, `save_project(metadata_only=True)` rewrites only `project.json` while copying the video entry byte-for-byte from the old ZIP. This avoids expensive re-reads of the source AVI and makes Ctrl+S saves near-instant. The implementation uses a temporary file + `os.replace()` for atomic replacement, falling through to a full save on any error.
 
 ---
 

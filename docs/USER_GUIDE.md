@@ -202,6 +202,7 @@ On the timeline, zoom keyframes appear as colored segments. You can interact wit
 - **Right-click a segment** to open the context menu with options:
   - Set depth (zoom level)
   - Set centroid (pan center)
+  - Add pan point (see below)
   - Delete zoom section
 
 ### Zoom Depth Levels
@@ -226,6 +227,27 @@ The **centroid** is the point the camera focuses on during a zoom. To reposition
 5. The keyframe's pan center updates to match
 
 The centroid coordinates (as a percentage of the frame) are displayed in the keyframe list in the editor panel.
+
+### Pan Path Points
+
+When a zoom segment is long, you can add **pan path points** to smoothly redirect the camera to different parts of the screen while staying zoomed in. Pan points create a panning path through the zoomed view.
+
+**Adding a pan point:**
+
+1. **Right-click** inside a zoom segment on the timeline
+2. Select **📌 Add pan point here**
+3. A numbered yellow circle marker appears at that position on the timeline
+4. The pan point's initial center is set to the recorded cursor position at that timestamp
+
+**Editing pan points:**
+
+- **Right-click** a pan point marker to open its context menu:
+  - **📍 Pick center on preview** — enter centroid-pick mode to set where the camera points
+  - **⬅ Move earlier / ➡ Move later** — reorder pan points by swapping their timestamps
+  - **🗑 Delete pan point** — remove the pan point
+- **Drag** a pan point marker horizontally to change its timestamp within the segment
+
+Pan points are numbered sequentially (1, 2, 3…) to show their order. During export and playback, the zoom engine smoothly interpolates between consecutive pan points using ease-out transitions.
 
 ### Live Zoom During Recording
 
@@ -463,7 +485,9 @@ Save your work to continue editing later:
 - Use **Ctrl+S** or the save option in the UI
 - The project is saved as a **`.fcproj`** file
 - If you’ve previously saved the project, **Ctrl+S** saves to the same file without prompting
+- **Incremental re-save**: when saving to an existing project file, only the metadata (keyframes, clicks, zoom settings, etc.) is updated — the video is copied byte-for-byte from the old file, making re-saves significantly faster
 - The current project filename appears in the **title bar** (with a **●** dot indicator when there are unsaved changes)
+- When you export, the default filename matches the project name (e.g., `MyProject.mp4` instead of a generic timestamp-based name)
 
 A `.fcproj` file is actually a **ZIP archive** containing:
 

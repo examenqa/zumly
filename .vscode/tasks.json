@@ -75,11 +75,6 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
-		},
-		{
-			"label": "Test",
-			"type": "shell",
-			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe -m pytest ${workspaceFolder}/followcursor/tests/ -v"
 		}
 	]
 }

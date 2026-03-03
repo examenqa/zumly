@@ -84,6 +84,7 @@ followcursor/                    ← repo root
 
 ### Video Export Pipeline
 - Frames are piped to ffmpeg via stdin (not written to temp files)
+- **Pipeline queue**: a dedicated writer thread drains composed frames from a bounded queue (depth 16) into ffmpeg's stdin while the main compositor thread prepares the next frame — overlaps CPU compositing with GPU encoding to keep HW encoders fed
 - **MP4 export**: GPU-accelerated encoding: `detect_available_encoders()` in `utils.py` probes NVENC / QuickSync / AMF at startup; `best_hw_encoder()` picks the fastest available, falling back to `libx264`
 - `ENCODER_PROFILES` dict maps each encoder ID to codec + quality args (tuned to approximate CRF 18)
 - `build_encoder_args(encoder_id)` returns the ffmpeg arg list for the selected encoder
@@ -96,6 +97,7 @@ followcursor/                    ← repo root
 - **Zoom behavior is conditional on frame preset**:
   - **No Frame**: zoom/pan applies only to the video content inside the screen area — background stays static. Cursor and click overlays use virtual screen-rect mapping with clip rect when zoomed.
   - **Device frame (any bezel)**: zoom/pan moves the device (frame + video) while the background stays static — like physically bringing a device closer and moving it around. The background gradient/pattern is always visible and never zooms.
+- **Sub-pixel precision**: both zoom paths in `_compose_cv` use `cv2.warpAffine` with `WARP_INVERSE_MAP` for sub-pixel crop/pan accuracy — this eliminates temporal jitter from integer pixel snapping during smooth zoom and pan transitions. The device frame path uses a single warpAffine pass (no intermediate upscale) for both the content and the device mask.
 - Export renders each frame with zoom, cursor overlay, device bezel, and background
 
 ### Zoom System
@@ -115,6 +117,7 @@ followcursor/                    ← repo root
 - Manual keyframes via right-click on timeline (empty space or zoom segment), preview, or editor panel
 - **Manual zoom defaults**: hold time 1500ms, zoom-out transition 600ms. Overlap prevention clamps the zoom-out to stay before the next zoom-in.
 - **Segment edge dragging**: right-edge drags account for the zoom-out keyframe's transition duration so the visual edge follows the mouse. Minimum keyframe gap during drag: 100ms.
+- **Pan path points**: intermediate `ZoomKeyframe` entries with the same zoom level as the segment start but different `(x, y)` positions. They create a panning path within a zoomed-in segment. The zoom engine already interpolates between consecutive keyframes, so no engine changes are needed — pan points are regular keyframes with `reason="Pan point"`. Timeline draws numbered yellow circle markers at each pan point. Right-click a pan point for: pick center on preview, move earlier/later (swap timestamps), delete. Pan point markers are draggable horizontally within the segment bounds. `segment_clicked` signal carries `(start_kf_id, click_time_ms)` so the right-click menu can offer "📌 Add pan point here" at the clicked timestamp.
 - **Debug overlay**: enabled by default — shows colored zoom markers on the preview
 - **Undo/redo**: `ZoomEngine` has snapshot-based undo/redo (deep-copy, MAX_UNDO=50). Snapshots capture both zoom keyframes and click events so that click deletions are undoable. `push_undo()` called before every mutation. Drag operations debounced via `_drag_undo_pushed` flag.
 - **Dirty tracking**: `_unsaved_changes` flag set by `_mark_dirty()` after every mutation; cleared on save
@@ -127,8 +130,11 @@ followcursor/                    ← repo root
 
 ### Project Path & Title Bar
 - `_project_path` tracks the current .fcproj file path; Ctrl+S re-saves without dialog
+- **Incremental save**: when re-saving to an existing .fcproj, `save_project(metadata_only=True)` rewrites only `project.json` while copying the video entry byte-for-byte from the old ZIP — avoids expensive re-reads of the source AVI
+- **Export filename**: when a project is saved, the export dialog defaults the filename to the project name (e.g. `MyProject.mp4`) instead of the generic `followcursor-{duration}.mp4`
 - `TitleBar.set_title(name, unsaved)` updates the logo label to show project name + ● indicator
-- Close confirmation dialog (Save / Don’t Save / Cancel) when `_unsaved_changes` is True- Project saving runs on a background `_SaveProjectWorker(QThread)` so the UI stays responsive during ZIP creation
+- Close confirmation dialog (Save / Don't Save / Cancel) when `_unsaved_changes` is True
+- Project saving runs on a background `_SaveProjectWorker(QThread)` so the UI stays responsive during ZIP creation
 ### Processing Overlay
 - `ProcessingOverlay` widget (full-window, pulsing banner) shown during long-running operations
 - Reusable: `show_overlay(title, subtitle)` accepts configurable text — used for both recording finalization ("Processing…") and project loading ("Loading project…")
@@ -160,7 +166,7 @@ followcursor/                    ← repo root
 
 - **Run**: `dev.bat` or press `F5` in VS Code
 - **Build**: `build.bat` or press `Ctrl+Shift+B`
-- **Test**: `.venv\Scripts\python.exe -m pytest tests/ -v` from `followcursor/`
+- **Test**: Execute the **Run Tests** VS Code task (do not run pytest manually in a terminal)
 - **Debug**: F5 launches with debugpy attached
 - VS Code automation terminals use `cmd.exe` (not WSL) — configured via `terminal.integrated.automationProfile.windows`
 

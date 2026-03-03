@@ -2,6 +2,7 @@
 
 import logging
 import os
+import queue
 import subprocess
 import threading
 
@@ -205,18 +206,25 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
 
     if zoom_video_only and zoom > 1.001:
         # No Frame mode: crop source video, background stays fixed
+        # Use warpAffine for sub-pixel precision (avoids jitter from
+        # integer pixel snapping during pan/zoom transitions).
         crop_w = fw / zoom
         crop_h = fh / zoom
         cx = pan_x * fw - crop_w / 2
         cy = pan_y * fh - crop_h / 2
         cx = max(0.0, min(cx, fw - crop_w))
         cy = max(0.0, min(cy, fh - crop_h))
-        x1, y1 = int(cx), int(cy)
-        x2 = min(int(cx + crop_w), fw)
-        y2 = min(int(cy + crop_h), fh)
-        frame_bgr = frame_bgr[y1:y2, x1:x2]
-        resized = cv2.resize(frame_bgr, (scr_w, scr_h),
-                             interpolation=cv2.INTER_LANCZOS4)
+        # Inverse affine: maps each output pixel (dx, dy) → source pixel
+        #   src_x = (crop_w / scr_w) * dx + cx
+        #   src_y = (crop_h / scr_h) * dy + cy
+        M = np.float32([
+            [crop_w / scr_w, 0, cx],
+            [0, crop_h / scr_h, cy],
+        ])
+        resized = cv2.warpAffine(
+            frame_bgr, M, (scr_w, scr_h),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        )
         roi_mask = screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
         roi = canvas[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
         np.copyto(roi, resized, where=roi_mask[:, :, np.newaxis] > 0)
@@ -236,35 +244,36 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
         fx = scr_x + pan_x * scr_w
         fy = scr_y + pan_y * scr_h
 
-        # Zoom the composed canvas (bezel + video)
-        new_w = int(W * zoom)
-        new_h = int(H * zoom)
-        zoomed = cv2.resize(canvas, (new_w, new_h),
-                            interpolation=cv2.INTER_LANCZOS4)
+        # Use warpAffine for sub-pixel precision — a single resample step
+        # maps output pixels directly to floating-point canvas coords,
+        # eliminating the integer pixel snapping that caused frame jitter.
+        #
+        # For output pixel (dx, dy), the canvas source pixel is:
+        #   src_x = dx / zoom + (fx - W / (2 * zoom))
+        #   src_y = dy / zoom + (fy - H / (2 * zoom))
+        half_vw = W / (2.0 * zoom)
+        half_vh = H / (2.0 * zoom)
+        # Clamp focus so viewport stays within canvas bounds
+        fx_c = max(half_vw, min(fx, W - half_vw))
+        fy_c = max(half_vh, min(fy, H - half_vh))
 
-        # Compute offset so that (fx, fy) maps to canvas center
-        ox = int(fx * zoom - W / 2)
-        oy = int(fy * zoom - H / 2)
-        # Clamp
-        ox = max(0, min(ox, new_w - W))
-        oy = max(0, min(oy, new_h - H))
-
-        cropped_device = zoomed[oy:oy + H, ox:ox + W]
+        M = np.float32([
+            [1.0 / zoom, 0, fx_c - half_vw],
+            [0, 1.0 / zoom, fy_c - half_vh],
+        ])
+        cropped_device = cv2.warpAffine(
+            canvas, M, (W, H),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        )
 
         # Composite: static background + zoomed device on top
         result = bg_canvas.copy()
-        # The zoomed device region has non-background pixels; use it
-        # where the base_canvas differs from bg (i.e. device area)
-        # For simplicity, use the zoomed canvas but restore background
-        # in the original background-only regions.
-        # Since the bezel/device is opaque, we can detect device pixels
-        # by comparing base_canvas vs bg_canvas.
         device_mask = np.any(base_canvas != bg_canvas, axis=2)
-        # Build a zoomed device mask
         device_mask_u8 = device_mask.astype(np.uint8) * 255
-        zoomed_mask = cv2.resize(device_mask_u8, (new_w, new_h),
-                                 interpolation=cv2.INTER_NEAREST)
-        cropped_mask = zoomed_mask[oy:oy + H, ox:ox + W]
+        cropped_mask = cv2.warpAffine(
+            device_mask_u8, M, (W, H),
+            flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+        )
         mask_bool = cropped_mask > 127
         np.copyto(result, cropped_device, where=mask_bool[:, :, np.newaxis])
         return result
@@ -557,7 +566,14 @@ class VideoExporter(QObject):
                 )
 
             def _encode_frames(proc: subprocess.Popen) -> bool:
-                """Feed all frames to ffmpeg. Returns True on success."""
+                """Feed all frames to ffmpeg via a pipeline queue.
+
+                A dedicated writer thread drains composed frames from a
+                bounded queue into ffmpeg's stdin pipe while the main
+                thread continues compositing the next frame.  This
+                overlaps CPU compositing with GPU encoding and keeps
+                hardware encoders (NVENC / QuickSync / AMF) fed.
+                """
                 nonlocal frame_timestamps  # read-only access
 
                 engine = ZoomEngine()
@@ -575,6 +591,36 @@ class VideoExporter(QObject):
                 m_h = max(monitor_rect.get("height", h), 1)
                 _has_cursor = len(mouse_track) > 0 and m_w > 0
                 _has_clicks = len(click_events) > 0 and m_w > 0
+
+                # ── Pipeline: compositor → queue → writer thread → ffmpeg ──
+                _QUEUE_DEPTH = 16
+                frame_q: queue.Queue = queue.Queue(maxsize=_QUEUE_DEPTH)
+                pipe_err = threading.Event()
+
+                def _pipe_writer() -> None:
+                    """Drain frame queue into ffmpeg's stdin pipe."""
+                    while True:
+                        data = frame_q.get()
+                        if data is None:
+                            break
+                        try:
+                            proc.stdin.write(data)
+                        except (BrokenPipeError, OSError):
+                            pipe_err.set()
+                            break
+
+                writer_t = threading.Thread(target=_pipe_writer, daemon=True)
+                writer_t.start()
+
+                def _enqueue(data: bytes) -> bool:
+                    """Put frame data into the queue.  Returns False on pipe error."""
+                    while not pipe_err.is_set():
+                        try:
+                            frame_q.put(data, timeout=0.5)
+                            return True
+                        except queue.Full:
+                            continue
+                    return False
 
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 f_idx = 0
@@ -627,17 +673,15 @@ class VideoExporter(QObject):
                         zoom_video_only=fp.is_none,
                         bg_canvas=bg,
                     )
-                    try:
-                        proc.stdin.write(composed.tobytes())
-                    except (BrokenPipeError, OSError):
-                        return False
+                    if not _enqueue(composed.tobytes()):
+                        break
                     exported += 1
 
                     if t_total > 0 and exported % 10 == 0:
                         self.progress.emit(min(1.0, exported / t_total))
 
                 # Extra frames for zoom-out tail
-                if last_f is not None and engine.keyframes:
+                if last_f is not None and engine.keyframes and not pipe_err.is_set():
                     last_kf = engine.keyframes[-1]
                     end_time = last_kf.timestamp + last_kf.duration
                     if frame_timestamps and f_idx > 0 and f_idx - 1 < len(frame_timestamps):
@@ -668,12 +712,13 @@ class VideoExporter(QObject):
                                 zoom_video_only=fp.is_none,
                                 bg_canvas=bg,
                             )
-                            try:
-                                proc.stdin.write(composed.tobytes())
-                            except (BrokenPipeError, OSError):
-                                return False
+                            if not _enqueue(composed.tobytes()):
+                                break
 
-                return True
+                # Signal writer thread to finish and wait for it
+                frame_q.put(None)
+                writer_t.join(timeout=30)
+                return not pipe_err.is_set()
 
             # ── Try encoding (with HW fallback chain for MP4; direct for GIF) ──
 

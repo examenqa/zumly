@@ -22,6 +22,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 - **Screen & Window Recording** — Capture any monitor (hardware-accelerated via Windows Graphics Capture) or individual windows
 - **Smart Auto-Zoom** — Automatically detects typing bursts and click clusters to generate zoom keyframes with configurable sensitivity (Low / Medium / High). Spatial-aware clustering merges nearby same-area events into sustained zooms, and consecutive clusters are chained together (up to 4 per chain) — the camera stays zoomed in and pans smoothly between them instead of zooming out and back in
 - **Manual Zoom Keyframes** — Right-click the timeline or preview to add zoom points; drag segments to reposition them
+- **Pan Path Points** — Add intermediate pan waypoints within a zoomed segment to create a smooth panning path through the zoomed view. Numbered markers show the order; drag, reorder, or delete them from the context menu
 - **Zoom Depth Control** — Right-click a zoom segment to set depth (Subtle 1.25×, Medium 1.5×, Close 2×, Detail 2.5×)
 - **Centroid Editing** — Reposition the pan center of any zoom keyframe by clicking "Set centroid" on a zoom segment, then clicking the target point on the preview
 - **Live Zoom Shortcuts** — `Ctrl+Shift+=` / `Ctrl+Shift+-` to zoom in/out during recording (global hotkeys)
@@ -34,7 +35,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 - **Output Dimensions** — Choose from Auto, 16:9, 3:2, 4:3, 1:1, or 9:16 aspect ratios for the exported video. Preview shows crop boundaries with a semi-transparent overlay
 - **Background Presets** — 84 backgrounds (39 solids + 37 gradients + 8 patterns) with category picker
 - **Device Frames** — 5 frame styles: Wide Bezel, Slim Bezel, Thin Border, Shadow Only, No Frame
-- **Project Files** — Save/load `.fcproj` bundles (ZIP with metadata + raw video) to resume editing later. Ctrl+S re-saves to the current file. Title bar shows project name and unsaved-changes indicator (●)
+- **Project Files** — Save/load `.fcproj` bundles (ZIP with metadata + raw video) to resume editing later. Ctrl+S re-saves to the current file with incremental metadata-only updates (video is not re-written). Title bar shows project name and unsaved-changes indicator (●). Export filename defaults to the project name
 - **Close Confirmation** — Prompts to save unsaved changes before closing the app
 - **Open in Clipchamp** — One-click handoff to Clipchamp for further editing
 - **Debug Overlay** — Per-time zoom marker overlay on the preview for fine-tuning keyframes (toggle via ⚙ settings menu)
