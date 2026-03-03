@@ -76,6 +76,10 @@ followcursor/                    ← repo root
 - **Debug**: F5 launches with debugpy attached
 - VS Code automation terminals use `cmd.exe` (not WSL)
 
+### Branching
+
+For **big refactors or multi-file features**, create a feature branch first and work there. Merge back to `main` only after tests pass and the change is confirmed working. Small bug fixes and documentation updates can go directly on `main`.
+
 ### Test Suite
 
 - **Framework**: pytest (configured via `followcursor/pytest.ini`)
