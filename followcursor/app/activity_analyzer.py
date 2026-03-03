@@ -454,6 +454,37 @@ def analyze_activity(
     if current_chain:
         chains.append(current_chain)
 
+    # ── Prevent chain-level overlap ────────────────────────────────
+    #
+    # A chain's visual span runs from its zoom-in start to its
+    # zoom-out end (last cluster end + hold + zoom-out duration).
+    # If two consecutive chains overlap, the timeline shows two
+    # stacked segments — one hides the other until one is deleted.
+    #
+    # Fix by reducing hold time first, then pushing the next chain's
+    # zoom-in later if still overlapping.
+    zoom_out_dur = TRANSITION_MS * 2
+    for ch_idx in range(1, len(chains)):
+        prev_last_ci = cluster_info[chains[ch_idx - 1][-1]]
+        curr_first_ci = cluster_info[chains[ch_idx][0]]
+
+        prev_chain_end = (
+            prev_last_ci["end"] + prev_last_ci["hold_ms"] + zoom_out_dur
+        )
+        overlap = prev_chain_end - curr_first_ci["zoom_in_time"]
+        if overlap <= 0:
+            continue
+
+        # Strategy 1: reduce previous chain's hold time
+        hold_reduction = min(overlap, prev_last_ci["hold_ms"])
+        prev_last_ci["hold_ms"] -= int(hold_reduction)
+        overlap -= hold_reduction
+        if overlap <= 0:
+            continue
+
+        # Strategy 2: push current chain's zoom-in later
+        curr_first_ci["zoom_in_time"] += int(overlap) + 50
+
     # ── Generate keyframes from chains ─────────────────────────────
     for chain in chains:
         first_ci = cluster_info[chain[0]]
@@ -539,43 +570,52 @@ def analyze_activity(
 
     keyframes.sort(key=lambda k: k.timestamp)
 
-    # ── 6. Prevent overlap between consecutive chains ──────────────
+    # ── 6. Prevent overlap between consecutive zoom sections ─────
     #
-    # A zoom-out from chain A must finish before the zoom-in from
-    # chain B starts.  If they overlap, push the zoom-in later or
-    # shorten the zoom-out.
-    i = 0
-    while i < len(keyframes) - 1:
-        curr = keyframes[i]
-        nxt = keyframes[i + 1]
-        # Only check zoom-out → zoom-in boundaries
-        if curr.zoom <= 1.01 and nxt.zoom > 1.01:
-            curr_end = curr.timestamp + curr.duration
-            if curr_end > nxt.timestamp:
-                # Shrink the gap: shorten the zoom-out duration so it
-                # finishes right at the next keyframe's start, leaving
-                # at least a small buffer.
-                available = nxt.timestamp - curr.timestamp
-                if available > 100:
-                    # Enough room — just shorten the zoom-out transition
-                    keyframes[i] = ZoomKeyframe.create(
-                        timestamp=curr.timestamp,
-                        zoom=curr.zoom,
-                        x=curr.x,
-                        y=curr.y,
-                        duration=max(100, available - 50),
-                        reason=curr.reason,
-                    )
-                else:
-                    # Not enough room — push the zoom-in later
-                    keyframes[i + 1] = ZoomKeyframe.create(
-                        timestamp=curr_end + 50,
-                        zoom=nxt.zoom,
-                        x=nxt.x,
-                        y=nxt.y,
-                        duration=nxt.duration,
-                        reason=nxt.reason,
-                    )
-        i += 1
+    # Extract zoom segments from the sorted keyframe list, then
+    # ensure each segment's zoom-out completes before the next
+    # segment's zoom-in starts.  This is a safety net in addition
+    # to the chain-level overlap prevention above.
+    segments: list[tuple[int, int]] = []  # (zoom_in_idx, zoom_out_idx)
+    seg_start_idx: int | None = None
+    for idx, kf in enumerate(keyframes):
+        if kf.zoom > 1.01 and seg_start_idx is None:
+            seg_start_idx = idx
+        elif kf.zoom <= 1.01 and seg_start_idx is not None:
+            segments.append((seg_start_idx, idx))
+            seg_start_idx = None
+
+    for s_idx in range(len(segments) - 1):
+        _, out_idx = segments[s_idx]
+        next_in_idx, _ = segments[s_idx + 1]
+
+        out_kf = keyframes[out_idx]
+        in_kf = keyframes[next_in_idx]
+
+        out_end = out_kf.timestamp + out_kf.duration
+        if out_end <= in_kf.timestamp:
+            continue
+
+        available = in_kf.timestamp - out_kf.timestamp
+        if available > 100:
+            # Shorten the zoom-out transition
+            keyframes[out_idx] = ZoomKeyframe.create(
+                timestamp=out_kf.timestamp,
+                zoom=out_kf.zoom,
+                x=out_kf.x,
+                y=out_kf.y,
+                duration=max(100, int(available) - 50),
+                reason=out_kf.reason,
+            )
+        else:
+            # Not enough room — push the zoom-in later
+            keyframes[next_in_idx] = ZoomKeyframe.create(
+                timestamp=out_end + 50,
+                zoom=in_kf.zoom,
+                x=in_kf.x,
+                y=in_kf.y,
+                duration=in_kf.duration,
+                reason=in_kf.reason,
+            )
 
     return keyframes

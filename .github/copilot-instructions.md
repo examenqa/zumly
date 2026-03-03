@@ -110,7 +110,7 @@ followcursor/                    ← repo root
 - Spatial-aware clustering merges same-type peaks (clicks, typing) that are close in screen position
 - **Max cluster duration**: clusters are split at `MAX_CLUSTER_DURATION_MS` (8000ms) so a single zoom block never spans the entire video
 - **Pan-while-zoomed chains**: consecutive clusters within `PAN_MERGE_GAP_MS` (1500ms) are grouped — camera zooms in at the first cluster, pans smoothly to each subsequent cluster while staying zoomed, then zooms out only after the last cluster. Chains are capped at `MAX_CHAIN_LENGTH = 4` clusters. Gap is measured from actual activity end to next activity start (hold period excluded). Pan duration scales with distance (`PAN_TRANSITION_MS = 400`–`PAN_TRANSITION_MAX_MS = 700` ms)
-- **Overlap prevention**: after generating keyframes, a post-processing pass ensures each zoom-out completes before the next zoom-in starts — overlapping transitions are shortened or shifted
+- **Overlap prevention**: two-phase — (1) chain-level pass before keyframe generation reduces hold times or pushes zoom-in times to ensure consecutive chains' visual spans don't overlap; (2) segment-based post-processing pass extracts zoom segments from the flat keyframe list and ensures each segment's zoom-out completes before the next segment's zoom-in starts
 - Viewport centering: zoom targets are centered on the activity position (typing field or click location), clamped so the viewport stays within source bounds.
 - Manual keyframes via right-click on timeline (empty space or zoom segment), preview, or editor panel
 - **Manual zoom defaults**: hold time 1500ms, zoom-out transition 600ms. Overlap prevention clamps the zoom-out to stay before the next zoom-in.

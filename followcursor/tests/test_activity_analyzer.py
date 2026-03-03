@@ -346,6 +346,36 @@ class TestOverlapPrevention:
                 curr_end = curr.timestamp + curr.duration
                 assert curr_end <= nxt.timestamp + 1  # 1ms tolerance
 
+    def test_no_overlapping_segments(self) -> None:
+        """Zoom segments must not overlap — each segment's visual span
+        must end before the next segment starts.  This catches the case
+        where two chains' keyframes interleave in the sorted list."""
+        track = _make_track(20000, x=960, y=540)
+        # Two click clusters separated by just over PAN_MERGE_GAP_MS,
+        # which makes them separate chains whose hold+zoom-out would
+        # overlap the next chain's zoom-in without the chain-level fix.
+        clicks = [
+            ClickEvent(x=300, y=200, timestamp=3000),
+            ClickEvent(x=1600, y=800, timestamp=5500),
+        ]
+        kfs = analyze_activity(track, MONITOR, click_events=clicks)
+        # Extract zoom segments: (start_time, end_time)
+        sorted_kfs = sorted(kfs, key=lambda k: k.timestamp)
+        segments: list[tuple[float, float]] = []
+        seg_start: float | None = None
+        for kf in sorted_kfs:
+            if kf.zoom > 1.01 and seg_start is None:
+                seg_start = kf.timestamp
+            elif kf.zoom <= 1.01 and seg_start is not None:
+                segments.append((seg_start, kf.timestamp + kf.duration))
+                seg_start = None
+        # Segments must not overlap
+        for i in range(len(segments) - 1):
+            assert segments[i][1] <= segments[i + 1][0] + 1, (
+                f"Segment {i} ends at {segments[i][1]} but segment {i+1} "
+                f"starts at {segments[i+1][0]}"
+            )
+
 
 # ── analyze_activity — chaining (pan-while-zoomed) ──────────────────
 
