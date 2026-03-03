@@ -116,7 +116,7 @@ followcursor/                    ← repo root
 - **Manual zoom defaults**: hold time 1500ms, zoom-out transition 600ms. Overlap prevention clamps the zoom-out to stay before the next zoom-in.
 - **Segment edge dragging**: right-edge drags account for the zoom-out keyframe's transition duration so the visual edge follows the mouse. Minimum keyframe gap during drag: 100ms.
 - **Debug overlay**: enabled by default — shows colored zoom markers on the preview
-- **Undo/redo**: `ZoomEngine` has snapshot-based undo/redo (deep-copy, MAX_UNDO=50). `push_undo()` called before every mutation. Drag operations debounced via `_drag_undo_pushed` flag.
+- **Undo/redo**: `ZoomEngine` has snapshot-based undo/redo (deep-copy, MAX_UNDO=50). Snapshots capture both zoom keyframes and click events so that click deletions are undoable. `push_undo()` called before every mutation. Drag operations debounced via `_drag_undo_pushed` flag.
 - **Dirty tracking**: `_unsaved_changes` flag set by `_mark_dirty()` after every mutation; cleared on save
 
 ### Trimming

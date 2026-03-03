@@ -29,7 +29,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 - **Click Selection & Deletion** — Select individual click events on the timeline and delete unwanted ones
 - **Timeline Editor** — Visual timeline with mouse-speed heatmap, gradient-styled zoom segments, draggable edges, and click-to-seek
 - **Trimming** — Drag trim handles on the timeline edges to cut unwanted content from the start or end of your recording; export respects the trimmed range
-- **Undo & Redo** — Full undo/redo for all zoom keyframe changes (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y), up to 50 levels deep
+- **Undo & Redo** — Full undo/redo for all zoom keyframe and click event changes (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y), up to 50 levels deep
 - **Cinematic Export** — H.264 MP4 via ffmpeg with ease-out easing, cursor rendering, click ripple effects, and device frame overlays. Supports GPU-accelerated encoding (NVENC, QuickSync, AMF) with automatic detection and fallback to software x264. Status bar shows active encoder name during export
 - **Output Dimensions** — Choose from Auto, 16:9, 3:2, 4:3, 1:1, or 9:16 aspect ratios for the exported video. Preview shows crop boundaries with a semi-transparent overlay
 - **Background Presets** — 84 backgrounds (39 solids + 37 gradients + 8 patterns) with category picker
@@ -120,7 +120,7 @@ You can also trigger a build manually from the Actions tab.
 | `Ctrl+Shift+=` | Zoom in at cursor position |
 | `Ctrl+Shift+-` | Zoom out to 1.0× |
 | `Ctrl+S` | Save project (re-saves to current file) |
-| `Ctrl+Z` | Undo last zoom keyframe change |
+| `Ctrl+Z` | Undo last zoom/click change |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo last undone change |
 | Right-click zoom segment | Edit depth / centroid / delete |
 | Right-click preview | Add zoom at click position |

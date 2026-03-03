@@ -813,6 +813,7 @@ class MainWindow(QMainWindow):
             self._mouse_track = mouse_track
             self._key_events = key_events
             self._click_events = click_events
+            self._zoom_engine.click_events = self._click_events
             self._frame_timestamps = frame_timestamps
             self._actual_fps_override = actual_fps
 
@@ -1095,24 +1096,32 @@ class MainWindow(QMainWindow):
     # ── undo / redo ─────────────────────────────────────────────────
 
     def _undo(self) -> None:
-        """Undo the last zoom keyframe change."""
+        """Undo the last zoom/click change."""
         if self._zoom_engine.undo():
+            self._click_events = self._zoom_engine.click_events
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
                 self._zoom_engine.current_pan_x,
                 self._zoom_engine.current_pan_y,
             )
+            self._preview.set_cursor_data(
+                self._mouse_track, self._monitor_rect, self._click_events
+            )
             self._refresh_editor()
 
     def _redo(self) -> None:
-        """Redo the last undone zoom keyframe change."""
+        """Redo the last undone zoom/click change."""
         if self._zoom_engine.redo():
+            self._click_events = self._zoom_engine.click_events
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
                 self._zoom_engine.current_pan_x,
                 self._zoom_engine.current_pan_y,
+            )
+            self._preview.set_cursor_data(
+                self._mouse_track, self._monitor_rect, self._click_events
             )
             self._refresh_editor()
 
@@ -1646,7 +1655,9 @@ class MainWindow(QMainWindow):
     def _on_click_event_deleted(self, index: int) -> None:
         """Delete a click event by index from the timeline."""
         if 0 <= index < len(self._click_events):
+            self._zoom_engine.push_undo()
             self._click_events.pop(index)
+            self._mark_dirty()
             self._refresh_editor()
 
     # ── lazy exporter ───────────────────────────────────────────────
@@ -1812,6 +1823,7 @@ class MainWindow(QMainWindow):
             self._mouse_track = session.mouse_track
             self._key_events = session.key_events or []
             self._click_events = session.click_events or []
+            self._zoom_engine.click_events = self._click_events
             self._rec_duration_ms = session.duration
             self._zoom_engine.clear()
             for kf in session.keyframes:

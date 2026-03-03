@@ -160,7 +160,7 @@ Returns `(zoom, pan_x, pan_y)` — consumed by both the live preview and the vid
 
 ### Undo / Redo
 
-`ZoomEngine` maintains snapshot-based undo/redo stacks (max depth 50). Before any keyframe mutation, the caller invokes `push_undo()` which stores a `copy.deepcopy()` of the current keyframe list. `undo()` swaps the current state with the top of the undo stack (pushing the current state onto redo), and `redo()` does the reverse.
+`ZoomEngine` maintains snapshot-based undo/redo stacks (max depth 50). Each snapshot captures both the zoom keyframe list and the click event list so that click deletions are fully undoable. Before any mutation (keyframe edit or click deletion), the caller invokes `push_undo()` which stores a `copy.deepcopy()` of both lists. `undo()` swaps the current state with the top of the undo stack (pushing the current state onto redo), and `redo()` does the reverse.
 
 Drag operations use a debounce flag (`_drag_undo_pushed`) so that a continuous drag only creates a single undo snapshot. The flag resets when the mouse is released (`drag_finished` signal).
 

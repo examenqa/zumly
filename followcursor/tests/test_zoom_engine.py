@@ -3,7 +3,7 @@
 import pytest
 
 from app.zoom_engine import ease_out, smooth_step, ZoomEngine, MAX_UNDO
-from app.models import ZoomKeyframe
+from app.models import ClickEvent, ZoomKeyframe
 
 
 # ── ease_out ────────────────────────────────────────────────────────
@@ -260,3 +260,55 @@ class TestZoomEngineUndoRedo:
         engine.keyframes[0] = ZoomKeyframe.create(timestamp=999, zoom=3.0)
         engine.undo()
         assert engine.keyframes[0].timestamp == 100
+
+    def test_undo_restores_click_events(self) -> None:
+        """Undoing after a click deletion restores the click event."""
+        engine = ZoomEngine()
+        engine.click_events = [
+            ClickEvent(x=100, y=200, timestamp=500),
+            ClickEvent(x=300, y=400, timestamp=1500),
+        ]
+        engine.push_undo()
+        engine.click_events.pop(0)
+        assert len(engine.click_events) == 1
+        assert engine.undo()
+        assert len(engine.click_events) == 2
+        assert engine.click_events[0].x == 100
+
+    def test_redo_restores_click_events(self) -> None:
+        """Redo re-applies the click deletion."""
+        engine = ZoomEngine()
+        engine.click_events = [
+            ClickEvent(x=100, y=200, timestamp=500),
+        ]
+        engine.push_undo()
+        engine.click_events.pop(0)
+        engine.undo()
+        assert len(engine.click_events) == 1
+        assert engine.redo()
+        assert len(engine.click_events) == 0
+
+    def test_undo_restores_both_keyframes_and_clicks(self) -> None:
+        """A single undo restores both keyframes and click events."""
+        engine = ZoomEngine()
+        engine.click_events = [ClickEvent(x=10, y=20, timestamp=100)]
+        kf = ZoomKeyframe.create(timestamp=100, zoom=1.5)
+        engine.add_keyframe(kf)
+        engine.push_undo()
+        # Mutate both
+        engine.click_events.pop(0)
+        engine.keyframes.clear()
+        assert len(engine.click_events) == 0
+        assert len(engine.keyframes) == 0
+        assert engine.undo()
+        assert len(engine.click_events) == 1
+        assert len(engine.keyframes) == 1
+
+    def test_click_events_deep_copied(self) -> None:
+        """Click events in snapshot must be independent copies."""
+        engine = ZoomEngine()
+        engine.click_events = [ClickEvent(x=10, y=20, timestamp=100)]
+        engine.push_undo()
+        engine.click_events[0] = ClickEvent(x=999, y=999, timestamp=999)
+        engine.undo()
+        assert engine.click_events[0].x == 10

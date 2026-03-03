@@ -4,11 +4,22 @@ The engine holds an ordered list of :class:`ZoomKeyframe` objects and
 computes the current ``(zoom, pan_x, pan_y)`` at any point in time
 using quintic ease-out interpolation.  It also maintains an undo/redo
 stack (deep-copy snapshots, max 50 entries).
+
+Snapshots capture both zoom keyframes and click events so that
+undo/redo covers click deletions as well as keyframe edits.
 """
 
 import copy
+from dataclasses import dataclass, field
 from typing import List, Tuple
-from .models import ZoomKeyframe
+from .models import ClickEvent, ZoomKeyframe
+
+
+@dataclass
+class _Snapshot:
+    """Internal snapshot for undo/redo — keyframes + click events."""
+    keyframes: List[ZoomKeyframe] = field(default_factory=list)
+    click_events: List[ClickEvent] = field(default_factory=list)
 
 
 def ease_out(t: float) -> float:
@@ -41,19 +52,23 @@ class ZoomEngine:
     """
     def __init__(self) -> None:
         self.keyframes: List[ZoomKeyframe] = []
+        self.click_events: List[ClickEvent] = []
         self.current_zoom: float = 1.0
         self.current_pan_x: float = 0.5
         self.current_pan_y: float = 0.5
 
-        # Undo / redo stacks — each entry is a deep-copied keyframe list
-        self._undo_stack: List[List[ZoomKeyframe]] = []
-        self._redo_stack: List[List[ZoomKeyframe]] = []
+        # Undo / redo stacks — each entry is a snapshot of keyframes + click events
+        self._undo_stack: List[_Snapshot] = []
+        self._redo_stack: List[_Snapshot] = []
 
     # ── snapshot helpers ────────────────────────────────────────────
 
-    def _snapshot(self) -> List[ZoomKeyframe]:
-        """Return a deep copy of the current keyframe list."""
-        return copy.deepcopy(self.keyframes)
+    def _snapshot(self) -> _Snapshot:
+        """Return a deep copy of the current keyframes and click events."""
+        return _Snapshot(
+            keyframes=copy.deepcopy(self.keyframes),
+            click_events=copy.deepcopy(self.click_events),
+        )
 
     def push_undo(self) -> None:
         """Save the current state onto the undo stack.
@@ -67,11 +82,13 @@ class ZoomEngine:
         self._redo_stack.clear()
 
     def undo(self) -> bool:
-        """Restore the previous keyframe state.  Returns True if successful."""
+        """Restore the previous state.  Returns True if successful."""
         if not self._undo_stack:
             return False
         self._redo_stack.append(self._snapshot())
-        self.keyframes = self._undo_stack.pop()
+        snap = self._undo_stack.pop()
+        self.keyframes = snap.keyframes
+        self.click_events = snap.click_events
         return True
 
     def redo(self) -> bool:
@@ -79,7 +96,9 @@ class ZoomEngine:
         if not self._redo_stack:
             return False
         self._undo_stack.append(self._snapshot())
-        self.keyframes = self._redo_stack.pop()
+        snap = self._redo_stack.pop()
+        self.keyframes = snap.keyframes
+        self.click_events = snap.click_events
         return True
 
     @property

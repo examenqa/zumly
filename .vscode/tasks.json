@@ -77,24 +77,9 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Profile Imports",
+			"label": "Test",
 			"type": "shell",
-			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_imports.py"
-		},
-		{
-			"label": "Profile Startup",
-			"type": "shell",
-			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_startup.py"
-		},
-		{
-			"label": "Profile Init",
-			"type": "shell",
-			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_init.py"
-		},
-		{
-			"label": "Profile Init2",
-			"type": "shell",
-			"command": "c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\.venv\\Scripts\\python.exe c:\\Users\\asabbour\\Git\\followcursor\\followcursor\\_profile_init2.py"
+			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe -m pytest ${workspaceFolder}/followcursor/tests/ -v"
 		}
 	]
 }

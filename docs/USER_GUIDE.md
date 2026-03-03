@@ -430,11 +430,11 @@ When trim handles are set, the export only renders frames within the trimmed ran
 
 ## Undo & Redo
 
-All zoom keyframe changes can be undone and redone. The undo history supports up to **50 snapshots**.
+All zoom keyframe and click event changes can be undone and redone. The undo history supports up to **50 snapshots**.
 
 ### Supported Actions
 
-Every zoom keyframe mutation is tracked:
+Every zoom keyframe and click event mutation is tracked:
 
 - Adding a keyframe (manual or auto-generated)
 - Removing a keyframe
@@ -443,6 +443,7 @@ Every zoom keyframe mutation is tracked:
 - Setting centroid
 - Deleting a zoom section
 - Auto-generating keyframes (the entire batch)
+- Deleting a click event
 
 ### How to Undo/Redo
 
@@ -509,7 +510,7 @@ For additional editing beyond what FollowCursor offers, you can hand off your re
 | **Z** | Insert zoom keyframe at playhead |
 | **⏮ / ⏭** | Skip to start / end |
 | **Delete** | Remove selected zoom segment or click event |
-| **Ctrl+Z** | Undo last zoom keyframe change |
+| **Ctrl+Z** | Undo last zoom/click change |
 | **Ctrl+Shift+Z** | Redo last undone change |
 | **Ctrl+Y** | Redo last undone change (alternate) |
 | **Ctrl+S** | Save project |
@@ -553,7 +554,7 @@ The right sidebar containing all editing controls, organized into sections:
 - **BACKGROUND** — category dropdown (Solid / Gradient / Pattern) + swatch grid for all 90 backgrounds
 - **DEVICE FRAME** — clickable preset buttons for all 5 frame styles
 - **OUTPUT SIZE** — dropdown for selecting aspect ratio / resolution
-- **↩ Undo / Redo ↪** — buttons to undo or redo zoom keyframe changes
+- **↩ Undo / Redo ↪** — buttons to undo or redo zoom keyframe and click event changes
 - **⚙ Settings** — cog icon that opens a popup menu with additional options (e.g., toggle zoom debug overlay)
 
 ### Preview Widget
