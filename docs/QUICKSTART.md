@@ -81,9 +81,8 @@ The app restores from the tray and switches to the **Edit** view.
 2. Choose a sensitivity: **Low** (few zooms), **Medium**, or **High** (many zooms)
 3. Click **✨ Auto-generate zoom keyframes**
 
-The analyzer detects three types of activity:
+The analyzer detects two types of activity:
 
-- **Mouse settlements** — cursor moves fast then stops (suppressed near clicks)
 - **Typing bursts** — mouse is still while keys are pressed (uses keystroke cursor position for accuracy)
 - **Click clusters** — one or more clicks in a short window (highest priority; spatially close clusters stay zoomed in)
 

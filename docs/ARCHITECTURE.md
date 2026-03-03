@@ -168,17 +168,9 @@ Drag operations use a debounce flag (`_drag_undo_pushed`) so that a continuous d
 
 ## Activity Analyzer
 
-`ActivityAnalyzer` (`app/activity_analyzer.py`) auto-generates zoom keyframes by analyzing recorded input data. It detects three signal types:
+`ActivityAnalyzer` (`app/activity_analyzer.py`) auto-generates zoom keyframes by analyzing recorded input data. It detects two signal types:
 
-### 1. Mouse settlements
-
-Detects when the cursor moves fast then **stops** — the destination is where the user is focusing.
-
-- Computes per-window velocity, detects deceleration ratio ≥ 3×
-- Score = deceleration magnitude × `WEIGHT_MOUSE (0.3)`
-- Mouse settlements near click events (within 1500 ms) are suppressed to avoid competing with the more deliberate click signal
-
-### 2. Typing zones
+### 1. Typing zones
 
 Detects when the mouse is nearly stationary while keys are being pressed — indicates text editing.
 
@@ -186,13 +178,15 @@ Detects when the mouse is nearly stationary while keys are being pressed — ind
 - When `KeyEvent` objects carry cursor positions (`x`/`y`), the zoom targets the keystroke location directly — more accurate than inferring position from the mouse track
 - Score = KPS × `WEIGHT_TYPING (1.0)`
 
-### 3. Click clusters
+### 2. Click clusters
 
 Detects ≥ 1 mouse click within a 3-second sliding window — indicates deliberate interaction.
 
 - Even a single click generates a zoom event (single clicks are intentional user actions)
 - Zoom targets the centroid of the click positions
 - Score = click count × `WEIGHT_CLICK (1.2)` — highest-weighted signal
+
+Mouse settlements (cursor resting after fast movement) are **not** used as zoom triggers.
 
 ### Keyboard event filtering
 
@@ -225,9 +219,9 @@ After spatial clustering, consecutive clusters whose gaps are within `PAN_MERGE_
 
 Pan keyframes receive a reason string like "Pan to: typing activity detected".
 
-### Dampened panning
+### Viewport centering
 
-Instead of centering the viewport directly on the activity target (which causes jarring jumps), the pan offset is computed as the **minimum shift** needed to keep the target visible within the zoomed viewport (with a 15% margin from the edge). At low zoom levels most screen positions are already visible and no panning is needed at all.
+The viewport **centers** on the activity target (typing field or click location) and is clamped so it stays within source bounds. This ensures the zoom always goes directly to where the user is working.
 
 ### Pipeline
 

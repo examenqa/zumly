@@ -13,7 +13,6 @@ from app.activity_analyzer import (
     ANTICIPATION_MS,
     ZOOM_LEVEL,
     WINDOW_MS,
-    CLICK_SUPPRESS_RADIUS_MS,
 )
 from app.models import MousePosition, KeyEvent, ClickEvent, ZoomKeyframe
 
@@ -173,34 +172,50 @@ class TestAnalyzeClicks:
         click_kfs = [k for k in kfs if "click" in k.reason.lower()]
         assert len(click_kfs) >= 1
 
-    def test_click_suppresses_nearby_mouse_settlement(self) -> None:
-        """A click event should suppress mouse settlements within the
-        suppression radius so the camera zooms to the click, not the
-        cursor-resting position."""
-        # Track with a fast→slow settlement at 5s AND a click at 5s
+    def test_click_without_settlement_zoom(self) -> None:
+        """A click should zoom even when the nearby cursor resting would
+        have been ignored (mouse settlements are disabled)."""
         track = _make_settlement_track()
         clicks = [ClickEvent(x=1700, y=1100, timestamp=5000)]
         kfs = analyze_activity(track, MONITOR, click_events=clicks)
-        # Should have a click-triggered zoom, not a mouse-triggered one
+        # Should have a click-triggered zoom
         click_kfs = [k for k in kfs if "click" in k.reason.lower()]
-        mouse_kfs = [k for k in kfs if "cursor" in k.reason.lower() or "settled" in k.reason.lower()]
         assert len(click_kfs) >= 1
-        # Mouse settlement at same time should be suppressed
-        for mk in mouse_kfs:
-            for ck in click_kfs:
-                # If any mouse kf survived near a click, it should be far enough away
-                assert abs(mk.timestamp - ck.timestamp) > 500 or True  # permissive
+        # No mouse-settlement keyframes should exist
+        mouse_kfs = [k for k in kfs if "cursor" in k.reason.lower() or "settled" in k.reason.lower()]
+        assert len(mouse_kfs) == 0
 
 
-# ── analyze_activity — mouse settlements ───────────────────────────
+# ── analyze_activity — mouse settlements disabled ──────────────────
 
 
-class TestAnalyzeMouseSettlement:
-    def test_settlement_generates_keyframes(self) -> None:
-        """Fast mouse move followed by stop should trigger zoom."""
+class TestMouseSettlementDisabled:
+    def test_settlement_alone_produces_no_keyframes(self) -> None:
+        """A fast→slow mouse move with no clicks or typing should NOT
+        produce any zoom keyframes (mouse settlements are disabled)."""
         track = _make_settlement_track()
         kfs = analyze_activity(track, MONITOR)
-        assert len(kfs) >= 2  # at least zoom-in + zoom-out
+        assert len(kfs) == 0
+
+
+# ── analyze_activity — typing pans to field position ────────────────
+
+
+class TestTypingPanPosition:
+    def test_typing_zoom_centers_on_field(self) -> None:
+        """Typing in a corner of the screen should pan the viewport
+        there, not stay centered."""
+        # Mouse parked at top-left corner
+        track = _make_track(10000, x=200, y=100)
+        keys = [KeyEvent(timestamp=3000 + i * 50) for i in range(20)]
+        kfs = analyze_activity(track, MONITOR, key_events=keys)
+        zoom_ins = [k for k in kfs if k.zoom > 1.01]
+        assert len(zoom_ins) >= 1
+        kf = zoom_ins[0]
+        # Target should be near (200/1920, 100/1080) ≈ (0.104, 0.093)
+        # NOT centered at (0.5, 0.5)
+        assert kf.x < 0.4, f"Expected x < 0.4 but got {kf.x}"
+        assert kf.y < 0.4, f"Expected y < 0.4 but got {kf.y}"
 
 
 # ── analyze_activity — keyframe structure ───────────────────────────

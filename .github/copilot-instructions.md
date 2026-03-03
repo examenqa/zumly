@@ -103,15 +103,15 @@ followcursor/                    ← repo root
 - **Ease-out** easing (`1 - (1-t)⁵`) for all zoom and pan transitions — quintic curve gives very pronounced deceleration, ~80% of movement in the first 40% of duration. Old `smooth_step` name kept as alias for backward compatibility
 - Default transition duration: 600ms
 - **Anticipation**: zoom-in and pan transitions complete `ANTICIPATION_MS` (200ms) *before* the activity starts, so the viewer sees the trigger from the beginning
-- Activity analyzer generates keyframes from mouse speed bursts, typing clusters, and click events
-- **Signal priority**: clicks (`WEIGHT_CLICK = 1.2`) > typing (`WEIGHT_TYPING = 1.0`) > mouse settlements (`WEIGHT_MOUSE = 0.3`). Single clicks generate zoom events. Mouse settlements within 1500ms of a click are suppressed.
+- Activity analyzer generates keyframes from typing clusters and click events (mouse settlements are **not** used as zoom triggers)
+- **Signal priority**: clicks (`WEIGHT_CLICK = 1.2`) > typing (`WEIGHT_TYPING = 1.0`). Single clicks generate zoom events.
 - **Keyboard tracking**: each keystroke records timestamp + cursor position (`GetCursorPos`). Modifier keys (Ctrl, Shift, Alt, Win, CapsLock, NumLock, ScrollLock) and app-hotkey keys (R, =, -) are excluded so they don't inflate typing activity signals. `KeyEvent` has optional `x`/`y` fields (backward-compatible with old projects that lack them).
 - **Typing position**: when `KeyEvent` objects carry `x`/`y`, the activity analyzer uses those coordinates directly for the typing zone position instead of inferring from the mouse track
 - Spatial-aware clustering merges same-type peaks (clicks, typing) that are close in screen position
 - **Max cluster duration**: clusters are split at `MAX_CLUSTER_DURATION_MS` (8000ms) so a single zoom block never spans the entire video
 - **Pan-while-zoomed chains**: consecutive clusters within `PAN_MERGE_GAP_MS` (1500ms) are grouped — camera zooms in at the first cluster, pans smoothly to each subsequent cluster while staying zoomed, then zooms out only after the last cluster. Chains are capped at `MAX_CHAIN_LENGTH = 4` clusters. Gap is measured from actual activity end to next activity start (hold period excluded). Pan duration scales with distance (`PAN_TRANSITION_MS = 400`–`PAN_TRANSITION_MAX_MS = 700` ms)
 - **Overlap prevention**: after generating keyframes, a post-processing pass ensures each zoom-out completes before the next zoom-in starts — overlapping transitions are shortened or shifted
-- Dampened panning: `_dampen_pan()` accepts `from_x`/`from_y` to compute the minimal shift from the current viewport position (not always from center). Viewport is clamped so it never flies off the source edge.
+- Viewport centering: zoom targets are centered on the activity position (typing field or click location), clamped so the viewport stays within source bounds.
 - Manual keyframes via right-click on timeline (empty space or zoom segment), preview, or editor panel
 - **Manual zoom defaults**: hold time 1500ms, zoom-out transition 600ms. Overlap prevention clamps the zoom-out to stay before the next zoom-in.
 - **Segment edge dragging**: right-edge drags account for the zoom-out keyframe's transition duration so the visual edge follows the mouse. Minimum keyframe gap during drag: 100ms.
