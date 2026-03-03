@@ -6,19 +6,23 @@ Detects three kinds of interesting moments:
    the settlement position (where the user lands), not the burst itself,
    because fast movement is transition and the destination is the content.
    Score = deceleration magnitude (speed drop between consecutive windows).
+   Settlements near click events are suppressed (clicks take priority).
 
 2. **Typing zones** — mouse nearly stationary while keys are being pressed.
-   The cursor position tells us *where* the user is typing.
+   When ``KeyEvent`` objects carry cursor positions (``x``/``y``), the zoom
+   uses the keystroke position directly; otherwise it falls back to the
+   mouse cursor position.
    Score = keystrokes-per-second in the window (only when mouse is slow).
 
-3. **Click clusters** — ≥2 mouse clicks within a 3-second sliding window.
+3. **Click clusters** — ≥1 mouse click within a 3-second sliding window.
    Zoom targets the centroid of the clicks in that burst.
+   Single clicks are treated as deliberate actions.
 
 All signal types are merged into a single scored timeline, clustered,
 and the top clusters get zoom-in / zoom-out keyframe pairs.
 
-Signal weighting: typing > clicks > mouse settlements, so zoom prefers
-moments where the user is actively working over raw cursor movement.
+Signal weighting: clicks > typing > mouse settlements, so zoom prefers
+deliberate user actions over raw cursor movement.
 """
 
 import logging
@@ -36,7 +40,7 @@ WINDOW_MS = 500           # time window for averaging (ms)
 MIN_GAP_MS = 4000         # minimum gap between separate clusters (was 2500)
 PEAK_TOP_N = 6            # max activity clusters
 ZOOM_LEVEL = 1.5          # zoom factor for auto-keyframes (overridden by depth setting)
-ZOOM_HOLD_MOUSE_MS = 2000 # hold for mouse settlements (was 1500)
+ZOOM_HOLD_MOUSE_MS = 500  # hold for mouse settlements (shorter — less deliberate than clicks/typing)
 ZOOM_HOLD_TYPING_MS = 3000 # hold longer for typing (user is still working)
 ZOOM_HOLD_CLICK_MS = 2000  # hold for click clusters
 TRANSITION_MS = 600       # easing duration (zoom-in)
@@ -53,12 +57,15 @@ MOUSE_STILL_PX_MS = 0.5   # mouse speed below this = "still" (px/ms)
 MOUSE_TYPING_PX_MS = 3.0  # mouse speed below this = "slow enough for typing" (px/ms)
 DECEL_MIN_RATIO = 3.0     # speed must drop by at least this factor to count
 CLICK_WINDOW_MS = 3000    # sliding window for click-cluster detection
-CLICK_MIN_COUNT = 2       # minimum clicks in window to trigger zoom
+CLICK_MIN_COUNT = 1       # minimum clicks in window to trigger zoom
 
 # Signal weights (higher = preferred when ranking mixed clusters)
 WEIGHT_TYPING = 1.0
-WEIGHT_CLICK = 0.8
-WEIGHT_MOUSE = 0.5
+WEIGHT_CLICK = 1.2
+WEIGHT_MOUSE = 0.3
+
+# Mouse settlement suppression: ignore settlements near clicks
+CLICK_SUPPRESS_RADIUS_MS = 1500  # suppress mouse peaks within this range of a click
 
 # Spatial-aware clustering: merge same-type peaks that are close in space
 CLICK_MERGE_GAP_MS = 8000    # merge click peaks within 8s if spatially close
@@ -216,6 +223,24 @@ def analyze_activity(
             # Score based on typing density; penalize if mouse is drifting
             base_score = min(kps / 10.0, 1.0) * WEIGHT_TYPING
             score = base_score if mouse_is_still else base_score * 0.7
+
+            # Use KeyEvent positions when available — they capture
+            # the cursor location at each keystroke, giving a more
+            # accurate typing location than the mouse track average.
+            typed_in_window = [
+                k for k in (key_events or [])
+                if t_start <= k.timestamp < t_end and k.x is not None and k.y is not None
+            ]
+            if typed_in_window:
+                avg_x = sum(
+                    max(0.0, min(1.0, (k.x - mon_left) / mon_w))  # type: ignore[operator]
+                    for k in typed_in_window
+                ) / len(typed_in_window)
+                avg_y = sum(
+                    max(0.0, min(1.0, (k.y - mon_top) / mon_h))  # type: ignore[operator]
+                    for k in typed_in_window
+                ) / len(typed_in_window)
+
             windows.append((center_t, score, avg_x, avg_y, "typing"))
         else:
             # Mouse settlement: look for deceleration (fast → slow)
@@ -279,7 +304,7 @@ def analyze_activity(
             best = max(run, key=lambda w: w[1])
             peaks.append(best)
 
-    # Click-cluster peaks: ≥2 clicks within a 3-second sliding window
+    # Click-cluster peaks: clicks within a sliding window
     if click_events and len(click_events) >= CLICK_MIN_COUNT:
         sorted_clicks = sorted(click_events, key=lambda c: c.timestamp)
         i = 0
@@ -311,6 +336,18 @@ def analyze_activity(
         # Fallback: top-N windows by score regardless of type
         all_scored = sorted(windows, key=lambda w: w[1], reverse=True)
         peaks = all_scored[:max_clusters]
+    else:
+        # Suppress mouse settlement peaks that overlap with click peaks.
+        # Clicks are deliberate user actions; cursor resting nearby is
+        # just a side-effect of clicking, not a separate signal.
+        click_times = [p[0] for p in peaks if p[4] == "click"]
+        if click_times:
+            peaks = [
+                p for p in peaks
+                if p[4] != "mouse" or all(
+                    abs(p[0] - ct) > CLICK_SUPPRESS_RADIUS_MS for ct in click_times
+                )
+            ]
 
     # Log peak breakdown
     peak_types = {}
@@ -464,7 +501,16 @@ def analyze_activity(
         # (hold period is just camera dwell — doesn't affect chaining)
         gap = curr_ci["start"] - prev_ci["end"]
 
-        if gap < PAN_MERGE_GAP_MS and len(current_chain) < MAX_CHAIN_LENGTH:
+        # Mouse settlements never chain — they always get independent
+        # zoom-in / zoom-out cycles (they're less deliberate than
+        # clicks or typing and shouldn't prolong a zoom).
+        either_is_mouse = (
+            curr_ci["label"] == "mouse" or prev_ci["label"] == "mouse"
+        )
+
+        if (not either_is_mouse
+                and gap < PAN_MERGE_GAP_MS
+                and len(current_chain) < MAX_CHAIN_LENGTH):
             # Close enough and chain not too long → stay zoomed, pan
             current_chain.append(ci_idx)
         else:

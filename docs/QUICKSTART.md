@@ -83,9 +83,9 @@ The app restores from the tray and switches to the **Edit** view.
 
 The analyzer detects three types of activity:
 
-- **Mouse settlements** — cursor moves fast then stops
-- **Typing bursts** — mouse is still while keys are pressed (nearby bursts in the same area are merged)
-- **Click clusters** — multiple clicks in a short window (spatially close clusters stay zoomed in)
+- **Mouse settlements** — cursor moves fast then stops (suppressed near clicks)
+- **Typing bursts** — mouse is still while keys are pressed (uses keystroke cursor position for accuracy)
+- **Click clusters** — one or more clicks in a short window (highest priority; spatially close clusters stay zoomed in)
 
 ### Add manual zoom
 

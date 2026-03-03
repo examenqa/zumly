@@ -104,7 +104,9 @@ followcursor/                    ← repo root
 - Default transition duration: 600ms
 - **Anticipation**: zoom-in and pan transitions complete `ANTICIPATION_MS` (200ms) *before* the activity starts, so the viewer sees the trigger from the beginning
 - Activity analyzer generates keyframes from mouse speed bursts, typing clusters, and click events
-- **Keyboard filtering**: modifier keys (Ctrl, Shift, Alt, Win, CapsLock, NumLock, ScrollLock) and app-hotkey keys (R, =, -) are excluded from keyboard tracking so they don't inflate typing activity signals
+- **Signal priority**: clicks (`WEIGHT_CLICK = 1.2`) > typing (`WEIGHT_TYPING = 1.0`) > mouse settlements (`WEIGHT_MOUSE = 0.3`). Single clicks generate zoom events. Mouse settlements within 1500ms of a click are suppressed.
+- **Keyboard tracking**: each keystroke records timestamp + cursor position (`GetCursorPos`). Modifier keys (Ctrl, Shift, Alt, Win, CapsLock, NumLock, ScrollLock) and app-hotkey keys (R, =, -) are excluded so they don't inflate typing activity signals. `KeyEvent` has optional `x`/`y` fields (backward-compatible with old projects that lack them).
+- **Typing position**: when `KeyEvent` objects carry `x`/`y`, the activity analyzer uses those coordinates directly for the typing zone position instead of inferring from the mouse track
 - Spatial-aware clustering merges same-type peaks (clicks, typing) that are close in screen position
 - **Max cluster duration**: clusters are split at `MAX_CLUSTER_DURATION_MS` (8000ms) so a single zoom block never spans the entire video
 - **Pan-while-zoomed chains**: consecutive clusters within `PAN_MERGE_GAP_MS` (1500ms) are grouped — camera zooms in at the first cluster, pans smoothly to each subsequent cluster while staying zoomed, then zooms out only after the last cluster. Chains are capped at `MAX_CHAIN_LENGTH = 4` clusters. Gap is measured from actual activity end to next activity start (hold period excluded). Pan duration scales with distance (`PAN_TRANSITION_MS = 400`–`PAN_TRANSITION_MAX_MS = 700` ms)

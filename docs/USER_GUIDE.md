@@ -156,9 +156,11 @@ The **Activity Analyzer** can automatically generate zoom keyframes from your re
 
 | Activity Type | How it's detected | Result |
 | ------------- | ----------------- | ------ |
-| **Mouse settlements** | Cursor moves quickly then stops | Zoom into the settlement point |
-| **Typing bursts** | Mouse is stationary while keyboard events fire | Zoom into the typing area |
-| **Click clusters** | Multiple clicks occur within a short time window | Zoom into the click region |
+| **Mouse settlements** | Cursor moves quickly then stops (suppressed near clicks) | Zoom into the settlement point |
+| **Typing bursts** | Mouse is stationary while keyboard events fire | Zoom into the typing area (uses keystroke cursor position when available) |
+| **Click clusters** | One or more clicks occur within a short time window | Zoom into the click region (highest priority) |
+
+Clicks are prioritized over mouse settlements — a deliberate click is treated as a stronger signal than cursor resting. Even a single click will generate a zoom event. Mouse settlements near click events are automatically suppressed to avoid redundant zooms.
 
 The analyzer uses **spatial-aware clustering** — clicks and typing events that happen in the same area of the screen are merged into a single sustained zoom instead of creating repeated zoom-out/zoom-in cycles. When consecutive clusters occur within 3 seconds of each other, they are grouped into **chains** — the camera zooms in at the first cluster, pans smoothly to each subsequent cluster while staying zoomed, then zooms out only after the last cluster. The viewport pans the **minimum amount** needed to keep the activity visible (rather than centering on it), producing smoother, less jarring camera movements.
 

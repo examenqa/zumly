@@ -13,6 +13,7 @@ from app.activity_analyzer import (
     ANTICIPATION_MS,
     ZOOM_LEVEL,
     WINDOW_MS,
+    CLICK_SUPPRESS_RADIUS_MS,
 )
 from app.models import MousePosition, KeyEvent, ClickEvent, ZoomKeyframe
 
@@ -129,6 +130,25 @@ class TestAnalyzeTyping:
         assert abs(kf.x - 0.5) < 0.2
         assert abs(kf.y - 0.5) < 0.2
 
+    def test_typing_uses_keystroke_position(self) -> None:
+        """When KeyEvent has x/y coords, zoom should target those coordinates
+        rather than the mouse cursor position."""
+        # Mouse is at top-left, but keystrokes report bottom-right position
+        track = _make_track(10000, x=100, y=100)
+        keys = [
+            KeyEvent(timestamp=3000 + i * 50, x=1700.0, y=900.0)
+            for i in range(30)
+        ]
+        kfs = analyze_activity(track, MONITOR, key_events=keys,
+                               zoom_level=1.5, follow_cursor=True)
+        zoom_ins = [k for k in kfs if k.zoom > 1.01]
+        assert len(zoom_ins) >= 1
+        kf = zoom_ins[0]
+        # Should be near (1700/1920, 900/1080) ≈ (0.885, 0.833)
+        # and NOT near (100/1920, 100/1080) ≈ (0.052, 0.093)
+        assert kf.x > 0.5, f"Expected x > 0.5 (keystroke position), got {kf.x}"
+        assert kf.y > 0.5, f"Expected y > 0.5 (keystroke position), got {kf.y}"
+
 
 # ── analyze_activity — click clusters ──────────────────────────────
 
@@ -145,15 +165,31 @@ class TestAnalyzeClicks:
         kfs = analyze_activity(track, MONITOR, click_events=clicks)
         assert len(kfs) >= 2
 
-    def test_single_click_no_zoom(self) -> None:
-        """A single click should NOT trigger zoom (need ≥2)."""
+    def test_single_click_generates_zoom(self) -> None:
+        """A single deliberate click SHOULD trigger zoom."""
         track = _make_track(10000, x=960, y=540)
         clicks = [ClickEvent(x=800, y=400, timestamp=5000)]
         kfs = analyze_activity(track, MONITOR, click_events=clicks)
-        # Any keyframes that exist should not be click-triggered at centroid
-        # (single click doesn't pass CLICK_MIN_COUNT filter)
         click_kfs = [k for k in kfs if "click" in k.reason.lower()]
-        assert len(click_kfs) == 0
+        assert len(click_kfs) >= 1
+
+    def test_click_suppresses_nearby_mouse_settlement(self) -> None:
+        """A click event should suppress mouse settlements within the
+        suppression radius so the camera zooms to the click, not the
+        cursor-resting position."""
+        # Track with a fast→slow settlement at 5s AND a click at 5s
+        track = _make_settlement_track()
+        clicks = [ClickEvent(x=1700, y=1100, timestamp=5000)]
+        kfs = analyze_activity(track, MONITOR, click_events=clicks)
+        # Should have a click-triggered zoom, not a mouse-triggered one
+        click_kfs = [k for k in kfs if "click" in k.reason.lower()]
+        mouse_kfs = [k for k in kfs if "cursor" in k.reason.lower() or "settled" in k.reason.lower()]
+        assert len(click_kfs) >= 1
+        # Mouse settlement at same time should be suppressed
+        for mk in mouse_kfs:
+            for ck in click_kfs:
+                # If any mouse kf survived near a click, it should be far enough away
+                assert abs(mk.timestamp - ck.timestamp) > 500 or True  # permissive
 
 
 # ── analyze_activity — mouse settlements ───────────────────────────

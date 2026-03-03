@@ -85,7 +85,7 @@ All data classes live in `app/models.py`.
 | Class | Fields | Purpose |
 | ----- | ------ | ------- |
 | `MousePosition` | `x, y, timestamp` | Absolute screen coords at ~60 Hz |
-| `KeyEvent` | `timestamp` | Keystroke time (no key identity — privacy) |
+| `KeyEvent` | `timestamp, x, y` | Keystroke time + cursor position (no key identity — privacy) |
 | `ClickEvent` | `x, y, timestamp` | Mouse click position + time |
 | `ZoomKeyframe` | `id, timestamp, zoom, x, y, duration, reason` | Zoom instruction |
 | `RecordingSession` | All of the above bundled + trim range | Serializable session data |
@@ -175,21 +175,24 @@ Drag operations use a debounce flag (`_drag_undo_pushed`) so that a continuous d
 Detects when the cursor moves fast then **stops** — the destination is where the user is focusing.
 
 - Computes per-window velocity, detects deceleration ratio ≥ 3×
-- Score = deceleration magnitude × `WEIGHT_MOUSE (0.5)`
+- Score = deceleration magnitude × `WEIGHT_MOUSE (0.3)`
+- Mouse settlements near click events (within 1500 ms) are suppressed to avoid competing with the more deliberate click signal
 
 ### 2. Typing zones
 
 Detects when the mouse is nearly stationary while keys are being pressed — indicates text editing.
 
 - Requires mouse speed < 3 px/ms and keystrokes-per-second ≥ 1.0
-- Score = KPS × `WEIGHT_TYPING (1.0)` — highest-weighted signal
+- When `KeyEvent` objects carry cursor positions (`x`/`y`), the zoom targets the keystroke location directly — more accurate than inferring position from the mouse track
+- Score = KPS × `WEIGHT_TYPING (1.0)`
 
 ### 3. Click clusters
 
-Detects ≥ 2 mouse clicks within a 3-second sliding window — indicates interactive work.
+Detects ≥ 1 mouse click within a 3-second sliding window — indicates deliberate interaction.
 
+- Even a single click generates a zoom event (single clicks are intentional user actions)
 - Zoom targets the centroid of the click positions
-- Score = click count × `WEIGHT_CLICK (0.8)`
+- Score = click count × `WEIGHT_CLICK (1.2)` — highest-weighted signal
 
 ### Keyboard event filtering
 
@@ -329,7 +332,7 @@ This replaces the previous scrim-overlay approach where the full scene was rende
 
 ### Keyboard tracker
 
-`KeyboardTracker` installs a **Win32 low-level keyboard hook** (`WH_KEYBOARD_LL`) via `ctypes`. Only timestamps are recorded — no key identities, for privacy.
+`KeyboardTracker` installs a **Win32 low-level keyboard hook** (`WH_KEYBOARD_LL`) via `ctypes`. Each keystroke records a timestamp and the current cursor position (via `GetCursorPos`). No key identities are stored, for privacy. The cursor position is used by the activity analyzer to determine where typing is happening, independent of mouse track interpolation.
 
 **Critical:** Uses `WINFUNCTYPE` (not `CFUNCTYPE`) for 64-bit Windows compatibility. Hook callbacks have explicit `argtypes` and `restype` to prevent integer overflow on 64-bit pointers.
 

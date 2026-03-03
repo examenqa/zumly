@@ -34,15 +34,31 @@ class MousePosition:
 
 @dataclass
 class KeyEvent:
-    """A single keystroke timestamp (no key identity stored for privacy)."""
+    """A single keystroke timestamp with optional cursor position.
+
+    Coordinates are in **physical screen pixels** (not DPI-scaled).
+    Position is captured via ``GetCursorPos`` at keystroke time and
+    indicates *where* the user is typing.
+    """
     timestamp: float  # ms since recording start
+    x: float | None = None  # cursor x at keystroke time (physical px)
+    y: float | None = None  # cursor y at keystroke time (physical px)
 
     def to_dict(self) -> dict:
-        return {"timestamp": self.timestamp}
+        d: dict = {"timestamp": self.timestamp}
+        if self.x is not None:
+            d["x"] = self.x
+        if self.y is not None:
+            d["y"] = self.y
+        return d
 
     @staticmethod
     def from_dict(d: dict) -> "KeyEvent":
-        return KeyEvent(timestamp=d["timestamp"])
+        return KeyEvent(
+            timestamp=d["timestamp"],
+            x=d.get("x"),
+            y=d.get("y"),
+        )
 
 
 @dataclass

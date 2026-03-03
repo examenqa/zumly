@@ -42,10 +42,32 @@ class TestKeyEvent:
         d = ke.to_dict()
         ke2 = KeyEvent.from_dict(d)
         assert ke2.timestamp == ke.timestamp
+        assert ke2.x is None
+        assert ke2.y is None
 
-    def test_dict_keys(self) -> None:
+    def test_roundtrip_with_position(self) -> None:
+        ke = KeyEvent(timestamp=42.0, x=960.0, y=540.0)
+        d = ke.to_dict()
+        ke2 = KeyEvent.from_dict(d)
+        assert ke2.timestamp == ke.timestamp
+        assert ke2.x == 960.0
+        assert ke2.y == 540.0
+
+    def test_dict_keys_without_position(self) -> None:
         d = KeyEvent(timestamp=0).to_dict()
         assert set(d.keys()) == {"timestamp"}
+
+    def test_dict_keys_with_position(self) -> None:
+        d = KeyEvent(timestamp=0, x=100.0, y=200.0).to_dict()
+        assert set(d.keys()) == {"timestamp", "x", "y"}
+
+    def test_from_dict_backward_compat(self) -> None:
+        """Old projects without x/y in KeyEvent should still load."""
+        d = {"timestamp": 99.0}
+        ke = KeyEvent.from_dict(d)
+        assert ke.timestamp == 99.0
+        assert ke.x is None
+        assert ke.y is None
 
 
 # ── ClickEvent ──────────────────────────────────────────────────────

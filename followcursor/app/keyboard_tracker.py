@@ -100,6 +100,9 @@ class _KeyboardHookThread(QThread):
         start_ms = self._start_ms
         events_list = self._events_list
 
+        # Pre-allocate a POINT for GetCursorPos calls
+        _cursor_pt = wintypes.POINT()
+
         def low_level_handler(n_code, w_param, l_param):
             try:
                 if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
@@ -110,7 +113,13 @@ class _KeyboardHookThread(QThread):
                             self._hook, n_code, w_param, l_param,
                         )
                     ts = time.time() * 1000 - start_ms
-                    events_list.append(KeyEvent(timestamp=ts))
+                    # Capture cursor position at keystroke time
+                    cx: float | None = None
+                    cy: float | None = None
+                    if user32.GetCursorPos(ctypes.byref(_cursor_pt)):
+                        cx = float(_cursor_pt.x)
+                        cy = float(_cursor_pt.y)
+                    events_list.append(KeyEvent(timestamp=ts, x=cx, y=cy))
             except Exception:
                 logger.exception("Error in keyboard hook callback")
             return user32.CallNextHookEx(self._hook, n_code, w_param, l_param)
