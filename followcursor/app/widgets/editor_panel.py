@@ -15,6 +15,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QComboBox,
     QCheckBox,
+    QTextEdit,
+    QLineEdit,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
 )
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent
@@ -57,6 +62,127 @@ SENSITIVITY_PRESETS = {
     "High":   (10, 2500),
 }
 
+# TTS voice options
+TTS_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+
+
+class _CollapsibleSection(QWidget):
+    """A section header that toggles visibility of its body widget."""
+
+    def __init__(self, title: str, body: QWidget, collapsed: bool = False, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header button
+        self._btn = QPushButton()
+        self._btn.setFixedHeight(28)
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.setStyleSheet(
+            "QPushButton { background: #201f34; color: #a09cb5; font-size: 11px;"
+            "  font-weight: 600; letter-spacing: 1px; border: none;"
+            "  border-bottom: 1px solid #2d2b45; text-align: left;"
+            "  padding: 0 16px; }"
+            "QPushButton:hover { background: #28263e; color: #e4e4ed; }"
+        )
+        self._btn.clicked.connect(self._toggle)
+        layout.addWidget(self._btn)
+
+        self._body = body
+        layout.addWidget(body)
+
+        self._title = title
+        self._collapsed = collapsed
+        body.setVisible(not collapsed)
+        self._update_text()
+
+    def _toggle(self) -> None:
+        self._collapsed = not self._collapsed
+        self._body.setVisible(not self._collapsed)
+        self._update_text()
+
+    def _update_text(self) -> None:
+        arrow = "▸" if self._collapsed else "▾"
+        self._btn.setText(f"  {arrow}  {self._title}")
+
+
+class _AISettingsDialog(QDialog):
+    """Modal dialog for configuring Azure AI Foundry API credentials."""
+
+    def __init__(self, current_settings, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AI Settings — Azure AI Foundry")
+        self.setMinimumWidth(420)
+        self.setStyleSheet(
+            "QDialog { background: #1b1a2e; }"
+            "QLabel { color: #e4e4ed; font-size: 13px; }"
+            "QLineEdit { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 6px; font-size: 13px; }"
+            "QComboBox { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 8px; font-size: 13px; }"
+            "QPushButton { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 6px 16px; min-width: 80px; }"
+            "QPushButton:hover { background: #8b5cf6; }"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        info = QLabel(
+            "Configure your Azure AI Foundry credentials.\n"
+            "Chat model is used for AI zoom analysis and narration.\n"
+            "TTS model is used for speech synthesis."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #9c99b6; font-size: 12px;")
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self._endpoint = QLineEdit(current_settings.endpoint)
+        self._endpoint.setPlaceholderText("https://models.inference.ai.azure.com")
+        form.addRow("Endpoint:", self._endpoint)
+
+        self._api_key = QLineEdit(current_settings.api_key)
+        self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key.setPlaceholderText("Your API key or token")
+        form.addRow("API Key:", self._api_key)
+
+        self._chat_model = QLineEdit(current_settings.chat_model)
+        self._chat_model.setPlaceholderText("e.g. gpt-4o-mini")
+        form.addRow("Chat Model:", self._chat_model)
+
+        self._tts_model = QLineEdit(current_settings.tts_model)
+        self._tts_model.setPlaceholderText("e.g. tts-1 (optional)")
+        form.addRow("TTS Model:", self._tts_model)
+
+        self._tts_voice = QComboBox()
+        for v in TTS_VOICES:
+            self._tts_voice.addItem(v)
+        self._tts_voice.setCurrentText(current_settings.tts_voice)
+        form.addRow("Voice:", self._tts_voice)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_settings(self):
+        from ..ai_service import AISettings
+        return AISettings(
+            endpoint=self._endpoint.text().strip(),
+            api_key=self._api_key.text().strip(),
+            chat_model=self._chat_model.text().strip(),
+            tts_model=self._tts_model.text().strip(),
+            tts_voice=self._tts_voice.currentText(),
+        )
+
 
 class EditorPanel(QWidget):
     """Right-hand sidebar with zoom controls, auto-zoom, background/frame pickers.
@@ -77,62 +203,74 @@ class EditorPanel(QWidget):
     undo_requested = Signal()               # undo zoom keyframe change
     redo_requested = Signal()               # redo zoom keyframe change
     encoder_changed = Signal(str)            # encoder_id (e.g. "h264_nvenc")
+    # AI feature signals
+    ai_zoom_requested = Signal(int, float, int)  # max_clusters, zoom_level, min_gap_ms
+    add_voiceover_requested = Signal(float, str)  # timestamp_ms, voice
+    ai_settings_changed = Signal()               # settings were updated
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("EditorPanel")
         self.setFixedWidth(280)
 
-        self._container = QVBoxLayout(self)
-        self._container.setContentsMargins(16, 20, 16, 16)
-        self._container.setSpacing(12)
+        # Outer layout: collapsible sections + fixed bottom bar
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Scrollable content area (for when many sections are expanded)
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollBar:vertical { background: #1b1a2e; width: 6px; }"
+            "QScrollBar::handle:vertical { background: #3d3a58; border-radius: 3px; min-height: 30px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+        )
+        scroll_content = QWidget()
+        self._container = QVBoxLayout(scroll_content)
+        self._container.setContentsMargins(0, 8, 0, 8)
+        self._container.setSpacing(0)
+        scroll.setWidget(scroll_content)
+        outer.addWidget(scroll, 1)
 
         self._current_zoom_level = ZOOM_DEPTHS["Medium"]
         self._trim_start_ms: float = 0.0
         self._trim_end_ms: float = 0.0
         self._duration: float = 0.0
 
-        # ── Add Keyframe ─────────────────────────────────────────────
-        manual_title = QLabel("ADD KEYFRAME")
-        manual_title.setObjectName("EditorTitle")
-        self._container.addWidget(manual_title)
-
-        manual_desc = QLabel("Add a zoom keyframe at the current\nplayback position.")
-        manual_desc.setObjectName("Secondary")
-        manual_desc.setWordWrap(True)
-        self._container.addWidget(manual_desc)
-
+        # ── Add Keyframe (always visible, not collapsible) ───────────
+        kf_widget = QWidget()
+        kf_layout = QVBoxLayout(kf_widget)
+        kf_layout.setContentsMargins(16, 8, 16, 8)
+        kf_layout.setSpacing(6)
         self._btn_add_zoom = QPushButton("🔍 Add Zoom")
         self._btn_add_zoom.setObjectName("CtrlBtn")
         self._btn_add_zoom.setFixedHeight(32)
         self._btn_add_zoom.setToolTip("Add a zoom-in + auto zoom-out keyframe pair at the current position")
         self._btn_add_zoom.clicked.connect(self._on_manual_zoom_in)
-        self._container.addWidget(self._btn_add_zoom)
+        kf_layout.addWidget(self._btn_add_zoom)
+        self._container.addWidget(kf_widget)
 
-        # separator
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet("background-color: #2d2b45; max-height: 1px;")
-        self._container.addWidget(sep2)
+        # ── Smart Zoom (collapsible) ─────────────────────────────────
+        zoom_body = QWidget()
+        zoom_lay = QVBoxLayout(zoom_body)
+        zoom_lay.setContentsMargins(16, 6, 16, 8)
+        zoom_lay.setSpacing(6)
 
-        # smart zoom
-        qa_title = QLabel("SMART ZOOM")
-        qa_title.setObjectName("EditorTitle")
-        self._container.addWidget(qa_title)
-
-        qa_desc = QLabel("Analyze mouse + click activity to auto-generate\nzoom keyframes at areas of high activity.")
+        qa_desc = QLabel("Analyze activity to auto-generate zoom keyframes.")
         qa_desc.setObjectName("Secondary")
         qa_desc.setWordWrap(True)
-        self._container.addWidget(qa_desc)
+        zoom_lay.addWidget(qa_desc)
 
-        # Sensitivity control
         sens_row = QHBoxLayout()
         sens_row.setSpacing(8)
         sens_label = QLabel("Sensitivity")
         sens_label.setObjectName("Secondary")
         sens_label.setFixedWidth(65)
         sens_row.addWidget(sens_label)
-
         self._sensitivity_combo = QComboBox()
         self._sensitivity_combo.setObjectName("DepthCombo")
         self._sensitivity_combo.setFixedHeight(30)
@@ -145,41 +283,89 @@ class EditorPanel(QWidget):
             "High = more zoom keyframes (follows smaller movements)"
         )
         sens_row.addWidget(self._sensitivity_combo, 1)
-        self._container.addLayout(sens_row)
+        zoom_lay.addLayout(sens_row)
 
         activity_btn = QPushButton("✨ Auto-generate zoom keyframes")
         activity_btn.setObjectName("CtrlBtn")
         activity_btn.setFixedHeight(36)
         activity_btn.clicked.connect(self._auto_keyframe)
-        self._container.addWidget(activity_btn)
+        zoom_lay.addWidget(activity_btn)
 
         self._auto_status = QLabel("")
         self._auto_status.setObjectName("Secondary")
         self._auto_status.setWordWrap(True)
         self._auto_status.setVisible(False)
-        self._container.addWidget(self._auto_status)
+        zoom_lay.addWidget(self._auto_status)
 
-        # separator
-        sep_bg = QFrame()
-        sep_bg.setFrameShape(QFrame.Shape.HLine)
-        sep_bg.setStyleSheet("background-color: #2d2b45; max-height: 1px;")
-        self._container.addWidget(sep_bg)
+        ai_zoom_btn = QPushButton("\U0001f916 AI Auto-generate zoom")
+        ai_zoom_btn.setObjectName("CtrlBtn")
+        ai_zoom_btn.setFixedHeight(36)
+        ai_zoom_btn.setToolTip("Use AI (Azure AI Foundry) to analyze activity\nand generate zoom keyframes.")
+        ai_zoom_btn.clicked.connect(self._on_ai_zoom)
+        zoom_lay.addWidget(ai_zoom_btn)
 
-        # ── Background picker ───────────────────────────────────────
-        bg_title = QLabel("BACKGROUND")
-        bg_title.setObjectName("EditorTitle")
-        self._container.addWidget(bg_title)
+        self._ai_zoom_status = QLabel("")
+        self._ai_zoom_status.setObjectName("Secondary")
+        self._ai_zoom_status.setWordWrap(True)
+        self._ai_zoom_status.setVisible(False)
+        zoom_lay.addWidget(self._ai_zoom_status)
 
-        # Category combo
+        self._container.addWidget(_CollapsibleSection("SMART ZOOM", zoom_body))
+
+        # ── Voiceover (collapsible) ──────────────────────────────────
+        vo_body = QWidget()
+        vo_lay = QVBoxLayout(vo_body)
+        vo_lay.setContentsMargins(16, 6, 16, 8)
+        vo_lay.setSpacing(6)
+
+        vo_desc = QLabel("Add text-to-speech voiceover segments\nat specific points in the timeline.")
+        vo_desc.setObjectName("Secondary")
+        vo_desc.setWordWrap(True)
+        vo_lay.addWidget(vo_desc)
+
+        voice_row = QHBoxLayout()
+        voice_row.setSpacing(6)
+        voice_label = QLabel("Voice")
+        voice_label.setObjectName("Secondary")
+        voice_label.setFixedWidth(35)
+        voice_row.addWidget(voice_label)
+        self._voice_combo = QComboBox()
+        self._voice_combo.setObjectName("DepthCombo")
+        self._voice_combo.setFixedHeight(28)
+        for voice in ("alloy", "echo", "fable", "onyx", "nova", "shimmer"):
+            self._voice_combo.addItem(voice)
+        voice_row.addWidget(self._voice_combo, 1)
+        vo_lay.addLayout(voice_row)
+
+        self._btn_add_voiceover = QPushButton("\U0001f399 Add Voiceover")
+        self._btn_add_voiceover.setObjectName("CtrlBtn")
+        self._btn_add_voiceover.setFixedHeight(32)
+        self._btn_add_voiceover.setToolTip("Add a voiceover segment at the current playback position.")
+        self._btn_add_voiceover.clicked.connect(self._on_add_voiceover)
+        vo_lay.addWidget(self._btn_add_voiceover)
+
+        self._vo_status = QLabel("")
+        self._vo_status.setObjectName("Secondary")
+        self._vo_status.setWordWrap(True)
+        self._vo_status.setVisible(False)
+        vo_lay.addWidget(self._vo_status)
+
+        self._container.addWidget(_CollapsibleSection("VOICEOVER", vo_body))
+
+        # ── Background picker (collapsible) ──────────────────────────
+        bg_body = QWidget()
+        bg_lay = QVBoxLayout(bg_body)
+        bg_lay.setContentsMargins(16, 6, 16, 8)
+        bg_lay.setSpacing(6)
+
         self._bg_category_combo = QComboBox()
         self._bg_category_combo.setObjectName("DepthCombo")
         self._bg_category_combo.setFixedHeight(30)
         for cat_key in (CAT_SOLID, CAT_GRADIENT, CAT_PATTERN):
             self._bg_category_combo.addItem(CATEGORY_LABELS[cat_key], cat_key)
         self._bg_category_combo.currentIndexChanged.connect(self._on_bg_category_changed)
-        self._container.addWidget(self._bg_category_combo)
+        bg_lay.addWidget(self._bg_category_combo)
 
-        # Stacked grids — one per category
         from PySide6.QtWidgets import QStackedWidget
         self._bg_stack = QStackedWidget()
         self._bg_buttons: list[QPushButton] = []
@@ -195,20 +381,16 @@ class EditorPanel(QWidget):
             page.setLayout(grid)
             self._bg_stack.addWidget(page)
             self._bg_category_widgets[cat_key] = page
-        self._container.addWidget(self._bg_stack)
-
+        bg_lay.addWidget(self._bg_stack)
         self._current_bg_preset = DEFAULT_PRESET
 
-        # separator
-        sep_fr = QFrame()
-        sep_fr.setFrameShape(QFrame.Shape.HLine)
-        sep_fr.setStyleSheet("background-color: #2d2b45; max-height: 1px;")
-        self._container.addWidget(sep_fr)
+        self._container.addWidget(_CollapsibleSection("BACKGROUND", bg_body, collapsed=True))
 
-        # ── Frame picker ─────────────────────────────────────────
-        fr_title = QLabel("DEVICE FRAME")
-        fr_title.setObjectName("EditorTitle")
-        self._container.addWidget(fr_title)
+        # ── Frame picker (collapsible) ───────────────────────────────
+        fr_body = QWidget()
+        fr_lay = QVBoxLayout(fr_body)
+        fr_lay.setContentsMargins(16, 6, 16, 8)
+        fr_lay.setSpacing(6)
 
         self._frame_combo = QComboBox()
         self._frame_combo.setObjectName("DepthCombo")
@@ -217,20 +399,16 @@ class EditorPanel(QWidget):
             self._frame_combo.addItem(fp.name)
         self._frame_combo.setCurrentText(DEFAULT_FRAME.name)
         self._frame_combo.currentTextChanged.connect(self._on_frame_changed)
-        self._container.addWidget(self._frame_combo)
-
+        fr_lay.addWidget(self._frame_combo)
         self._current_frame_preset = DEFAULT_FRAME
 
-        # separator
-        sep_dim = QFrame()
-        sep_dim.setFrameShape(QFrame.Shape.HLine)
-        sep_dim.setStyleSheet("background-color: #2d2b45; max-height: 1px;")
-        self._container.addWidget(sep_dim)
+        self._container.addWidget(_CollapsibleSection("DEVICE FRAME", fr_body, collapsed=True))
 
-        # ── Output dimensions picker ────────────────────────────────
-        dim_title = QLabel("OUTPUT SIZE")
-        dim_title.setObjectName("EditorTitle")
-        self._container.addWidget(dim_title)
+        # ── Output dimensions (collapsible) ──────────────────────────
+        dim_body = QWidget()
+        dim_lay = QVBoxLayout(dim_body)
+        dim_lay.setContentsMargins(16, 6, 16, 8)
+        dim_lay.setSpacing(6)
 
         self._dim_combo = QComboBox()
         self._dim_combo.setObjectName("DepthCombo")
@@ -243,12 +421,20 @@ class EditorPanel(QWidget):
             "Choose the aspect ratio and resolution for the exported video.\n"
             "Auto = same dimensions as the recorded source."
         )
-        self._container.addWidget(self._dim_combo)
+        dim_lay.addWidget(self._dim_combo)
 
         self._current_output_dim = "auto"
+        self._container.addWidget(_CollapsibleSection("OUTPUT SIZE", dim_body, collapsed=True))
 
-        # ── Session info (compact, at the bottom) ───────────────────
+        # End of scrollable content
         self._container.addStretch()
+
+        # ── Fixed bottom bar (outside scroll area) ──────────────────
+        bottom_bar = QWidget()
+        bottom_bar.setStyleSheet("background: #1b1a2e; border-top: 1px solid #2d2b45;")
+        bottom_layout = QVBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(16, 6, 16, 6)
+        bottom_layout.setSpacing(4)
 
         # Undo / Redo row
         undo_redo_row = QHBoxLayout()
@@ -266,7 +452,7 @@ class EditorPanel(QWidget):
         self._btn_redo.setToolTip("Redo last undone change (Ctrl+Y)")
         self._btn_redo.clicked.connect(self.redo_requested.emit)
         undo_redo_row.addWidget(self._btn_redo)
-        self._container.addLayout(undo_redo_row)
+        bottom_layout.addLayout(undo_redo_row)
 
         # Info + settings row
         info_row = QHBoxLayout()
@@ -292,7 +478,8 @@ class EditorPanel(QWidget):
         self._btn_settings.clicked.connect(self._show_settings_menu)
         info_row.addWidget(self._btn_settings)
 
-        self._container.addLayout(info_row)
+        bottom_layout.addLayout(info_row)
+        outer.addWidget(bottom_bar)
 
         # Debug overlay state (managed via settings menu) — on by default
         self._debug_overlay_enabled = True
@@ -328,6 +515,11 @@ class EditorPanel(QWidget):
             "keyframes were placed."
         )
         debug_act.triggered.connect(self._toggle_debug_overlay)
+
+        # AI settings
+        menu.addSeparator()
+        ai_act = menu.addAction("\U0001f916 AI Settings\u2026")
+        ai_act.triggered.connect(self._show_ai_settings)
 
         # Encoder submenu
         encoder_menu = menu.addMenu("Video encoder")
@@ -673,3 +865,59 @@ class EditorPanel(QWidget):
         )
         self._auto_status.setVisible(True)
         self.auto_keyframes_generated.emit(keyframes)
+
+    # ── AI features ─────────────────────────────────────────────────
+
+    def _on_ai_zoom(self) -> None:
+        """Request AI-powered zoom analysis."""
+        sens_name = self._sensitivity_combo.currentText()
+        max_clusters, min_gap = SENSITIVITY_PRESETS.get(sens_name, (6, 4000))
+        self._ai_zoom_status.setText("Requesting AI analysis\u2026")
+        self._ai_zoom_status.setVisible(True)
+        self.ai_zoom_requested.emit(max_clusters, self._current_zoom_level, min_gap)
+
+    def set_ai_zoom_status(self, text: str) -> None:
+        """Update the AI zoom status label from outside."""
+        self._ai_zoom_status.setText(text)
+        self._ai_zoom_status.setVisible(bool(text))
+
+    def _on_add_voiceover(self) -> None:
+        """Request adding a voiceover segment at the current playback position."""
+        voice = self._voice_combo.currentText()
+        self.add_voiceover_requested.emit(-1.0, voice)  # -1 = use current playback time
+
+    def set_voiceover_status(self, text: str) -> None:
+        """Update the voiceover status label from outside."""
+        self._vo_status.setText(text)
+        self._vo_status.setVisible(bool(text))
+
+    @property
+    def selected_voice(self) -> str:
+        """Return the currently selected TTS voice."""
+        return self._voice_combo.currentText()
+
+    def _show_ai_settings(self) -> None:
+        """Open the AI settings dialog."""
+        from ..ai_service import AISettings
+        from PySide6.QtCore import QSettings
+
+        settings = QSettings("FollowCursor", "FollowCursor")
+        current = AISettings(
+            endpoint=settings.value("ai/endpoint", ""),
+            api_key=settings.value("ai/apiKey", ""),
+            chat_model=settings.value("ai/chatModel", ""),
+            tts_model=settings.value("ai/ttsModel", ""),
+            tts_voice=settings.value("ai/ttsVoice", "alloy"),
+        )
+
+        dlg = _AISettingsDialog(current, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_settings()
+            settings.setValue("ai/endpoint", result.endpoint)
+            settings.setValue("ai/apiKey", result.api_key)
+            settings.setValue("ai/chatModel", result.chat_model)
+            settings.setValue("ai/ttsModel", result.tts_model)
+            settings.setValue("ai/ttsVoice", result.tts_voice)
+            self._voice_combo.setCurrentText(result.tts_voice)
+            self.ai_settings_changed.emit()
+            logger.info("AI settings updated")

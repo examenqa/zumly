@@ -247,6 +247,50 @@ Configurable via sensitivity presets (Low/Medium/High) which vary `max_clusters`
 
 ---
 
+## AI Service
+
+`AIService` (`app/ai_service.py`) provides optional AI-powered features via Azure AI Foundry. All AI operations are run on a background `AIWorker(QThread)` to keep the GUI responsive.
+
+### AI Smart Zoom
+
+An alternative to the local activity analyzer. Instead of heuristic-based peak detection, the recording activity is summarized into a compact text format and sent to an LLM (via `azure-ai-inference` SDK's `ChatCompletionsClient`). The AI model returns a JSON array of zoom sections with timestamps, positions, zoom levels, and reasons.
+
+**Data flow:**
+
+```text
+Mouse track + key events + click events
+  → _summarize_activity() → per-second text windows (position, speed, keystrokes, clicks)
+  → LLM chat completion → JSON array of zoom sections
+  → _parse_zoom_response() → List[ZoomKeyframe] (zoom-in/zoom-out pairs)
+  → same pipeline as local auto-zoom (confirm replace → apply to ZoomEngine)
+```
+
+The summary condenses thousands of mouse samples into ~1 line per second of recording, making it feasible for LLM context windows.
+
+### Voiceover (TTS)
+
+Segment-based voiceover system:
+
+- Users create `VoiceoverSegment` objects at specific timeline positions (via right-click on timeline/preview or the editor panel button)
+- Each segment has: `id`, `timestamp`, `text`, `voice`, `audio_path`, `duration_ms`
+- Speech synthesis sends user-authored text to Azure AI Foundry's TTS model endpoint (`/openai/deployments/{model}/audio/speech`) and saves the resulting MP3
+- Segments are stored in `MainWindow._voiceover_segments` and serialized into `.fcproj` via `RecordingSession.voiceover_segments`
+- Timeline renders voiceover segments as teal pill-shaped blocks on a dedicated **Voice** track row
+- Clicking a segment opens an edit dialog (change text, re-synthesize, delete)
+
+**Export merging**: `_merge_voiceover_segments()` in `video_exporter.py` uses ffmpeg's `adelay` + `amix` filters to combine multiple audio files at their correct timeline offsets into a single WAV. The merged audio is muxed into the MP4 as an AAC track (`-c:a aac -b:a 192k -shortest`). Temp files are cleaned up after export.
+
+### Configuration
+
+AI settings are persisted via `QSettings` under the `ai/` prefix:
+- `ai/endpoint` — Azure AI Foundry endpoint URL
+- `ai/apiKey` — API key or token
+- `ai/chatModel` — chat model deployment name
+- `ai/ttsModel` — TTS model deployment name
+- `ai/ttsVoice` — voice name (default: "alloy")
+
+---
+
 ## Video Export
 
 `VideoExporter` (`app/video_exporter.py`) renders the final MP4 or GIF:

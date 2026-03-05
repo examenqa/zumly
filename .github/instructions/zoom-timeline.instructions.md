@@ -1,5 +1,5 @@
 ---
-applyTo: "**/{zoom_engine,activity_analyzer,timeline_widget,editor_panel}.py"
+applyTo: "**/{zoom_engine,activity_analyzer,ai_service,timeline_widget,editor_panel}.py"
 ---
 
 # Zoom System & Timeline

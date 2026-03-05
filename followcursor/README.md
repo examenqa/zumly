@@ -21,6 +21,8 @@ Record your screen or any individual window, then export a polished MP4 video wh
 
 - **Screen & Window Recording** — Capture any monitor (hardware-accelerated via Windows Graphics Capture) or individual windows
 - **Smart Auto-Zoom** — Automatically detects typing bursts and click clusters to generate zoom keyframes with configurable sensitivity (Low / Medium / High). Spatial-aware clustering merges nearby same-area events into sustained zooms, and consecutive clusters are chained together (up to 4 per chain) — the camera stays zoomed in and pans smoothly between them instead of zooming out and back in
+- **AI Smart Zoom** — Use Azure AI Foundry chat models to analyze your recording and generate intelligent zoom-and-pan keyframes. The AI acts like a professional cameraman — identifying significant activity, creating smooth sustained zooms with panning when action moves across the screen, and maintaining calm, deliberate pacing. Bring your own Azure OpenAI API key
+- **AI Voiceover (TTS)** — Add text-to-speech voiceover segments at specific timeline positions via right-click or the editor panel. Enter text, pick from 6 voices (alloy, echo, fable, onyx, nova, shimmer), preview synthesized speech, or add it directly. Multiple segments are merged and muxed into the exported MP4. Voiceover audio is saved in .fcproj project files
 - **Manual Zoom Keyframes** — Right-click the timeline or preview to add zoom points; drag segments to reposition them
 - **Pan Path Points** — Add intermediate pan waypoints within a zoomed segment to create a smooth panning path through the zoomed view. Numbered markers show the order; drag, reorder, or delete them from the context menu
 - **Zoom Depth Control** — Right-click a zoom segment to set depth (Subtle 1.25×, Medium 1.5×, Close 2×, Detail 2.5×)
@@ -35,7 +37,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 - **Output Dimensions** — Choose from Auto, 16:9, 3:2, 4:3, 1:1, or 9:16 aspect ratios for the exported video. Preview shows crop boundaries with a semi-transparent overlay
 - **Background Presets** — 84 backgrounds (39 solids + 37 gradients + 8 patterns) with category picker
 - **Device Frames** — 5 frame styles: Wide Bezel, Slim Bezel, Thin Border, Shadow Only, No Frame
-- **Project Files** — Save/load `.fcproj` bundles (ZIP with metadata + raw video) to resume editing later. Ctrl+S re-saves to the current file with incremental metadata-only updates (video is not re-written). Title bar shows project name and unsaved-changes indicator (●). Export filename defaults to the project name
+- **Project Files** — Save/load `.fcproj` bundles (ZIP with metadata + raw video + voiceover audio) to resume editing later. Ctrl+S re-saves to the current file with incremental metadata-only updates (video is not re-written). Title bar shows project name and unsaved-changes indicator (●). Export filename defaults to the project name
 - **Close Confirmation** — Prompts to save unsaved changes before closing the app
 - **Open in Clipchamp** — One-click handoff to Clipchamp for further editing
 - **Debug Overlay** — Per-time zoom marker overlay on the preview for fine-tuning keyframes (toggle via ⚙ settings menu)
@@ -54,6 +56,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 | Image Processing | OpenCV + NumPy | Frame manipulation, thumbnails, cursor rendering |
 | Input Tracking | Win32 Hooks (ctypes) | Low-level mouse, keyboard, and click tracking |
 | Zoom Engine | Pure Python | Ease-out-eased keyframe interpolation |
+| AI Features | azure-ai-inference | Optional AI zoom analysis (with panning), TTS voiceover via Azure AI Foundry |
 
 ## Getting Started
 
@@ -124,7 +127,7 @@ You can also trigger a build manually from the Actions tab.
 | `Ctrl+Z` | Undo last zoom/click change |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo last undone change |
 | Right-click zoom segment | Edit depth / centroid / delete |
-| Right-click preview | Add zoom at click position |
+| Right-click preview | Add zoom at click position |\n| Right-click timeline (empty) | Add zoom or voiceover at position |
 | Drag zoom segment edge | Reposition zoom in timeline |
 | Left-click event dot | Select click event |
 | `Delete` | Remove selected click event |
@@ -147,7 +150,8 @@ followcursor/
 │   ├── test_activity_analyzer.py    # Cluster detection, chains, overlap
 │   ├── test_utils.py                # fmt_time, encoder args
 │   ├── test_frames_backgrounds.py   # Preset data & serialization
-│   └── test_project_file.py         # .fcproj save/load roundtrips
+│   ├── test_project_file.py         # .fcproj save/load roundtrips
+│   └── test_ai_service.py           # AI settings, activity summary, zoom response parsing
 ├── app/
 │   ├── version.py                   # Semantic version (__version__)
 │   ├── models.py                    # Data classes (MousePosition, ZoomKeyframe, ClickEvent, …)
@@ -157,6 +161,7 @@ followcursor/
 │   ├── keyboard_tracker.py          # Win32 keyboard hook
 │   ├── click_tracker.py             # Win32 mouse click hook
 │   ├── activity_analyzer.py         # Auto-zoom from mouse/keyboard/click activity
+│   ├── ai_service.py                # AI zoom+pan analysis, TTS voiceover (Azure AI Foundry)
 │   ├── screen_recorder.py           # WGC + ffmpeg pipe in background thread
 │   ├── window_utils.py              # Win32 window enumeration & PrintWindow
 │   ├── video_exporter.py            # H.264 MP4 export with zoom & cursor
@@ -165,7 +170,7 @@ followcursor/
 │   ├── global_hotkeys.py            # Win32 RegisterHotKey via QThread
 │   ├── backgrounds.py               # 84 background presets (solids, gradients, patterns)
 │   ├── frames.py                    # 5 device frame presets
-│   ├── project_file.py              # .fcproj save/load (ZIP bundle)
+│   ├── project_file.py              # .fcproj save/load (ZIP bundle with voiceover audio)
 │   ├── icon.py                      # QPainter-generated app icon
 │   ├── theme.py                     # QSS dark theme stylesheet
 │   ├── main_window.py               # Main window — assembles all widgets
@@ -174,7 +179,7 @@ followcursor/
 │       ├── source_picker.py         # Screen/Window selection dialog (tabbed)
 │       ├── preview_widget.py        # Live / playback preview with zoom/pan
 │       ├── timeline_widget.py       # QPainter timeline with heatmap & keyframes
-│       ├── editor_panel.py          # Zoom settings, background, frame, output pickers
+│       ├── editor_panel.py          # Collapsible sections: zoom, voiceover, background, frame, output
 │       ├── countdown_overlay.py     # 3-2-1 countdown animation
 │       ├── processing_overlay.py    # Pulsing banner while finishing recording
 │       └── recording_border.py      # Red border during recording

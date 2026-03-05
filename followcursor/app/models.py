@@ -155,6 +155,7 @@ class RecordingSession:
     frame_timestamps: List[float] | None = None
     trim_start_ms: float = 0.0
     trim_end_ms: float = 0.0  # 0 = no trim (use full duration)
+    voiceover_segments: List["VoiceoverSegment"] | None = None
 
     def to_json(self) -> str:
         """Serialize the entire session to a JSON string."""
@@ -175,6 +176,8 @@ class RecordingSession:
             data["trimStartMs"] = self.trim_start_ms
         if self.trim_end_ms > 0:
             data["trimEndMs"] = self.trim_end_ms
+        if self.voiceover_segments:
+            data["voiceoverSegments"] = [v.to_dict() for v in self.voiceover_segments]
         return json.dumps(data, indent=2)
 
     @staticmethod
@@ -188,6 +191,9 @@ class RecordingSession:
         if "clickEvents" in d:
             click_events = [ClickEvent.from_dict(c) for c in d["clickEvents"]]
         frame_timestamps = d.get("frameTimestamps")
+        voiceover_segments = None
+        if "voiceoverSegments" in d:
+            voiceover_segments = [VoiceoverSegment.from_dict(v) for v in d["voiceoverSegments"]]
         return RecordingSession(
             id=d["id"],
             start_time=d["startTime"],
@@ -199,6 +205,58 @@ class RecordingSession:
             frame_timestamps=frame_timestamps,
             trim_start_ms=d.get("trimStartMs", 0.0),
             trim_end_ms=d.get("trimEndMs", 0.0),
+            voiceover_segments=voiceover_segments,
+        )
+
+
+@dataclass
+class VoiceoverSegment:
+    """A single voiceover segment with text, position, and audio.
+
+    Users create these at specific timeline positions.  TTS synthesis
+    converts the text to speech and stores the audio file path.
+    """
+
+    id: str
+    timestamp: float  # ms — start position on the timeline
+    text: str  # user-authored voiceover text
+    voice: str = "alloy"  # TTS voice name
+    audio_path: str = ""  # path to synthesized audio file (empty = not yet synthesized)
+    duration_ms: float = 0.0  # audio duration in ms (0 = unknown/not synthesized)
+
+    @staticmethod
+    def create(
+        timestamp: float,
+        text: str,
+        voice: str = "alloy",
+    ) -> "VoiceoverSegment":
+        """Factory that auto-generates a UUID."""
+        return VoiceoverSegment(
+            id=str(uuid.uuid4()),
+            timestamp=timestamp,
+            text=text,
+            voice=voice,
+        )
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "id": self.id,
+            "timestamp": self.timestamp,
+            "text": self.text,
+            "voice": self.voice,
+        }
+        if self.duration_ms > 0:
+            d["durationMs"] = self.duration_ms
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "VoiceoverSegment":
+        return VoiceoverSegment(
+            id=d["id"],
+            timestamp=d["timestamp"],
+            text=d["text"],
+            voice=d.get("voice", "alloy"),
+            duration_ms=d.get("durationMs", 0.0),
         )
 
 

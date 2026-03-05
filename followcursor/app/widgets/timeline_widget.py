@@ -15,7 +15,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu
 
-from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent
+from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
 from ..utils import fmt_time as _fmt
 
 
@@ -43,6 +43,8 @@ class _TimelineTrack(QWidget):
     click_event_deleted = Signal(int)    # index of click event to delete
     pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)   # timestamp ms — add zoom at this time
+    add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover at this time
+    voiceover_clicked = Signal(str)       # voiceover segment id — edit/delete
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()             # emitted when any drag completes
 
@@ -52,8 +54,8 @@ class _TimelineTrack(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(140)
-        self.setMaximumHeight(140)
+        self.setMinimumHeight(160)
+        self.setMaximumHeight(160)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -66,6 +68,7 @@ class _TimelineTrack(QWidget):
         self.mouse_track: List[MousePosition] = []
         self.key_events: List[KeyEvent] = []
         self.click_events: List[ClickEvent] = []
+        self.voiceover_segments: List[VoiceoverSegment] = []
         self.trim_start_ms: float = 0.0
         self.trim_end_ms: float = 0.0  # 0 = no trim
 
@@ -136,7 +139,12 @@ class _TimelineTrack(QWidget):
             del_act.triggered.connect(lambda: self._delete_selected_click())
             menu.exec(self.mapToGlobal(pos))
             return
-        # Empty space — offer to add a zoom section
+        # Check voiceover segment
+        vo_id = self._voiceover_hit_test(mx, my)
+        if vo_id:
+            self.voiceover_clicked.emit(vo_id)
+            return
+        # Empty space — offer to add a zoom section or voiceover
         if self.duration > 0 and self.width() > 0:
             ratio = max(0.0, min(1.0, mx / self.width()))
             time_ms = ratio * self.duration
@@ -145,6 +153,10 @@ class _TimelineTrack(QWidget):
             act_zoom = menu.addAction("🔍  Add Zoom here")
             act_zoom.triggered.connect(
                 lambda: self.add_zoom_requested.emit(time_ms)
+            )
+            act_vo = menu.addAction("🎙  Add Voiceover here")
+            act_vo.triggered.connect(
+                lambda: self.add_voiceover_requested.emit(time_ms)
             )
             menu.exec(self.mapToGlobal(pos))
 
@@ -185,8 +197,13 @@ class _TimelineTrack(QWidget):
 
         # zoom segment blocks (below activity tracks)
         self._seg_top = self._click_top + self._click_h + 4
-        self._seg_h = h - self._seg_top - 4
+        self._seg_h = 28
         self._draw_zoom_segments(painter, w, self._seg_top, self._seg_h)
+
+        # voiceover segments (below zoom segments)
+        self._vo_top = self._seg_top + self._seg_h + 2
+        self._vo_h = 18
+        self._draw_voiceover_segments(painter, w, self._vo_top, self._vo_h)
 
         # playhead
         px = (self.current_time / self.duration) * w
@@ -519,6 +536,67 @@ class _TimelineTrack(QWidget):
             # Right handle
             painter.drawRoundedRect(QRectF(ex - handle_w, top + 2, handle_w, h - 4), 1, 1)
 
+    # ── voiceover segments ──────────────────────────────────────────
+
+    def _draw_voiceover_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
+        """Draw voiceover segments as teal pill-shaped blocks with text labels."""
+        dur = self.duration
+        if dur <= 0 or not self.voiceover_segments:
+            return
+
+        # Track label
+        label_font = QFont()
+        label_font.setFamily("Segoe UI Variable")
+        label_font.setPixelSize(10)
+        painter.setFont(label_font)
+        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.drawText(4, top + h - 3, "Voice")
+
+        seg_font = QFont()
+        seg_font.setFamily("Segoe UI Variable")
+        seg_font.setPixelSize(10)
+
+        self._vo_rects: list[tuple] = []  # [(x, w, seg_id)] for hit testing
+
+        for seg in self.voiceover_segments:
+            sx = (seg.timestamp / dur) * w
+            # Use audio duration if known, otherwise show a fixed-width marker
+            if seg.duration_ms > 0:
+                seg_w = max(20, (seg.duration_ms / dur) * w)
+            else:
+                seg_w = max(20, 40)  # minimum visible width
+
+            # Segment fill
+            color = QColor("#0d9488") if seg.audio_path else QColor("#475569")
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(QColor("#14b8a6" if seg.audio_path else "#64748b"), 1))
+            painter.drawRoundedRect(QRectF(sx, top, seg_w, h), 4, 4)
+
+            # Text label (truncated)
+            painter.setFont(seg_font)
+            painter.setPen(QPen(QColor("#e2e8f0"), 1))
+            text = seg.text[:20] + ("\u2026" if len(seg.text) > 20 else "")
+            clip_rect = QRectF(sx + 3, top + 1, seg_w - 6, h - 2)
+            painter.drawText(clip_rect, Qt.AlignmentFlag.AlignVCenter, text)
+
+            # Mic icon if no audio yet
+            if not seg.audio_path:
+                painter.setPen(QPen(QColor("#94a3b8"), 1))
+                painter.drawText(int(sx + seg_w - 12), top + h - 3, "\u2026")
+
+            self._vo_rects.append((sx, seg_w, seg.id))
+
+    def _voiceover_hit_test(self, mx: float, my: float) -> str:
+        """Return the voiceover segment id at (mx, my), or empty string."""
+        if not hasattr(self, "_vo_rects") or not hasattr(self, "_vo_top"):
+            return ""
+        if my < self._vo_top or my > self._vo_top + self._vo_h:
+            return ""
+        for sx, sw, seg_id in self._vo_rects:
+            if sx <= mx <= sx + sw:
+                return seg_id
+        return ""
+
     # ── trim handles ──────────────────────────────────────────────
 
     def _draw_trim_handles(self, painter: QPainter, w: int, h: int) -> None:
@@ -845,6 +923,8 @@ class TimelineWidget(QWidget):
     click_event_deleted = Signal(int)   # click event index to delete
     pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)  # timestamp ms — add zoom at this time
+    add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover here
+    voiceover_clicked = Signal(str)       # voiceover segment id — edit/delete
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()            # emitted when any drag completes
 
@@ -912,6 +992,8 @@ class TimelineWidget(QWidget):
         self._track.click_event_deleted.connect(self.click_event_deleted)
         self._track.pan_point_clicked.connect(self.pan_point_clicked)
         self._track.add_zoom_requested.connect(self.add_zoom_requested)
+        self._track.add_voiceover_requested.connect(self.add_voiceover_requested)
+        self._track.voiceover_clicked.connect(self.voiceover_clicked)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
         layout.addWidget(self._track)
@@ -938,6 +1020,7 @@ class TimelineWidget(QWidget):
         click_events: List[ClickEvent] | None = None,
         trim_start_ms: float = 0.0,
         trim_end_ms: float = 0.0,
+        voiceover_segments: List[VoiceoverSegment] | None = None,
     ) -> None:
         """Push new session data into the timeline and repaint."""
         self._track.duration = duration
@@ -950,6 +1033,8 @@ class TimelineWidget(QWidget):
             self._track.click_events = click_events
         self._track.trim_start_ms = trim_start_ms
         self._track.trim_end_ms = trim_end_ms
+        if voiceover_segments is not None:
+            self._track.voiceover_segments = voiceover_segments
         self._time_current.setText(_fmt_precise(current_time))
         self._time_total.setText(_fmt_precise(duration))
         self._track.update()

@@ -11,6 +11,7 @@ from app.models import (
     ClickEvent,
     ZoomKeyframe,
     RecordingSession,
+    VoiceoverSegment,
     DEFAULT_FPS,
     DEFAULT_MOUSE_INTERVAL,
 )
@@ -215,6 +216,85 @@ class TestRecordingSession:
         s2 = RecordingSession.from_json(sample_session.to_json())
         assert s2.trim_start_ms == sample_session.trim_start_ms
         assert s2.trim_end_ms == sample_session.trim_end_ms
+
+    def test_json_includes_voiceover_segments(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=1000, text="Hello world", voice="echo")
+        session = RecordingSession(
+            id="vo", start_time=0, duration=5000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+            voiceover_segments=[seg],
+        )
+        d = json.loads(session.to_json())
+        assert "voiceoverSegments" in d
+        assert len(d["voiceoverSegments"]) == 1
+        assert d["voiceoverSegments"][0]["text"] == "Hello world"
+
+    def test_json_roundtrip_voiceover(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=2000, text="Test narration", voice="nova")
+        session = RecordingSession(
+            id="vo2", start_time=0, duration=5000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+            voiceover_segments=[seg],
+        )
+        s2 = RecordingSession.from_json(session.to_json())
+        assert s2.voiceover_segments is not None
+        assert len(s2.voiceover_segments) == 1
+        assert s2.voiceover_segments[0].text == "Test narration"
+        assert s2.voiceover_segments[0].voice == "nova"
+        assert s2.voiceover_segments[0].timestamp == 2000
+
+    def test_json_omits_voiceover_when_empty(self) -> None:
+        session = RecordingSession(
+            id="bare2", start_time=0, duration=100,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+        )
+        d = json.loads(session.to_json())
+        assert "voiceoverSegments" not in d
+
+
+# ── VoiceoverSegment ────────────────────────────────────────────────
+
+
+class TestVoiceoverSegment:
+    def test_create_generates_uuid(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=1000, text="Hello")
+        assert seg.id
+        uuid.UUID(seg.id)  # validates format
+
+    def test_create_defaults(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=500, text="Test")
+        assert seg.voice == "alloy"
+        assert seg.audio_path == ""
+        assert seg.duration_ms == 0.0
+
+    def test_roundtrip(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=1500, text="Test text", voice="echo")
+        d = seg.to_dict()
+        seg2 = VoiceoverSegment.from_dict(d)
+        assert seg2.id == seg.id
+        assert seg2.timestamp == seg.timestamp
+        assert seg2.text == seg.text
+        assert seg2.voice == seg.voice
+
+    def test_dict_omits_zero_duration(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=0, text="Test")
+        d = seg.to_dict()
+        assert "durationMs" not in d
+
+    def test_dict_includes_nonzero_duration(self) -> None:
+        seg = VoiceoverSegment.create(timestamp=0, text="Test")
+        seg.duration_ms = 3000.0
+        d = seg.to_dict()
+        assert d["durationMs"] == 3000.0
+
+    def test_from_dict_backward_compat(self) -> None:
+        d = {"id": "abc", "timestamp": 100, "text": "Hi"}
+        seg = VoiceoverSegment.from_dict(d)
+        assert seg.voice == "alloy"
+        assert seg.duration_ms == 0.0
 
 
 # ── Constants ───────────────────────────────────────────────────────

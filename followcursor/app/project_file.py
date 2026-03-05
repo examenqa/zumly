@@ -1,8 +1,10 @@
 """Project file management — save / load .fcproj bundles.
 
 A .fcproj file is a ZIP archive containing:
-  - project.json   — session metadata (mouse track, keyframes, key events, etc.)
+  - project.json   — session metadata (mouse track, keyframes, key events,
+                      voiceover segments, etc.)
   - recording.avi  — the raw MJPG intermediate video
+  - voiceover_*.mp3 — synthesized voiceover audio files (one per segment)
 
 This lets users save their work and resume editing later.
 """
@@ -92,6 +94,12 @@ def save_project(
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_STORED) as zf:
         if video_path and os.path.isfile(video_path):
             zf.write(video_path, _VIDEO_NAME)
+        # Save voiceover audio files
+        if session.voiceover_segments:
+            for seg in session.voiceover_segments:
+                if seg.audio_path and os.path.isfile(seg.audio_path):
+                    arc_name = f"voiceover_{seg.id[:8]}.mp3"
+                    zf.write(seg.audio_path, arc_name)
         zf.writestr(_JSON_NAME, json_str)
 
     return output_path
@@ -239,6 +247,14 @@ def load_project(input_path: str) -> dict:
         data = json.loads(f.read())
 
     session = RecordingSession.from_json(json.dumps(data))
+
+    # Restore voiceover audio paths from extracted files
+    if session.voiceover_segments:
+        for seg in session.voiceover_segments:
+            arc_name = f"voiceover_{seg.id[:8]}.mp3"
+            extracted = os.path.join(extract_dir, arc_name)
+            if os.path.isfile(extracted):
+                seg.audio_path = extracted
 
     monitor_rect = data.get("monitorRect")
     actual_fps = data.get("actualFps", 30.0)

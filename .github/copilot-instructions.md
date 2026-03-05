@@ -22,6 +22,7 @@ FollowCursor is a **Windows screen recorder** with cinematic cursor-following zo
 | Input Tracking | Win32 Hooks (ctypes) | WH_MOUSE_LL, WH_KEYBOARD_LL via WINFUNCTYPE |
 | Build | PyInstaller | Single-folder .exe distribution |
 | CI | GitHub Actions | Windows runner, artifact upload |
+| AI Features | azure-ai-inference | Optional AI zoom analysis, TTS voiceover via Azure AI Foundry |
 
 ## Repository Structure
 
@@ -46,6 +47,7 @@ followcursor/                    ← repo root
 │       ├── compositor.py        ← QPainter compositing (frame + background)
 │       ├── zoom_engine.py       ← Ease-out keyframe interpolation
 │       ├── activity_analyzer.py ← Auto-zoom from activity bursts
+│       ├── ai_service.py        ← AI zoom+pan analysis, TTS voiceover (Azure AI Foundry)
 │       ├── mouse_tracker.py     ← QTimer cursor polling (60 Hz)
 │       ├── keyboard_tracker.py  ← Win32 keyboard hook
 │       ├── click_tracker.py     ← Win32 mouse click hook
@@ -54,7 +56,7 @@ followcursor/                    ← repo root
 │       ├── window_utils.py      ← Win32 window enum & PrintWindow
 │       ├── backgrounds.py       ← 84 background presets (solids + gradients + wavy patterns)
 │       ├── frames.py            ← 5 device frame presets
-│       ├── project_file.py      ← .fcproj ZIP save/load
+│       ├── project_file.py      ← .fcproj ZIP save/load (with voiceover audio)
 │       ├── icon.py              ← QPainter-generated app icon + .ico
 │       ├── theme.py             ← DARK_THEME QSS stylesheet
 │       └── widgets/
@@ -84,7 +86,7 @@ For **big refactors or multi-file features**, create a feature branch first and 
 
 - **Framework**: pytest (configured via `followcursor/pytest.ini`)
 - **Location**: `followcursor/tests/` — tests target the pure-logic layer (no Qt dependency)
-- **Modules tested**: models, zoom_engine, activity_analyzer, utils, frames, backgrounds, project_file
+- **Modules tested**: models, zoom_engine, activity_analyzer, utils, frames, backgrounds, project_file, ai_service
 - **CI**: tests run automatically before the PyInstaller build in GitHub Actions
 - **Convention**: one `test_<module>.py` per source module; shared fixtures in `conftest.py`
 

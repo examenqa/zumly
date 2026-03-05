@@ -612,4 +612,59 @@ A red pulsing border overlay that appears around the captured monitor during rec
 Click the **⚙** cog icon at the bottom of the editor panel (next to the ℹ️ session info label) to open the settings popup menu. Available settings:
 
 - **Show zoom debug overlay** — Toggle colored markers on the preview showing where activity was detected and why zoom keyframes were placed. Useful for fine-tuning keyframe positions and verifying zoom transitions visually. **Enabled by default.**
+- **🤖 AI Settings…** — Configure Azure AI Foundry credentials for AI-powered features (see [AI Features](#ai-features) below).
 - **Video encoder** — Submenu listing all detected H.264 encoders (GPU-accelerated and software). A checkmark shows the current selection. See [Video Encoder](#video-encoder) for details.
+
+---
+
+## AI Features
+
+FollowCursor includes optional AI-powered features that use **Azure AI Foundry** (Microsoft Foundry) models. These features require you to bring your own API credentials.
+
+### Setup
+
+1. Open **⚙ Settings** → **🤖 AI Settings…** in the editor panel
+2. Enter your Azure AI Foundry **Endpoint** URL (e.g. `https://models.inference.ai.azure.com`)
+3. Enter your **API Key** (or GitHub token for GitHub Models)
+4. Enter your **Chat Model** deployment name (e.g. `gpt-4o-mini`) for AI zoom analysis and narration
+5. Optionally enter a **TTS Model** deployment name (e.g. `tts-1`) for speech synthesis
+6. Choose a **Voice** for TTS (alloy, echo, fable, onyx, nova, shimmer)
+7. Click **OK** — settings are saved automatically
+
+### AI Smart Zoom
+
+Instead of (or in addition to) the local activity analyzer, you can use an AI model to analyze your recording and generate zoom keyframes:
+
+1. Record a session and switch to edit mode
+2. In the **SMART ZOOM** section, click **🤖 AI Auto-generate zoom**
+3. The AI receives a summary of your mouse movements, keystrokes, and clicks
+4. It returns intelligent zoom sections targeting the most visually interesting moments
+5. Results are applied the same way as local auto-zoom (replaces existing keyframes after confirmation)
+
+The AI considers the narrative flow of your recording and creates well-paced zoom effects. Sensitivity and zoom depth settings apply the same as local auto-zoom.
+
+### Voiceover (Text-to-Speech)
+
+Add voiceover segments at specific points in the timeline, write your text, and synthesize speech audio using Azure AI Foundry TTS:
+
+**Adding a voiceover segment:**
+
+- In the **VOICEOVER** section of the editor panel, click **🎙 Add Voiceover** — adds at the current playback position
+- Or **right-click** anywhere on the timeline → **🎙 Add Voiceover here** — adds at that time
+
+**Working with voiceover segments:**
+
+1. A dialog appears where you enter the voiceover text and pick a voice
+2. Click **Save** to store the segment (text only, no audio yet)
+3. Click **🔊 Synthesize** to generate speech audio via Azure AI Foundry TTS immediately
+4. Voiceover segments appear as teal blocks on the timeline's **Voice** track
+5. **Click** a voiceover segment on the timeline to edit its text, change the voice, re-synthesize, or delete it
+
+**During export:**
+
+- All synthesized voiceover segments are merged into a single audio track
+- Each segment plays at its timeline position in the exported video
+- Multiple overlapping segments are mixed together automatically
+- Audio is encoded as AAC at 192 kbps
+
+> **Note:** Voiceover audio is only included in MP4 exports, not GIF exports. Segments without synthesized audio (gray blocks) are skipped during export.

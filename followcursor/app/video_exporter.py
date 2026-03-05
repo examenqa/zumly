@@ -14,7 +14,7 @@ import numpy as np
 
 from PySide6.QtCore import QObject, Signal
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent
+from .models import ZoomKeyframe, MousePosition, ClickEvent, VoiceoverSegment
 from .zoom_engine import ZoomEngine
 from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
@@ -281,6 +281,76 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
     return canvas
 
 
+def _merge_voiceover_segments(
+    segments: list,
+    duration_ms: float,
+    trim_start_ms: float,
+    trim_end_ms: float,
+    ffmpeg: str,
+) -> str:
+    """Merge multiple voiceover audio files into a single WAV at correct offsets.
+
+    Uses ffmpeg's ``adelay`` filter to position each segment at its
+    ``timestamp`` offset and ``amix`` to combine them into one track.
+    Returns the path to the merged audio file, or empty string on failure.
+    """
+    import tempfile
+    if not segments:
+        return ""
+
+    # Compute effective trim offset — voiceover timestamps are relative
+    # to the full recording, so we shift them by trim_start_ms.
+    offset_ms = trim_start_ms if trim_start_ms > 0 else 0.0
+
+    output_path = os.path.join(tempfile.gettempdir(), "followcursor_vo_merged.wav")
+
+    if len(segments) == 1:
+        seg = segments[0]
+        delay = max(0, int(seg.timestamp - offset_ms))
+        # Single segment: just delay it
+        cmd = [
+            ffmpeg, "-y",
+            "-i", seg.audio_path,
+            "-af", f"adelay={delay}|{delay}",
+            "-ar", "44100",
+            output_path,
+        ]
+    else:
+        # Multiple segments: build a complex filtergraph
+        inputs: list[str] = []
+        filter_parts: list[str] = []
+        for i, seg in enumerate(segments):
+            inputs += ["-i", seg.audio_path]
+            delay = max(0, int(seg.timestamp - offset_ms))
+            filter_parts.append(f"[{i}]adelay={delay}|{delay}[a{i}]")
+
+        mix_inputs = "".join(f"[a{i}]" for i in range(len(segments)))
+        filter_parts.append(
+            f"{mix_inputs}amix=inputs={len(segments)}:duration=longest"
+        )
+        filtergraph = ";".join(filter_parts)
+
+        cmd = [ffmpeg, "-y"] + inputs + [
+            "-filter_complex", filtergraph,
+            "-ar", "44100",
+            output_path,
+        ]
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=120,
+            **_subprocess_kwargs(),
+        )
+        if result.returncode == 0 and os.path.isfile(output_path):
+            logger.info("Merged %d voiceover segments into %s", len(segments), output_path)
+            return output_path
+        stderr = result.stderr.decode(errors="replace")[:300] if result.stderr else ""
+        logger.warning("Voiceover merge failed (rc=%d): %s", result.returncode, stderr)
+    except Exception as exc:
+        logger.warning("Voiceover merge error: %s", exc)
+    return ""
+
+
 class VideoExporter(QObject):
     """Reads the raw recording, applies zoom/pan per-frame, writes H.264 MP4 or GIF."""
 
@@ -312,6 +382,7 @@ class VideoExporter(QObject):
         trim_start_ms: float = 0.0,
         trim_end_ms: float = 0.0,
         encoder_id: str = "libx264",
+        voiceover_segments: Optional[List[VoiceoverSegment]] = None,
     ) -> None:
         """Start export in a background thread.
 
@@ -327,6 +398,8 @@ class VideoExporter(QObject):
         trimmed region of the video.
         *encoder_id* — ffmpeg encoder to use (e.g. ``"h264_nvenc"``,
         ``"h264_qsv"``, ``"h264_amf"``, ``"libx264"``).
+        *voiceover_segments* — optional list of ``VoiceoverSegment``
+        objects; each with an audio file to mux at a specific time.
         """
         self._thread = threading.Thread(
             target=self._run,
@@ -340,7 +413,8 @@ class VideoExporter(QObject):
                   frame_timestamps,
                   trim_start_ms,
                   trim_end_ms,
-                  encoder_id),
+                  encoder_id,
+                  voiceover_segments or []),
             daemon=True,
         )
         self._thread.start()
@@ -364,6 +438,7 @@ class VideoExporter(QObject):
         trim_start_ms: float = 0.0,
         trim_end_ms: float = 0.0,
         encoder_id: str = "libx264",
+        voiceover_segments: Optional[List[VoiceoverSegment]] = None,
     ) -> None:
         try:
             cap = cv2.VideoCapture(input_path)
@@ -528,6 +603,17 @@ class VideoExporter(QObject):
             ffmpeg = _ffmpeg_exe()
             original_encoder_id = encoder_id
 
+            # Build merged audio from voiceover segments (if any)
+            _merged_audio_path: str = ""
+            _has_audio = False
+            if voiceover_segments and not _is_gif:
+                ready = [s for s in voiceover_segments if s.audio_path and os.path.isfile(s.audio_path)]
+                if ready:
+                    _merged_audio_path = _merge_voiceover_segments(
+                        ready, duration_ms, trim_start_ms, trim_end_ms, ffmpeg
+                    )
+                    _has_audio = bool(_merged_audio_path) and os.path.isfile(_merged_audio_path)
+
             def _launch_ffmpeg(enc_id: str) -> subprocess.Popen:
                 if _is_gif:
                     gif_args = _build_gif_args()
@@ -553,9 +639,14 @@ class VideoExporter(QObject):
                         "-pix_fmt", "bgr24",
                         "-r", str(fps),
                         "-i", "pipe:",
-                    ] + enc_args + [
-                        output_path,
                     ]
+                    # Add merged audio input if available
+                    if _has_audio:
+                        cmd += ["-i", _merged_audio_path]
+                    cmd += enc_args
+                    if _has_audio:
+                        cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
+                    cmd += [output_path]
                     logger.info("Launching ffmpeg with encoder %s: %s", enc_id, " ".join(cmd))
                 return subprocess.Popen(
                     cmd,
@@ -850,3 +941,10 @@ class VideoExporter(QObject):
 
         except Exception as exc:
             self.error.emit(str(exc))
+        finally:
+            # Clean up merged voiceover temp file
+            if _merged_audio_path and os.path.isfile(_merged_audio_path):
+                try:
+                    os.remove(_merged_audio_path)
+                except OSError:
+                    pass

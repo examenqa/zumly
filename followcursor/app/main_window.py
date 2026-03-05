@@ -252,6 +252,135 @@ class _FinalizeWorker(QThread):
         return actual_fps
 
 
+class _VoiceoverDialog(QMessageBox):
+    """Dialog for creating or editing a voiceover segment.
+
+    Buttons:
+    - **Preview** — synthesize TTS and play the audio without adding
+    - **OK** — synthesize TTS, add/save the segment (don't play)
+    - **Cancel** — discard
+    - **Delete** (edit mode only) — remove the segment
+    """
+
+    RESULT_OK = 1
+    RESULT_DELETE = 2
+    RESULT_PREVIEW = 3
+
+    def __init__(
+        self,
+        timestamp_ms: float,
+        voice: str,
+        text: str = "",
+        title: str = "Add Voiceover",
+        is_edit: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setIcon(QMessageBox.Icon.NoIcon)
+
+        self._timestamp_ms = timestamp_ms
+        self._text = text
+        self._voice = voice
+
+        t_str = f"{int(timestamp_ms / 1000) // 60}:{int(timestamp_ms / 1000) % 60:02d}"
+        self.setText(f"Voiceover at <b>{t_str}</b>")
+        self.setInformativeText("Enter voiceover text and pick a voice.")
+
+        self.setStyleSheet(
+            "QMessageBox { background: #1b1a2e; }"
+            "QMessageBox QLabel { color: #e4e4ed; font-size: 13px; }"
+            "QPushButton { min-width: 80px; min-height: 28px;"
+            "  background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 16px; }"
+            "QPushButton:hover { background: #8b5cf6; }"
+            "QTextEdit { background: #1b1a2e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 6px; font-size: 12px; }"
+            "QComboBox { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 8px; }"
+        )
+
+        # Buttons: Preview | OK | Cancel  (+ Delete in edit mode)
+        self._btn_preview = self.addButton("\u25b6 Preview", QMessageBox.ButtonRole.ActionRole)
+        self._btn_ok = self.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        self._btn_cancel = self.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        if is_edit:
+            self._btn_delete = self.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+        else:
+            self._btn_delete = None
+
+        self._text_edit = None
+        self._voice_combo = None
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._text_edit is not None:
+            return
+        from PySide6.QtWidgets import QTextEdit, QComboBox, QHBoxLayout, QLabel, QWidget
+        layout = self.layout()
+
+        text_edit = QTextEdit()
+        text_edit.setPlaceholderText("Type your voiceover text here\u2026")
+        text_edit.setPlainText(self._text)
+        text_edit.setFixedHeight(100)
+        text_edit.setMinimumWidth(350)
+        text_edit.setStyleSheet(
+            "QTextEdit { background: #1b1a2e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 6px; font-size: 12px; }"
+        )
+        self._text_edit = text_edit
+
+        voice_widget = QWidget()
+        voice_row = QHBoxLayout(voice_widget)
+        voice_row.setContentsMargins(0, 0, 0, 0)
+        voice_row.setSpacing(6)
+        voice_label = QLabel("Voice:")
+        voice_label.setStyleSheet("color: #9c99b6; font-size: 12px;")
+        voice_row.addWidget(voice_label)
+        voice_combo = QComboBox()
+        for v in ("alloy", "echo", "fable", "onyx", "nova", "shimmer"):
+            voice_combo.addItem(v)
+        voice_combo.setCurrentText(self._voice)
+        voice_combo.setStyleSheet(
+            "QComboBox { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 8px; }"
+        )
+        voice_row.addWidget(voice_combo)
+        voice_row.addStretch()
+        self._voice_combo = voice_combo
+
+        row = layout.rowCount() - 1
+        layout.addWidget(text_edit, row, 0, 1, layout.columnCount())
+        layout.addWidget(voice_widget, row + 1, 0, 1, layout.columnCount())
+
+    def exec(self) -> int:
+        super().exec()
+        clicked = self.clickedButton()
+        if clicked == self._btn_ok:
+            return self.RESULT_OK
+        elif clicked == self._btn_preview:
+            return self.RESULT_PREVIEW
+        elif clicked == self._btn_delete:
+            return self.RESULT_DELETE
+        return 0  # cancel
+
+    @property
+    def text(self) -> str:
+        if self._text_edit:
+            return self._text_edit.toPlainText().strip()
+        return self._text
+
+    @property
+    def voice(self) -> str:
+        if self._voice_combo:
+            return self._voice_combo.currentText()
+        return self._voice
+
+    @property
+    def timestamp_ms(self) -> float:
+        return self._timestamp_ms
+
+
 class MainWindow(QMainWindow):
     """Central application window — orchestrates recording, editing, and export.
 
@@ -286,6 +415,8 @@ class MainWindow(QMainWindow):
         self._hotkeys = GlobalHotkeys(parent=self)
         self._exporter = None  # Created lazily via _ensure_exporter()
         self._border_overlay = RecordingBorderOverlay()
+        self._ai_worker = None   # AIWorker, created lazily
+        self._voiceover_segments: list = []  # List[VoiceoverSegment]
 
         self._recording = False
         self._selected_monitor: int = 0  # 0 = none selected
@@ -409,6 +540,10 @@ class MainWindow(QMainWindow):
         self._timeline.add_zoom_requested.connect(
             lambda t: self._add_keyframe(t, self._editor.zoom_level)
         )
+        self._timeline.add_voiceover_requested.connect(
+            lambda t: self._on_add_voiceover_requested(t, self._editor.selected_voice)
+        )
+        self._timeline.voiceover_clicked.connect(self._on_voiceover_clicked)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
@@ -428,6 +563,8 @@ class MainWindow(QMainWindow):
         self._editor.undo_requested.connect(self._undo)
         self._editor.redo_requested.connect(self._redo)
         self._editor.encoder_changed.connect(self._on_encoder_changed)
+        self._editor.ai_zoom_requested.connect(self._on_ai_zoom_requested)
+        self._editor.add_voiceover_requested.connect(self._on_add_voiceover_requested)
         content.addWidget(self._editor)
 
         # Enable zoom debug overlay by default
@@ -1048,6 +1185,7 @@ class MainWindow(QMainWindow):
             self._click_events,
             self._trim_start_ms,
             self._trim_end_ms,
+            self._voiceover_segments,
         )
         # Keep debug overlay in sync with keyframes
         self._preview.set_debug_keyframes(self._zoom_engine.keyframes)
@@ -1128,6 +1266,249 @@ class MainWindow(QMainWindow):
     def _update_encoder_label(self, enc_id: str) -> None:
         from .utils import encoder_display_name
         self._encoder_label.setText(f"Encoder: {encoder_display_name(enc_id)}")
+
+    # ── AI features ──────────────────────────────────────────────────────
+
+    def _load_ai_settings(self):
+        """Load AI settings from QSettings."""
+        from .ai_service import AISettings
+        return AISettings(
+            endpoint=self._settings.value("ai/endpoint", ""),
+            api_key=self._settings.value("ai/apiKey", ""),
+            chat_model=self._settings.value("ai/chatModel", ""),
+            tts_model=self._settings.value("ai/ttsModel", ""),
+            tts_voice=self._settings.value("ai/ttsVoice", "alloy"),
+        )
+
+    def _ensure_ai_worker(self):
+        """Create the AI worker thread if needed."""
+        if self._ai_worker is None:
+            from .ai_service import AIWorker
+            self._ai_worker = AIWorker(parent=self)
+            self._ai_worker.zoom_result.connect(self._on_ai_zoom_result)
+            self._ai_worker.tts_result.connect(self._on_ai_tts_result)
+            self._ai_worker.error.connect(self._on_ai_error)
+            self._ai_worker.status.connect(self._on_ai_status)
+        return self._ai_worker
+
+    def _on_ai_zoom_requested(self, max_clusters: int, zoom_level: float, min_gap_ms: int) -> None:
+        """Handle AI zoom analysis request from editor panel."""
+        ai_settings = self._load_ai_settings()
+        if not ai_settings.chat_configured:
+            self._editor.set_ai_zoom_status(
+                "AI not configured. Open \u2699 Settings \u2192 AI Settings."
+            )
+            return
+        worker = self._ensure_ai_worker()
+        if worker.isRunning():
+            self._editor.set_ai_zoom_status("AI operation already in progress\u2026")
+            return
+        worker.run_zoom_analysis(
+            ai_settings,
+            mouse_track=self._mouse_track,
+            monitor_rect=self._monitor_rect,
+            duration_ms=self._rec_duration_ms,
+            key_events=self._key_events or None,
+            click_events=self._click_events or None,
+            max_clusters=max_clusters,
+            zoom_level=zoom_level,
+            min_gap_ms=min_gap_ms,
+        )
+
+    def _on_ai_zoom_result(self, keyframes) -> None:
+        """Handle AI zoom analysis results — same flow as local auto-keyframes."""
+        self._status_text.setText("Ready")
+        if not keyframes:
+            self._editor.set_ai_zoom_status("AI found no significant activity.")
+            return
+        n_clusters = sum(1 for kf in keyframes if kf.zoom > 1.0)
+        self._editor.set_ai_zoom_status(
+            f"AI generated {len(keyframes)} keyframes from {n_clusters} cluster"
+            f"{'s' if n_clusters != 1 else ''}."
+        )
+        # Reuse the same flow as local auto-keyframes
+        self._on_auto_keyframes(keyframes)
+
+    # ── Voiceover segments ──────────────────────────────────────────
+
+    def _on_add_voiceover_requested(self, timestamp_ms: float, voice: str) -> None:
+        """Show dialog to add a voiceover segment at the given time."""
+        if timestamp_ms < 0:
+            timestamp_ms = self._playback_time
+        from .models import VoiceoverSegment
+        dlg = _VoiceoverDialog(timestamp_ms, voice, parent=self)
+        result = dlg.exec()
+        if result == _VoiceoverDialog.RESULT_OK:
+            # Synthesize + add the segment
+            seg = VoiceoverSegment.create(
+                timestamp=dlg.timestamp_ms,
+                text=dlg.text,
+                voice=dlg.voice,
+            )
+            self._voiceover_segments.append(seg)
+            self._voiceover_segments.sort(key=lambda s: s.timestamp)
+            self._mark_dirty()
+            self._refresh_editor()
+            self._synthesize_voiceover(seg)
+        elif result == _VoiceoverDialog.RESULT_PREVIEW:
+            # Synthesize + play without adding
+            self._preview_voiceover(dlg.text, dlg.voice)
+
+    def _on_voiceover_clicked(self, seg_id: str) -> None:
+        """Show edit/delete dialog for a voiceover segment."""
+        seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
+        if seg is None:
+            return
+        dlg = _VoiceoverDialog(
+            seg.timestamp, seg.voice, text=seg.text,
+            title="Edit Voiceover",
+            is_edit=True,
+            parent=self,
+        )
+        result = dlg.exec()
+        if result == _VoiceoverDialog.RESULT_OK:
+            seg.timestamp = dlg.timestamp_ms
+            seg.text = dlg.text
+            seg.voice = dlg.voice
+            self._voiceover_segments.sort(key=lambda s: s.timestamp)
+            self._mark_dirty()
+            self._refresh_editor()
+            # Re-synthesize with updated text/voice
+            self._synthesize_voiceover(seg)
+        elif result == _VoiceoverDialog.RESULT_PREVIEW:
+            # Preview without saving changes
+            self._preview_voiceover(dlg.text, dlg.voice)
+        elif result == _VoiceoverDialog.RESULT_DELETE:
+            self._voiceover_segments = [s for s in self._voiceover_segments if s.id != seg_id]
+            self._mark_dirty()
+            self._refresh_editor()
+            self._editor.set_voiceover_status("Voiceover removed.")
+
+    def _synthesize_voiceover(self, seg) -> None:
+        """Synthesize TTS audio for a voiceover segment."""
+        ai_settings = self._load_ai_settings()
+        if not ai_settings.tts_configured:
+            self._editor.set_voiceover_status(
+                "TTS not configured. Set a TTS model in \u2699 AI Settings."
+            )
+            return
+        worker = self._ensure_ai_worker()
+        if worker.isRunning():
+            self._editor.set_voiceover_status("AI operation already in progress\u2026")
+            return
+        ai_settings.tts_voice = seg.voice
+        import tempfile
+        output_path = os.path.join(
+            tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.mp3"
+        )
+        worker.run_tts(ai_settings, seg.id, seg.text, output_path)
+        self._editor.set_voiceover_status("Synthesizing speech\u2026")
+
+    def _preview_voiceover(self, text: str, voice: str) -> None:
+        """Synthesize TTS and play the audio without adding a segment."""
+        ai_settings = self._load_ai_settings()
+        if not ai_settings.tts_configured:
+            self._editor.set_voiceover_status(
+                "TTS not configured. Set a TTS model in \u2699 AI Settings."
+            )
+            return
+        if not text:
+            self._editor.set_voiceover_status("Enter voiceover text first.")
+            return
+        worker = self._ensure_ai_worker()
+        if worker.isRunning():
+            self._editor.set_voiceover_status("AI operation already in progress\u2026")
+            return
+        ai_settings.tts_voice = voice
+        import tempfile
+        output_path = os.path.join(
+            tempfile.gettempdir(), "followcursor_vo_preview.mp3"
+        )
+        # Use a special segment ID so _on_ai_tts_result knows this is a preview
+        worker.run_tts(ai_settings, "__preview__", text, output_path)
+        self._editor.set_voiceover_status("Generating preview\u2026")
+
+    def _on_ai_tts_result(self, seg_id: str, audio_path: str) -> None:
+        """Handle TTS audio file result — associate with segment or play preview."""
+        self._status_text.setText("Ready")
+        if seg_id == "__preview__":
+            # Preview mode: play the audio file, don't save
+            self._editor.set_voiceover_status("\u25b6 Playing preview\u2026")
+            self._play_audio_file(audio_path)
+            return
+        seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
+        if seg is None:
+            return
+        seg.audio_path = audio_path
+        # Probe duration with ffmpeg
+        seg.duration_ms = self._probe_audio_duration(audio_path)
+        self._mark_dirty()
+        self._refresh_editor()
+        self._editor.set_voiceover_status(
+            f"\u2713 Speech synthesized ({seg.duration_ms / 1000:.1f}s). "
+            "Will be included in export."
+        )
+
+    def _probe_audio_duration(self, path: str) -> float:
+        """Get the duration of an audio file in milliseconds via ffprobe/ffmpeg."""
+        try:
+            from .utils import ffmpeg_exe, subprocess_kwargs
+            import subprocess
+            ffmpeg = ffmpeg_exe()
+            result = subprocess.run(
+                [ffmpeg, "-i", path, "-f", "null", "-"],
+                capture_output=True, timeout=10,
+                **subprocess_kwargs(),
+            )
+            import re
+            stderr = result.stderr.decode(errors="replace")
+            m = re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", stderr)
+            if m:
+                h, mi, s, cs = int(m[1]), int(m[2]), int(m[3]), int(m[4])
+                return (h * 3600 + mi * 60 + s) * 1000 + cs * 10
+        except Exception:
+            pass
+        return 3000.0  # fallback estimate
+
+    def _play_audio_file(self, path: str) -> None:
+        """Play an audio file using ffplay (bundled with ffmpeg) in the background."""
+        try:
+            from .utils import ffmpeg_exe, subprocess_kwargs
+            import subprocess
+            # ffplay is next to ffmpeg in the same directory
+            ffmpeg = ffmpeg_exe()
+            ffplay = ffmpeg.replace("ffmpeg", "ffplay")
+            if not os.path.isfile(ffplay):
+                # Fallback: use Windows default player
+                os.startfile(path)
+                return
+            subprocess.Popen(
+                [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+                **subprocess_kwargs(),
+            )
+        except Exception as exc:
+            logger.warning("Could not play audio: %s", exc)
+            # Fallback: open with default player
+            try:
+                os.startfile(path)
+            except Exception:
+                self._editor.set_voiceover_status("Could not play audio preview.")
+
+    @staticmethod
+    def _fmt_time(ms: float) -> str:
+        s = int(ms / 1000)
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _on_ai_error(self, msg: str) -> None:
+        """Handle AI operation errors."""
+        logger.error("AI error: %s", msg)
+        self._status_text.setText("Ready")
+        self._editor.set_ai_zoom_status("")
+        self._editor.set_voiceover_status(f"AI error: {msg[:200]}")
+
+    def _on_ai_status(self, msg: str) -> None:
+        """Handle AI status updates."""
+        self._status_text.setText(msg)
 
     # ── undo / redo ─────────────────────────────────────────────────
 
@@ -1742,6 +2123,7 @@ class MainWindow(QMainWindow):
             self._click_events,
             self._trim_start_ms,
             self._trim_end_ms,
+            self._voiceover_segments,
         )
 
     def _sync_zoom(self) -> None:
@@ -1772,6 +2154,7 @@ class MainWindow(QMainWindow):
                 self._click_events,
                 self._trim_start_ms,
                 self._trim_end_ms,
+                self._voiceover_segments,
             )
         else:
             # Preview may have self-paused (end of video) — sync button state
@@ -1833,6 +2216,7 @@ class MainWindow(QMainWindow):
                     trim_start_ms=self._trim_start_ms,
                     trim_end_ms=self._trim_end_ms,
                     encoder_id=self._editor.encoder_id,
+                    voiceover_segments=self._voiceover_segments or None,
                 )
             except Exception:
                 logger.exception("Failed to start export")
