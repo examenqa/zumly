@@ -1462,13 +1462,21 @@ class MainWindow(QMainWindow):
         if start_kf is None:
             return
 
+        # Compute the current pan position at this time to scale duration
+        # by distance — longer pans take proportionally longer.
+        _, cur_x, cur_y = self._zoom_engine.compute_at(time_ms)
+        import math
+        dist = math.hypot(pan_x - cur_x, pan_y - cur_y)
+        # Scale: 400ms base for tiny moves, up to 800ms for full-screen pans
+        pan_duration = max(400.0, min(800.0, 400.0 + dist * 800.0))
+
         self._zoom_engine.push_undo()
         pan_kf = ZoomKeyframe.create(
             timestamp=time_ms,
             zoom=start_kf.zoom,
             x=pan_x,
             y=pan_y,
-            duration=400.0,   # smooth pan transition
+            duration=pan_duration,
             reason="Pan point",
         )
         self._zoom_engine.add_keyframe(pan_kf)

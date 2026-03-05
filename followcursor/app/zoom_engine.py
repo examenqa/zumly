@@ -36,6 +36,18 @@ def ease_out(t: float) -> float:
     return 1.0 - inv * inv * inv * inv * inv
 
 
+def ease_in_out(t: float) -> float:
+    """Quintic smoothstep — zero velocity at both endpoints.
+
+    f(t) = 6t⁵ − 15t⁴ + 10t³
+
+    Ideal for camera pans: starts gently, accelerates through the
+    middle, and decelerates smoothly to a stop.  Both first and
+    second derivatives are zero at t=0 and t=1.
+    """
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+
 # Keep the old name as an alias for any external callers
 smooth_step = ease_out
 
@@ -150,7 +162,12 @@ class ZoomEngine:
         progress = (
             min(elapsed / active_kf.duration, 1.0) if active_kf.duration > 0 else 1.0
         )
-        eased = ease_out(progress)
+        # Pan points use ease-in-out for smooth camera movement;
+        # zoom transitions use ease-out for snappy zoom-then-settle.
+        if active_kf.reason == "Pan point":
+            eased = ease_in_out(progress)
+        else:
+            eased = ease_out(progress)
 
         prev_zoom = self.keyframes[active_idx - 1].zoom if active_idx > 0 else 1.0
         prev_x = self.keyframes[active_idx - 1].x if active_idx > 0 else 0.5

@@ -519,6 +519,37 @@ class PreviewWidget(QWidget):
         if nx < 0 or nx > 1 or ny < 0 or ny > 1:
             return -1.0, -1.0
 
+        # ── zoom correction ────────────────────────────────────────
+        # When zoomed in, the visible area is a sub-region of the
+        # source.  (nx, ny) is the fractional position in the *visible*
+        # crop, but we need the position in the *full* source.
+        if self._zoom > 1.001:
+            if fp.is_none:
+                # No-frame: compositor crops the source image.
+                # Visible crop starts at pan_x - 0.5/zoom, size 1/zoom.
+                nx = self._pan_x + (nx - 0.5) / self._zoom
+                ny = self._pan_y + (ny - 0.5) / self._zoom
+            else:
+                # Device frame: compositor applies a QPainter transform.
+                # Reverse: canvas_coord = (widget_coord - W/2) / zoom + fx_c
+                fx = scr_x + self._pan_x * scr_w
+                fy = scr_y + self._pan_y * scr_h
+                ox = fx * self._zoom - W / 2
+                oy = fy * self._zoom - H / 2
+                max_ox = W * self._zoom - W
+                max_oy = H * self._zoom - H
+                ox = max(0.0, min(ox, max_ox))
+                oy = max(0.0, min(oy, max_oy))
+                fx_c = (ox + W / 2) / self._zoom
+                fy_c = (oy + H / 2) / self._zoom
+                canvas_x = (click_x - W / 2) / self._zoom + fx_c
+                canvas_y = (click_y - H / 2) / self._zoom + fy_c
+                nx = (canvas_x - scr_x) / max(scr_w, 1)
+                ny = (canvas_y - scr_y) / max(scr_h, 1)
+
+            nx = max(0.0, min(1.0, nx))
+            ny = max(0.0, min(1.0, ny))
+
         return nx, ny
 
     def _screen_geometry(self) -> tuple:
