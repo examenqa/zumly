@@ -6,35 +6,28 @@ This document describes the internal architecture of FollowCursor: how the major
 
 ## High-Level Overview
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                        MainWindow                               │
-│  Assembles all widgets and coordinates state transitions        │
-│                                                                 │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌────────────┐  │
-│  │ TitleBar  │  │ PreviewWidget│  │ Timeline │  │ EditorPanel│  │
-│  │(frameless)│  │ (live/play)  │  │ (heatmap)│  │ (settings) │  │
-│  └──────────┘  └──────────────┘  └──────────┘  └────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-        │                │                │              │
-        ▼                ▼                ▼              ▼
-  ┌──────────┐   ┌─────────────┐  ┌───────────┐  ┌───────────┐
-  │GlobalHotkeys│ │ScreenRecorder│ │ZoomEngine │  │ActivityAn.│
-  │(Win32 hook)│ │(WGC/ffmpeg)  │ │(smoothstep)│ │(auto-zoom) │
-  └──────────┘   └─────────────┘  └───────────┘  └───────────┘
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-       ┌────────────┐   ┌──────────────┐
-       │MouseTracker │   │ClickTracker  │
-       │(60Hz poll)  │   │(Win32 hook)  │
-       └────────────┘   └──────────────┘
-              │                 │
-              ▼                 ▼
-       ┌─────────────────────────────┐
-       │     VideoExporter           │
-       │  (ffmpeg H.264 pipe)        │
-       └─────────────────────────────┘
+```mermaid
+graph TD
+    MW["<b>MainWindow</b><br/>Assembles widgets & coordinates state"]
+
+    MW --> TB["TitleBar<br/><i>frameless</i>"]
+    MW --> PW["PreviewWidget<br/><i>live / playback</i>"]
+    MW --> TL["TimelineWidget<br/><i>heatmap + keyframes</i>"]
+    MW --> EP["EditorPanel<br/><i>settings</i>"]
+
+    MW --> GH["GlobalHotkeys<br/><i>Win32 RegisterHotKey</i>"]
+    MW --> SR["ScreenRecorder<br/><i>WGC / GDI + ffmpeg</i>"]
+    MW --> ZE["ZoomEngine<br/><i>ease-out interpolation</i>"]
+    MW --> AA["ActivityAnalyzer<br/><i>auto-zoom</i>"]
+
+    SR --> MT["MouseTracker<br/><i>60 Hz QTimer poll</i>"]
+    SR --> CT["ClickTracker<br/><i>Win32 WH_MOUSE_LL</i>"]
+    SR --> KT["KeyboardTracker<br/><i>Win32 WH_KEYBOARD_LL</i>"]
+
+    MT --> VE["VideoExporter<br/><i>ffmpeg H.264 pipe</i>"]
+    CT --> VE
+    KT --> VE
+    ZE --> VE
 ```
 
 ---
@@ -52,22 +45,37 @@ The app operates in two modes, switchable via the **sidebar**:
 
 ### Recording flow
 
-```text
-User clicks Start → 3-2-1 Countdown → _do_start_recording()
-  ├─ ScreenRecorder.start_recording(shared_epoch)
-  ├─ MouseTracker.start(shared_epoch_ms)
-  ├─ KeyboardTracker.start(shared_epoch_ms)
-  ├─ ClickTracker.start(shared_epoch_ms)
-  ├─ RecordingBorderOverlay.show_on_monitor()
-  └─ App minimizes to system tray
+```mermaid
+sequenceDiagram
+    actor User
+    participant MW as MainWindow
+    participant CD as CountdownOverlay
+    participant SR as ScreenRecorder
+    participant MT as MouseTracker
+    participant KT as KeyboardTracker
+    participant CT as ClickTracker
+    participant RB as RecordingBorder
 
-User presses Ctrl+Shift+R → _stop_recording()
-  ├─ ScreenRecorder.stop_recording()  ← async, emits recording_finished
-  ├─ MouseTracker.stop()
-  ├─ KeyboardTracker.stop()
-  ├─ ClickTracker.stop()
-  ├─ RecordingBorderOverlay.hide_border()
-  └─ App restores, switches to Edit mode
+    User->>MW: Click Start
+    MW->>CD: show 3-2-1
+    CD-->>MW: countdown finished
+    Note over MW: _do_start_recording()
+    MW->>SR: start_recording(shared_epoch)
+    MW->>MT: start(shared_epoch_ms)
+    MW->>KT: start(shared_epoch_ms)
+    MW->>CT: start(shared_epoch_ms)
+    MW->>RB: show_on_monitor()
+    MW->>MW: minimize to tray
+
+    User->>MW: Ctrl+Shift+R (stop)
+    Note over MW: _stop_recording()
+    MW->>SR: stop_recording()
+    MW->>MT: stop()
+    MW->>KT: stop()
+    MW->>CT: stop()
+    MW->>RB: hide_border()
+    SR-->>MW: recording_finished signal
+    MW->>MW: restore & switch to Edit mode
 ```
 
 ### Shared epoch
@@ -104,6 +112,17 @@ ZoomKeyframe:
 
 Zoom operations always come in pairs: a **zoom-in** keyframe (`zoom > 1.0`) followed by a **zoom-out** keyframe (`zoom = 1.0`). The engine interpolates smoothly between them.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Idle : zoom = 1.0
+    Idle --> ZoomingIn : zoom-in keyframe
+    ZoomingIn --> Zoomed : ease-out completes
+    Zoomed --> Panning : pan keyframe
+    Panning --> Zoomed : ease-in-out completes
+    Zoomed --> ZoomingOut : zoom-out keyframe
+    ZoomingOut --> Idle : ease-out completes
+```
+
 ---
 
 ## Screen Capture
@@ -119,8 +138,10 @@ The active backend is shown in the status bar (`⚡ WGC` or `🖥 GDI`).
 
 ### Recording pipeline
 
-```text
-WGC/GDI frames (BGRA) → ffmpeg stdin pipe → lossless AVI (huffyuv codec)
+```mermaid
+flowchart LR
+    WGC["WGC / GDI<br/><i>BGRA frames</i>"] -->|raw bytes| PIPE["ffmpeg stdin pipe"]
+    PIPE --> AVI["Lossless AVI<br/><i>huffyuv codec</i>"]
 ```
 
 - Frames are piped as raw BGRA bytes directly to ffmpeg's stdin
@@ -138,22 +159,28 @@ For individual windows, `PrintWindow` (Win32 API via ctypes) captures the window
 
 `ZoomEngine` (`app/zoom_engine.py`) is a pure-Python keyframe interpolator:
 
-### Ease-out easing
+### Easing functions
 
-```python
-def ease_out(t: float) -> float:
-    """Cubic ease-out — fast start, asymptotic deceleration to zero."""
-    return 1.0 - (1.0 - t) ** 3
-```
+Two easing curves are used depending on the transition type:
 
-This produces $1 - (1-t)^3$ — a cubic curve that starts fast and decelerates smoothly to zero velocity at $t=1$. The result is a natural "glide to a stop" for all zoom and pan transitions. The old `smooth_step` name is kept as an alias for backward compatibility.
+- **Quintic ease-out** ($f(t) = 1 - (1-t)^5$) — zoom transitions. Fast start, asymptotic deceleration. ~80% of movement completes in the first 40% of duration.
+- **Quintic ease-in-out / smoothstep** ($f(t) = 6t^5 - 15t^4 + 10t^3$) — pan point transitions. Zero velocity at both endpoints for smooth camera pans.
+
+The old `smooth_step` name is kept as an alias for backward compatibility.
 
 ### Interpolation
 
-`compute_at(time_ms)` finds the active keyframe, computes progress through its transition, applies the ease-out curve, and interpolates zoom level + pan position linearly.
+`compute_at(time_ms)` finds the active keyframe, computes progress through its transition, applies the easing curve, and linearly interpolates zoom level + pan position.
 
-```text
-time_ms → find active keyframe → elapsed/duration → ease_out(t) → lerp(prev, target)
+```mermaid
+flowchart LR
+    T["time_ms"] --> F["Find active keyframe<br/><i>reverse scan</i>"]
+    F --> E["elapsed / duration<br/>→ progress t ∈ [0,1]"]
+    E --> C{"Pan point?"}
+    C -- Yes --> EIO["ease_in_out(t)"]
+    C -- No --> EO["ease_out(t)"]
+    EIO --> L["lerp(prev, target)<br/>→ zoom, pan_x, pan_y"]
+    EO --> L
 ```
 
 Returns `(zoom, pan_x, pan_y)` — consumed by both the live preview and the video exporter.
@@ -236,14 +263,47 @@ The viewport **centers** on the activity target (typing field or click location)
 
 ### Pipeline
 
-```text
-Per-sample velocity → Windowed scoring → Peak detection →
-  Spatial-aware clustering (time + position) → Top-N by score →
-  Chain consecutive clusters (within PAN_MERGE_GAP_MS) →
-  Generate zoom-in at chain start, pan between clusters, zoom-out at chain end
+```mermaid
+flowchart TD
+    A["Mouse + Keyboard + Click tracks"] --> B["Per-sample velocity<br/>& normalized position"]
+    B --> C["500 ms windowed scoring<br/><i>typing: KPS × weight</i><br/><i>clicks: count × weight</i>"]
+    C --> D["Peak detection<br/><i>typing runs → best per run</i><br/><i>click bursts → centroid per burst</i>"]
+    D --> E["Spatial-aware clustering<br/><i>merge by time OR (same type + close position)</i>"]
+    E --> F["Split clusters > 8 s"]
+    F --> G["Top-N by peak score"]
+    G --> H["Chain consecutive clusters<br/><i>gap < 1.5 s → pan instead of zoom-out/in</i><br/><i>max 4 per chain</i>"]
+    H --> I["Prevent chain overlap<br/><i>reduce hold, push start</i>"]
+    I --> J["Generate keyframes<br/><i>zoom-in → pan × N → zoom-out</i>"]
+
+    style A fill:#2d2d3d,stroke:#888,color:#eee
+    style J fill:#2d2d3d,stroke:#888,color:#eee
 ```
 
 Configurable via sensitivity presets (Low/Medium/High) which vary `max_clusters` and `min_gap_ms`.
+
+#### Chain keyframe generation
+
+When consecutive activity clusters are close enough in time, they are grouped into a **chain**. The camera stays zoomed in and pans between clusters rather than zooming out and back in:
+
+```mermaid
+gantt
+    title Pan chain example (3 clusters)
+    dateFormat X
+    axisFormat %s
+
+    section Zoom
+    Zoom in (ease-out)        :active, z1, 0, 600
+
+    section Activity
+    Click cluster 1           :crit, c1, 700, 2700
+    Typing cluster 2          :crit, c2, 3500, 6500
+    Click cluster 3           :crit, c3, 7200, 9200
+
+    section Camera
+    Pan to cluster 2          :p1, 2700, 3500
+    Pan to cluster 3          :p2, 6500, 7200
+    Zoom out (ease-out, 2×)   :active, z2, 11200, 12400
+```
 
 ---
 
@@ -257,12 +317,12 @@ An alternative to the local activity analyzer. Instead of heuristic-based peak d
 
 **Data flow:**
 
-```text
-Mouse track + key events + click events
-  → _summarize_activity() → per-second text windows (position, speed, keystrokes, clicks)
-  → LLM chat completion → JSON array of zoom sections
-  → _parse_zoom_response() → List[ZoomKeyframe] (zoom-in/zoom-out pairs)
-  → same pipeline as local auto-zoom (confirm replace → apply to ZoomEngine)
+```mermaid
+flowchart LR
+    IN["Mouse track +<br/>key events +<br/>click events"] --> SUM["_summarize_activity()<br/><i>per-second text windows</i>"]
+    SUM --> LLM["LLM chat completion<br/><i>Azure AI Foundry</i>"]
+    LLM --> PARSE["_parse_zoom_response()<br/><i>JSON → List[ZoomKeyframe]</i>"]
+    PARSE --> ZE["Apply to ZoomEngine<br/><i>same as local auto-zoom</i>"]
 ```
 
 The summary condenses thousands of mouse samples into ~1 line per second of recording, making it feasible for LLM context windows.
@@ -297,20 +357,44 @@ AI settings are persisted via `QSettings` under the `ai/` prefix:
 
 ### Export Pipeline
 
-```text
-Source AVI → frame-by-frame decode (OpenCV) →
-  compose static background + device bezel →
-  apply zoom/pan (content-only or whole-canvas, depending on frame preset) →
-  draw cursor overlay (virtual screen-rect mapping, clipped to screen area) →
-  draw click ripple effects (virtual screen-rect mapping, clipped to screen area) →
-  ┌── bounded queue (depth 16) ──┐
-  │ writer thread drains frames  │ → pipe to ffmpeg stdin
-  └──────────────────────────────┘
-  → MP4 (H.264, encoder selected at runtime, yuv420p)
-  → GIF  (palettegen + paletteuse filtergraph, 15 fps, loops forever)
+```mermaid
+flowchart TD
+    subgraph Phase 1 — Probe
+        SRC["Source AVI<br/><i>lossless huffyuv</i>"] --> PROBE["OpenCV VideoCapture<br/><i>probe FPS, frame count,<br/>recount if metadata/duration mismatch > 10%</i>"]
+    end
+
+    subgraph Phase 2 — Precompute
+        PROBE --> BG["Build background<br/><i>solid / gradient / wavy / radial / spotlight</i>"]
+        BG --> BEZEL["Build bezel layer<br/><i>rounded rects, drop shadow, edge</i>"]
+    end
+
+    subgraph Phase 3 — Audio
+        BEZEL --> VO{"Voiceover\nsegments?"}
+        VO -- Yes --> MERGE["Merge via ffmpeg<br/><i>adelay + amix → WAV</i>"]
+        VO -- No --> LAUNCH
+        MERGE --> LAUNCH
+    end
+
+    subgraph Phase 4 — Frame rendering
+        LAUNCH["Launch ffmpeg<br/><i>rawvideo stdin pipe</i>"] --> TIMELINE
+        TIMELINE["CFR output timeline<br/><i>t = trim_start + n / fps</i>"] --> BISECT["bisect source_timestamps<br/><i>pick source frame for t</i>"]
+        BISECT --> COMPOSE["Compose frame<br/><i>zoom/pan + cursor + clicks</i>"]
+        COMPOSE --> Q["Bounded queue<br/><i>depth 16</i>"]
+    end
+
+    subgraph Phase 5 — Encode
+        Q --> WRITER["Writer thread<br/><i>queue → stdin.write</i>"]
+        WRITER --> FFMPEG["ffmpeg<br/><i>H.264 or GIF palette</i>"]
+        FFMPEG --> OUT["MP4 / GIF"]
+    end
+
+    style SRC fill:#2d2d3d,stroke:#888,color:#eee
+    style OUT fill:#2d2d3d,stroke:#888,color:#eee
 ```
 
 A dedicated **writer thread** drains composed frames from a bounded queue (depth 16) into ffmpeg's stdin pipe while the main compositor thread prepares the next frame. This overlaps CPU compositing with GPU encoding so that hardware encoders (NVENC, QuickSync, AMF) stay fed and don't sit idle waiting for the next frame.
+
+For recordings captured with sparse/variable source frames (common with WGC when the desktop is static), export first builds a timestamp map and then renders on a stable CFR timeline. Source frames are selected with timestamp lookup (same policy as preview playback), and frames are duplicated when needed to fill timeline gaps. This keeps cursor/click overlays and voiceover audio aligned with the visual timeline.
 
 ### GIF export
 
@@ -331,6 +415,27 @@ The exporter uses a **two-phase fallback chain** strategy that tries other avail
 1. **Immediate check** — after launching ffmpeg, the exporter sleeps 100 ms and polls the process. If it has already exited (e.g., driver issues or unsupported parameters), the exporter tries the next available HW encoder in priority order (NVENC → QuickSync → AMF). Only after all HW encoders are exhausted does it fall back to `libx264`.
 2. **Mid-stream retry** — if the hardware encoder fails partway through encoding (broken pipe or `OSError`), the exporter catches the error and restarts the full encode, walking the same fallback chain from the next HW encoder down to `libx264`.
 
+```mermaid
+flowchart TD
+    START["Launch ffmpeg with<br/>user-selected encoder"] --> POLL{"Process alive<br/>after 100 ms?"}
+    POLL -- Yes --> ENCODE["Pipe frames<br/><i>_encode_frames()</i>"]
+    POLL -- No --> NEXT1{"More HW<br/>encoders?"}
+    NEXT1 -- Yes --> RETRY1["Try next HW encoder<br/><i>NVENC → QSV → AMF</i>"]
+    RETRY1 --> POLL
+    NEXT1 -- No --> SW1["Fall back to libx264"]
+    SW1 --> ENCODE
+
+    ENCODE --> CHECK{"returncode == 0<br/>and pipe OK?"}
+    CHECK -- Yes --> DONE["✓ Export complete"]
+    CHECK -- No --> NEXT2{"More HW<br/>encoders?"}
+    NEXT2 -- Yes --> RESTART["Restart full encode<br/>with next encoder"]
+    RESTART --> ENCODE
+    NEXT2 -- No --> SW2["Restart with libx264"]
+    SW2 --> ENCODE
+
+    style DONE fill:#1a3a1a,stroke:#4a4,color:#eee
+```
+
 A warning is logged with the original ffmpeg stderr output. `VideoExporter` emits a `status = Signal(str)` that `MainWindow._on_export_status()` connects to — on each fallback attempt, the status bar is updated with the display name of the encoder being tried (e.g., "Encoder fallback: trying Intel QuickSync…", then "Encoder fallback: using libx264…"). On Windows, pipe writes to a dead ffmpeg process may raise `OSError(22, 'Invalid argument')` instead of `BrokenPipeError`; both are caught gracefully.
 
 ### Export parameters
@@ -347,7 +452,7 @@ The export runs in a background thread with progress signals emitted to the UI.
 
 ### Trimming
 
-The exporter accepts optional `trim_start_ms` and `trim_end_ms` parameters. When set, frames before the trim start are skipped (`continue`) and frames after the trim end cause an early exit (`break`). The total frame count and progress reporting are adjusted to reflect only the trimmed duration.
+The exporter accepts optional `trim_start_ms` and `trim_end_ms` parameters. When set, export starts and ends on those timeline times. Frame selection is timestamp-based, so sparse source recordings still preserve wall-clock timing inside the trimmed range. Progress reporting is based on trimmed timeline duration rather than raw decoded frame count.
 
 ---
 
@@ -366,6 +471,21 @@ Zoom behavior is **conditional on the active frame preset**:
 
 - **No Frame**: zoom/pan applies only to the video content inside the screen area — background stays static. Cursor and click overlays use virtual screen-rect mapping: their positions are transformed into the zoomed coordinate space and clipped to the screen area.
 - **Device frame (any bezel)**: zoom/pan moves the device (frame + video) while the background stays static — like physically bringing a device closer and moving it around. The background gradient/pattern is always visible and never zooms.
+
+```mermaid
+flowchart TD
+    subgraph NoFrame["No Frame mode"]
+        direction TB
+        NBG["Static background"] --> NSCR["Screen area<br/><i>zoomed + panned video</i>"]
+        NSCR --> NCUR["Cursor + clicks<br/><i>in zoomed coords</i>"]
+    end
+
+    subgraph DevFrame["Device Frame mode"]
+        direction TB
+        DBG["Static background"] --> DEV["Bezel + video<br/><i>zoomed as a unit</i>"]
+        DEV --> DCUR["Cursor + clicks<br/><i>in device coords</i>"]
+    end
+```
 
 ### Preview canvas sizing
 
@@ -419,10 +539,16 @@ The app uses `Qt.WindowType.FramelessWindowHint` with a custom `TitleBar` widget
 
 All inter-component communication uses Qt **signals and slots**:
 
-```text
-EditorPanel.output_dimensions_changed → MainWindow._on_output_dim_changed → PreviewWidget.set_output_dim
-TimelineWidget.segment_clicked → MainWindow._on_segment_clicked → context menu
-PreviewWidget.zoom_at_requested → MainWindow._on_preview_zoom_at → _add_keyframe
+```mermaid
+flowchart LR
+    EP["EditorPanel"] -->|output_dimensions_changed| MW["MainWindow"]
+    MW -->|_on_output_dim_changed| PW["PreviewWidget.set_output_dim"]
+
+    TL["TimelineWidget"] -->|segment_clicked| MW2["MainWindow"]
+    MW2 -->|_on_segment_clicked| CTX["Context menu"]
+
+    PW2["PreviewWidget"] -->|zoom_at_requested| MW3["MainWindow"]
+    MW3 -->|_on_preview_zoom_at| KF["_add_keyframe"]
 ```
 
 ### Threading model
@@ -479,10 +605,13 @@ This provides consistent, filterable output with the originating module name and
 
 `.fcproj` files are ZIP archives containing:
 
-```text
-project.fcproj (ZIP)
-├── project.json    — session metadata (mouse track, keyframes, settings)
-└── recording.avi   — raw lossless intermediate video
+```mermaid
+block-beta
+    columns 2
+    block:zip["project.fcproj (ZIP)"]:2
+        JSON["project.json\nsession metadata"]
+        AVI["recording.avi\nlossless intermediate"]
+    end
 ```
 
 The JSON includes:

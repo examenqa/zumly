@@ -1131,18 +1131,73 @@ class MainWindow(QMainWindow):
         if self._selected_monitor == 0 and self._source_type != "window":
             self._select_source()
             return
+
+        # Prompt if there are unsaved edits from the previous session
+        if self._unsaved_changes and self._video_path:
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("Unsaved Changes")
+            dlg.setText("Starting a new recording will discard unsaved changes.\nDo you want to save first?")
+            dlg.setIcon(QMessageBox.Icon.Warning)
+            btn_save = dlg.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+            dlg.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            dlg.setDefaultButton(btn_cancel)
+            dlg.exec()
+            clicked = dlg.clickedButton()
+            if clicked == btn_cancel:
+                return
+            if clicked == btn_save:
+                self._save_session()
+                if self._unsaved_changes:
+                    return  # user cancelled save dialog
+
         # Show countdown overlay, then start recording
         self._btn_record.setVisible(False)
         self._btn_change_source.setVisible(False)
         self._countdown.setGeometry(self.centralWidget().rect())
         self._countdown.start()
 
+    def _reset_session(self) -> None:
+        """Clear all state from the previous recording/editing session.
+
+        Called before starting a new recording so that no stale data
+        (voiceovers, trim, undo history, playback position, etc.)
+        leaks into the new session.
+        """
+        # Stop any active playback and release video handle
+        self._preview.stop_playback()
+        self._stop_voiceover_audio()
+        self._zoom_sync_timer.stop()
+
+        # Zoom / keyframe state
+        self._zoom_engine.clear()
+        self._zoom_engine.clear_history()
+
+        # Session data
+        self._mouse_track = []
+        self._key_events = []
+        self._click_events = []
+        self._frame_timestamps = []
+        self._rec_duration_ms = 0
+        self._playback_time = 0
+        self._actual_fps_override = 0.0
+
+        # Voiceover / trim / project
+        self._voiceover_segments = []
+        self._vo_played_ids = set()
+        self._trim_start_ms = 0.0
+        self._trim_end_ms = 0.0
+        self._project_path = ""
+        self._unsaved_changes = False
+        self._output_dim = "auto"
+        self._update_title()
+
     def _do_start_recording(self) -> None:
         """Called when the 3-2-1 countdown finishes."""
         import time as _time
 
         try:
-            self._zoom_engine.clear()
+            self._reset_session()
             self._preview.set_recording_mode(True)  # blur + indicator
 
             # Single shared epoch — recorder + all activity trackers use the
@@ -1365,6 +1420,11 @@ class MainWindow(QMainWindow):
         self._btn_edit_view.style().polish(self._btn_edit_view)
 
         if view == "record":
+            # Stop playback and zoom sync from the edit session
+            self._preview.stop_playback()
+            self._zoom_sync_timer.stop()
+            self._stop_voiceover_audio()
+
             self._timeline.setVisible(False)
             self._editor.setVisible(False)
             self._title_bar.set_export_enabled(False)
@@ -2502,12 +2562,7 @@ class MainWindow(QMainWindow):
                 self._title_bar.set_export_text("Exporting\u2026")
                 self._title_bar.set_export_enabled(False)
                 self._status_text.setOpenExternalLinks(False)
-                if path.lower().endswith(".gif"):
-                    self._status_text.setText("Exporting GIF\u2026")
-                else:
-                    from .utils import encoder_display_name
-                    enc_label = encoder_display_name(self._editor.encoder_id)
-                    self._status_text.setText(f"Encoding with {enc_label}\u2026")
+                self._status_text.setText("Starting export\u2026")
                 fps = self._recorder.actual_fps
                 if self._actual_fps_override > 0:
                     fps = self._actual_fps_override

@@ -56,6 +56,17 @@ def detect_available_encoders() -> List[str]:
     Returns a list of encoder IDs (e.g. ``["h264_nvenc", "libx264"]``)
     in preference order.  The software fallback ``libx264`` is always
     included last.  Results are cached after the first call.
+
+    Detection algorithm:
+    1. Execute ``ffmpeg -encoders`` once.
+    2. Parse stdout text for known hardware encoder IDs in preferred order
+       (NVENC -> QuickSync -> AMF).
+    3. Append software fallback ``libx264`` unconditionally.
+
+    Notes:
+    - This is a capability probe, not a guaranteed successful encode probe;
+      runtime export still has a fallback chain for launch/mid-stream errors.
+    - Caching avoids repeated subprocess overhead on every export.
     """
     global _available_encoders
     if _available_encoders is not None:
@@ -86,6 +97,9 @@ def best_hw_encoder() -> str:
     """Return the best available encoder ID, preferring HW acceleration.
 
     Falls back to ``"libx264"`` if no HW encoder is found.
+
+    Selection policy is deterministic and follows ``_HW_ENCODER_ORDER`` so
+    UI defaults and exporter behavior are consistent across launches.
     """
     encoders = detect_available_encoders()
     return encoders[0] if encoders else "libx264"
@@ -101,6 +115,11 @@ def build_encoder_args(enc_id: str) -> List[str]:
     """Return ffmpeg arguments for the given encoder ID.
 
     Returns ``["-c:v", "<codec>", ...quality_args..., "-pix_fmt", "yuv420p"]``.
+
+    Argument construction rules:
+    - Unknown IDs fall back to ``libx264`` profile.
+    - Profile quality args target roughly CRF-18-equivalent quality per codec.
+    - ``yuv420p`` is always appended for broad player compatibility.
     """
     profile = ENCODER_PROFILES.get(enc_id)
     if profile is None:
@@ -120,9 +139,12 @@ def build_gif_args(gif_fps: int = GIF_FPS) -> List[str]:
     """Return ffmpeg ``-vf`` filter arguments for high-quality GIF output.
 
     Uses palette generation (``palettegen`` + ``paletteuse``) for accurate
-    colours and bayer dithering to reduce banding artefacts.  The filter is
-    applied in a single ffmpeg pass via the ``split`` filter so no temporary
-    file is required.
+    colours and bayer dithering to reduce banding artefacts. The graph is
+    applied in one ffmpeg pass via ``split``:
+
+    ``fps -> split -> palettegen + paletteuse``
+
+    This avoids temporary files and keeps GIF encoding deterministic.
 
     Returns ``["-vf", "<filtergraph>", "-loop", "0"]``.
     """

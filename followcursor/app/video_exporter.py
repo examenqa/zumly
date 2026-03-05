@@ -1,10 +1,32 @@
-"""Export video with zoom keyframes baked in — produces H.264 MP4 or GIF."""
+"""Export pipeline for rendering FollowCursor sessions to MP4/GIF.
+
+Algorithm overview
+==================
+
+1. Read source video frames from OpenCV (recorded AVI).
+2. Build a *source timeline* from per-frame timestamps when available
+    (variable-rate WGC capture), otherwise derive timestamps from source FPS.
+3. Build a *constant-FPS output timeline* used by ffmpeg output.
+4. For each output timestamp:
+    - pick the source frame active at that time (binary search in timestamps),
+    - compute zoom/pan from :class:`ZoomEngine`,
+    - draw cursor/click overlays at the same timestamp,
+    - composite frame + bezel/background with NumPy/OpenCV,
+    - enqueue raw BGR bytes for the writer thread.
+5. Writer thread drains a bounded queue into ffmpeg stdin.
+6. ffmpeg encodes MP4 (hardware encoder with fallback chain) or GIF.
+
+The key design goal is timeline determinism: exported visuals, click effects,
+zoom transitions, and optional voiceover audio are all evaluated on the same
+timeline so playback stays synchronized.
+"""
 
 import logging
 import os
 import queue
 import subprocess
 import threading
+import bisect
 
 logger = logging.getLogger(__name__)
 from typing import List, Optional
@@ -188,7 +210,8 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
                 base_canvas: np.ndarray, screen_mask: np.ndarray,
                 scr_x: int, scr_y: int, scr_w: int, scr_h: int,
                 zoom_video_only: bool = False,
-                bg_canvas: np.ndarray | None = None) -> np.ndarray:
+                bg_canvas: np.ndarray | None = None,
+                device_mask_u8: np.ndarray | None = None) -> np.ndarray:
     """Fast compositor — copies pre-rendered bezel, places video in screen,
     then applies zoom.
 
@@ -197,6 +220,8 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
     *zoom_video_only*=False (device frame): zooms the device (bezel +
     video) while the background stays static.  Requires *bg_canvas*
     (the background-only layer without bezel).
+    *device_mask_u8* — pre-computed mask (255 where bezel differs from
+    background).  When ``None``, computed on the fly (slower).
     """
     canvas = base_canvas.copy()
     fh, fw = frame_bgr.shape[:2]
@@ -268,8 +293,9 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
 
         # Composite: static background + zoomed device on top
         result = bg_canvas.copy()
-        device_mask = np.any(base_canvas != bg_canvas, axis=2)
-        device_mask_u8 = device_mask.astype(np.uint8) * 255
+        if device_mask_u8 is None:
+            device_mask_u8 = (np.any(base_canvas != bg_canvas, axis=2)
+                              .astype(np.uint8) * 255)
         cropped_mask = cv2.warpAffine(
             device_mask_u8, M, (W, H),
             flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
@@ -288,11 +314,18 @@ def _merge_voiceover_segments(
     trim_end_ms: float,
     ffmpeg: str,
 ) -> str:
-    """Merge multiple voiceover audio files into a single WAV at correct offsets.
+    """Merge voiceover clips into one WAV aligned to export timeline.
 
-    Uses ffmpeg's ``adelay`` filter to position each segment at its
-    ``timestamp`` offset and ``amix`` to combine them into one track.
-    Returns the path to the merged audio file, or empty string on failure.
+    Each voiceover clip is timestamped in recording time. The merge step uses
+    ffmpeg audio filters so export can mux a single audio input:
+
+    - ``adelay`` offsets each clip to its timeline position.
+    - ``amix`` combines all delayed clips into one stream.
+
+    For trimmed exports, timestamps are shifted by ``trim_start_ms`` so
+    voiceover timing remains correct in the trimmed output.
+
+    Returns the merged WAV path, or ``""`` when merge fails.
     """
     import tempfile
     if not segments:
@@ -440,23 +473,39 @@ class VideoExporter(QObject):
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
     ) -> None:
+        """Execute the full export algorithm on a worker thread.
+
+        High-level phases:
+        1. Probe source metadata and reconcile FPS/frame-count uncertainty.
+        2. Precompute static composition layers (background, bezel masks).
+        3. Prepare audio (optional voiceover merge).
+        4. Render frames on a deterministic CFR output timeline:
+           source timestamp lookup -> zoom/cursor/click -> compose -> queue.
+        5. Encode via ffmpeg with hardware fallback chain.
+
+        Error handling strategy:
+        - Recover from unsupported HW encoders by retrying others.
+        - Catch pipe errors from ffmpeg stdin writes.
+        - Emit user-facing signal messages instead of raising to UI thread.
+        """
         try:
+            self.status.emit("Preparing video…")
             cap = cv2.VideoCapture(input_path)
             if not cap.isOpened():
                 self.error.emit(f"Cannot open {input_path}")
                 return
 
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            if fps <= 0 or fps > 120:
-                fps = 30.0
+            src_fps = cap.get(cv2.CAP_PROP_FPS)
+            if src_fps <= 0 or src_fps > 120:
+                src_fps = 30.0
             if actual_fps > 0:
-                fps = actual_fps
+                src_fps = actual_fps
             cap_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
             # After the post-recording remux the metadata is correct.
             # For legacy videos, detect metadata/duration mismatch and
             # recount frames if needed.
-            meta_dur = (cap_frame_count / fps * 1000) if fps > 0 else 0
+            meta_dur = (cap_frame_count / src_fps * 1000) if src_fps > 0 else 0
             need_recount = False
             if duration_ms > 0 and meta_dur > 0:
                 ratio = meta_dur / duration_ms
@@ -469,10 +518,12 @@ class VideoExporter(QObject):
                     real_frame_count += 1
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 if duration_ms > 0 and real_frame_count > 0:
-                    fps = real_frame_count / (duration_ms / 1000.0)
+                    src_fps = real_frame_count / (duration_ms / 1000.0)
                 total_frames = real_frame_count if real_frame_count > 0 else cap_frame_count
             else:
                 total_frames = cap_frame_count
+            if total_frames <= 0 and frame_timestamps:
+                total_frames = len(frame_timestamps)
             src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -502,7 +553,25 @@ class VideoExporter(QObject):
             if not _is_gif and not output_path.lower().endswith(".mp4"):
                 output_path = output_path.rsplit(".", 1)[0] + ".mp4"
 
+            # Export on a stable CFR timeline.  WGC recordings can have sparse,
+            # irregular source frames (only when the image changes).  Keeping
+            # a very low averaged FPS here makes output choppy and drifts
+            # overlays/audio relative to visual content.  Use at least 24 fps
+            # for MP4 (cinematic standard — smooth enough without inflating
+            # frame count as much as 30 fps would).
+            fps = src_fps
+            if not _is_gif and fps < 24.0:
+                fps = 24.0
+            logger.info(
+                "Export timing | source_fps=%.2f output_fps=%.2f total_frames=%d frame_timestamps=%d",
+                src_fps,
+                fps,
+                total_frames,
+                len(frame_timestamps or []),
+            )
+
             # Pre-build the gradient background and bezel layer (once)
+            self.status.emit("Building background & frame…")
             bg_top_bgr, bg_bottom_bgr = _preset_to_bgr(bg_preset)
             bg = _build_background(w, h, bg_top_bgr, bg_bottom_bgr,
                                    kind=bg_preset.kind)
@@ -595,6 +664,14 @@ class VideoExporter(QObject):
                         screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w] = 255
                     base_canvas[screen_mask > 0] = 0
 
+            # Pre-compute device region mask for zoom compositing.
+            # Avoids an expensive per-frame np.any(base_canvas != bg)
+            # comparison inside _compose_cv.
+            _device_mask_u8: np.ndarray | None = None
+            if not fp.is_none:
+                _device_mask_u8 = (np.any(base_canvas != bg, axis=2)
+                                   .astype(np.uint8) * 255)
+
             if w < 2 or h < 2:
                 self.error.emit("Output dimensions too small for encoding")
                 return
@@ -620,6 +697,17 @@ class VideoExporter(QObject):
                         logger.warning("Voiceover merge produced no output, exporting without audio")
 
             def _launch_ffmpeg(enc_id: str) -> subprocess.Popen:
+                """Start ffmpeg process configured for current export mode.
+
+                MP4 mode:
+                - receives raw BGR frames on stdin,
+                - encodes using selected H.264 encoder args,
+                - optionally muxes merged voiceover WAV.
+
+                GIF mode:
+                - receives raw BGR frames on stdin,
+                - applies palettegen/paletteuse filtergraph.
+                """
                 if _is_gif:
                     gif_args = _build_gif_args()
                     cmd = [
@@ -662,13 +750,24 @@ class VideoExporter(QObject):
                 )
 
             def _encode_frames(proc: subprocess.Popen) -> bool:
-                """Feed all frames to ffmpeg via a pipeline queue.
+                """Render and feed frames to ffmpeg using producer/consumer flow.
 
-                A dedicated writer thread drains composed frames from a
-                bounded queue into ffmpeg's stdin pipe while the main
-                thread continues compositing the next frame.  This
-                overlaps CPU compositing with GPU encoding and keeps
-                hardware encoders (NVENC / QuickSync / AMF) fed.
+                Timeline algorithm
+                ------------------
+                - Build ``source_timestamps`` from recorded frame timestamps.
+                - Iterate output timeline in fixed steps: ``t = start + n/fps``.
+                - For each output time ``t``:
+                    - binary-search source frame index active at ``t``,
+                    - advance OpenCV decoder up to that index,
+                    - render overlays/composition evaluated at ``t``.
+
+                Concurrency algorithm
+                ---------------------
+                - Producer (this thread): compose ndarray -> bytes -> queue.
+                - Consumer (writer thread): queue -> ``proc.stdin.write``.
+
+                This overlap prevents encoder starvation and keeps export
+                throughput high without sacrificing timeline correctness.
                 """
                 nonlocal frame_timestamps  # read-only access
 
@@ -687,6 +786,25 @@ class VideoExporter(QObject):
                 m_h = max(monitor_rect.get("height", h), 1)
                 _has_cursor = len(mouse_track) > 0 and m_w > 0
                 _has_clicks = len(click_events) > 0 and m_w > 0
+
+                # Build source-frame timestamps used to map output timeline
+                # time -> source frame index.  This mirrors preview playback,
+                # which also picks frames from per-frame timestamps.
+                if frame_timestamps:
+                    source_timestamps = []
+                    last_ts = 0.0
+                    for t in frame_timestamps[:total_frames]:
+                        ts = float(t)
+                        if ts < last_ts:
+                            ts = last_ts
+                        source_timestamps.append(ts)
+                        last_ts = ts
+                else:
+                    source_timestamps = [
+                        (i / src_fps) * 1000.0 for i in range(total_frames)
+                    ]
+                if not source_timestamps:
+                    return False
 
                 # ── Pipeline: compositor → queue → writer thread → ffmpeg ──
                 _QUEUE_DEPTH = 16
@@ -719,42 +837,58 @@ class VideoExporter(QObject):
                     return False
 
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                f_idx = 0
                 exported = 0
-                last_f = None
+                ret, first_frame = cap.read()
+                if not ret:
+                    frame_q.put(None)
+                    writer_t.join(timeout=5)
+                    return False
+                src_idx = 0
+                last_f = first_frame.copy()
 
                 eff_ts = trim_start_ms if trim_start_ms > 0 else 0.0
-                eff_te = trim_end_ms if trim_end_ms > 0 else (duration_ms if duration_ms > 0 else float("inf"))
-                trimming = eff_ts > 0 or (trim_end_ms > 0 and trim_end_ms < (duration_ms or float("inf")))
-                t_total = total_frames
-                if trimming and eff_te > eff_ts:
-                    t_total = max(1, int((eff_te - eff_ts) / 1000.0 * fps))
+                if trim_end_ms > 0:
+                    eff_te = trim_end_ms
+                elif duration_ms > 0:
+                    eff_te = duration_ms
+                else:
+                    eff_te = source_timestamps[-1]
+                if eff_te < eff_ts:
+                    eff_te = eff_ts
 
-                while True:
+                # Move decoder to the source frame active at trim start.
+                start_src_idx = max(0, bisect.bisect_right(source_timestamps, eff_ts) - 1)
+                start_src_idx = min(start_src_idx, len(source_timestamps) - 1)
+                while src_idx < start_src_idx:
                     ret, frame = cap.read()
                     if not ret:
                         break
+                    src_idx += 1
                     last_f = frame.copy()
 
-                    # Use recording-relative timestamp for trim decisions
-                    if frame_timestamps and f_idx < len(frame_timestamps):
-                        content_t_ms = frame_timestamps[f_idx]
-                    else:
-                        content_t_ms = (f_idx / fps) * 1000.0
+                t_total = max(1, int((eff_te - eff_ts) / 1000.0 * fps) + 1)
+                out_idx = 0
 
-                    f_idx += 1
-
-                    if content_t_ms < eff_ts:
-                        continue
-                    if content_t_ms > eff_te:
+                while True:
+                    t_ms = eff_ts + (out_idx / fps) * 1000.0
+                    if t_ms > eff_te + 0.0001:
                         break
 
-                    # Use output-aligned time for all animations so that
-                    # zoom, cursor, and click timing matches the constant-
-                    # fps output timeline — exactly as the preview uses
-                    # wall-clock time.  This prevents VFR recordings from
-                    # causing audio/animation desync in the exported video.
-                    t_ms = (exported / fps) * 1000.0 + eff_ts
+                    # Pick the source frame for this output timestamp
+                    target_src_idx = max(0, bisect.bisect_right(source_timestamps, t_ms) - 1)
+                    target_src_idx = min(target_src_idx, len(source_timestamps) - 1)
+
+                    while src_idx < target_src_idx:
+                        ret, frame = cap.read()
+                        if not ret:
+                            # Keep reusing the last decoded frame if the
+                            # container has fewer readable frames than expected.
+                            src_idx = target_src_idx
+                            break
+                        src_idx += 1
+                        last_f = frame.copy()
+
+                    frame = last_f.copy()
 
                     zoom, px, py = engine.compute_at(t_ms)
 
@@ -776,12 +910,14 @@ class VideoExporter(QObject):
                         scr_x, scr_y, scr_w, scr_h,
                         zoom_video_only=fp.is_none,
                         bg_canvas=bg,
+                        device_mask_u8=_device_mask_u8,
                     )
                     if not _enqueue(composed.tobytes()):
                         break
                     exported += 1
+                    out_idx += 1
 
-                    if t_total > 0 and exported % 10 == 0:
+                    if exported % 10 == 0:
                         self.progress.emit(min(1.0, exported / t_total))
 
                 # Extra frames for zoom-out tail
@@ -789,8 +925,8 @@ class VideoExporter(QObject):
                     last_kf = engine.keyframes[-1]
                     end_time = last_kf.timestamp + last_kf.duration
                     # Use output-aligned time for the last exported frame
-                    video_end_ms = ((exported - 1) / fps) * 1000.0 + eff_ts if exported > 0 else eff_ts
-                    if end_time > video_end_ms:
+                    video_end_ms = eff_te
+                    if trim_end_ms <= 0 and end_time > video_end_ms:
                         extra = int((end_time - video_end_ms) / 1000.0 * fps) + 1
                         for ei in range(extra):
                             t_ms = video_end_ms + ((ei + 1) / fps) * 1000.0
@@ -813,6 +949,7 @@ class VideoExporter(QObject):
                                 scr_x, scr_y, scr_w, scr_h,
                                 zoom_video_only=fp.is_none,
                                 bg_canvas=bg,
+                                device_mask_u8=_device_mask_u8,
                             )
                             if not _enqueue(composed.tobytes()):
                                 break
@@ -826,10 +963,11 @@ class VideoExporter(QObject):
 
             if _is_gif:
                 # GIF export uses palette-based encoding — no fallback chain
-                self.status.emit("Exporting GIF\u2026")
+                self.status.emit("Rendering frames for GIF\u2026")
                 proc = _launch_ffmpeg(encoder_id)
                 pipe_ok = _encode_frames(proc)
                 proc.stdin.close()
+                self.status.emit("Generating GIF palette\u2026")
                 # GIF palettegen buffers all frames before writing; allow more time
                 try:
                     stderr_out = proc.communicate(timeout=300)[1]
@@ -852,6 +990,8 @@ class VideoExporter(QObject):
             # Build a fallback chain: try other available HW encoders
             # before falling back to software (libx264).
             from .utils import detect_available_encoders, encoder_display_name
+            enc_label = encoder_display_name(encoder_id)
+            self.status.emit(f"Encoding with {enc_label}…")
             available = detect_available_encoders()
             # Build chain: encoders after the current one in preference order
             _fallback_chain: List[str] = []
@@ -897,6 +1037,7 @@ class VideoExporter(QObject):
             pipe_ok = _encode_frames(proc)
 
             proc.stdin.close()
+            self.status.emit("Finalizing…")
             try:
                 stderr_out = proc.communicate(timeout=60)[1]
             except subprocess.TimeoutExpired:
