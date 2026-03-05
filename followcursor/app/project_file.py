@@ -4,7 +4,7 @@ A .fcproj file is a ZIP archive containing:
   - project.json   — session metadata (mouse track, keyframes, key events,
                       voiceover segments, etc.)
   - recording.avi  — the raw MJPG intermediate video
-  - voiceover_*.mp3 — synthesized voiceover audio files (one per segment)
+  - voiceover_*.wav — synthesized voiceover audio files (one per segment)
 
 This lets users save their work and resume editing later.
 """
@@ -73,7 +73,16 @@ def save_project(
 
     json_str = json.dumps(data, indent=2)
 
-    if metadata_only and os.path.isfile(output_path):
+    # When voiceover audio files exist, always do a full save since
+    # the fast metadata rewrite and streaming copy don't handle the
+    # extra ZIP entries for voiceover audio.
+    has_vo_audio = (
+        session.voiceover_segments
+        and any(s.audio_path and os.path.isfile(s.audio_path)
+                for s in session.voiceover_segments)
+    )
+
+    if metadata_only and os.path.isfile(output_path) and not has_vo_audio:
         t0 = time.perf_counter()
         if _fast_metadata_rewrite(output_path, json_str):
             logger.info(
@@ -98,7 +107,7 @@ def save_project(
         if session.voiceover_segments:
             for seg in session.voiceover_segments:
                 if seg.audio_path and os.path.isfile(seg.audio_path):
-                    arc_name = f"voiceover_{seg.id[:8]}.mp3"
+                    arc_name = f"voiceover_{seg.id[:8]}.wav"
                     zf.write(seg.audio_path, arc_name)
         zf.writestr(_JSON_NAME, json_str)
 
@@ -199,9 +208,10 @@ def _fast_metadata_rewrite(zip_path: str, json_str: str) -> bool:
 
 
 def _streaming_metadata_save(zip_path: str, json_str: str) -> None:
-    """Rewrite project ZIP with updated JSON, streaming video in chunks.
+    """Rewrite project ZIP with updated JSON, streaming video and voiceover in chunks.
 
     Writes video first so future saves can use the fast in-place rewrite.
+    Copies any existing voiceover audio entries as well.
     """
     tmp_path = zip_path + ".tmp"
     try:
@@ -211,6 +221,12 @@ def _streaming_metadata_save(zip_path: str, json_str: str) -> None:
                 with zf_old.open(_VIDEO_NAME) as src, \
                      zf_new.open(_VIDEO_NAME, "w") as dst:
                     shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
+            # Copy voiceover audio entries
+            for name in zf_old.namelist():
+                if name.startswith("voiceover_"):
+                    with zf_old.open(name) as src, \
+                         zf_new.open(name, "w") as dst:
+                        shutil.copyfileobj(src, dst, length=1 * 1024 * 1024)
             zf_new.writestr(_JSON_NAME, json_str)
         os.replace(tmp_path, zip_path)
     except Exception:
@@ -251,10 +267,13 @@ def load_project(input_path: str) -> dict:
     # Restore voiceover audio paths from extracted files
     if session.voiceover_segments:
         for seg in session.voiceover_segments:
-            arc_name = f"voiceover_{seg.id[:8]}.mp3"
-            extracted = os.path.join(extract_dir, arc_name)
-            if os.path.isfile(extracted):
-                seg.audio_path = extracted
+            # Check for both .wav (new) and .mp3 (legacy) files
+            for ext in (".wav", ".mp3"):
+                arc_name = f"voiceover_{seg.id[:8]}{ext}"
+                extracted = os.path.join(extract_dir, arc_name)
+                if os.path.isfile(extracted):
+                    seg.audio_path = extracted
+                    break
 
     monitor_rect = data.get("monitorRect")
     actual_fps = data.get("actualFps", 30.0)

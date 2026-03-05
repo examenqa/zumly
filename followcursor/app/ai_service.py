@@ -39,15 +39,15 @@ logger = logging.getLogger(__name__)
 class AISettings:
     """Configuration for Azure AI Foundry API connections.
 
-    A single endpoint and API key are used for both chat and TTS models.
-    Different model deployment names distinguish the two capabilities.
+    A single endpoint and API key are used for chat models and Azure
+    Speech Service.  Chat uses the endpoint + deployment name; TTS
+    uses the Azure Speech SDK with the same endpoint and key.
     """
 
-    endpoint: str = ""  # Azure AI Foundry endpoint URL
+    endpoint: str = ""  # Azure AI Foundry / Cognitive Services endpoint URL
     api_key: str = ""  # API key or token
     chat_model: str = ""  # Chat model deployment (e.g. "gpt-4o-mini")
-    tts_model: str = ""  # TTS model deployment (e.g. "tts-1")
-    tts_voice: str = "alloy"  # Voice name for TTS
+    tts_voice: str = "en-US-Ava:DragonHDLatestNeural"  # Azure Speech voice name
 
     @property
     def chat_configured(self) -> bool:
@@ -57,7 +57,7 @@ class AISettings:
     @property
     def tts_configured(self) -> bool:
         """True when text-to-speech can be called."""
-        return bool(self.endpoint and self.api_key and self.tts_model)
+        return bool(self.endpoint and self.api_key)
 
 
 # ── Prompts ─────────────────────────────────────────────────────────
@@ -532,55 +532,76 @@ def synthesize_speech(
     settings: AISettings,
     text: str,
     output_path: str,
+    rate: float = 1.0,
+    volume: float = 1.0,
 ) -> str:
-    """Convert text to speech via Azure AI Foundry TTS model.
+    """Convert text to speech via Azure Speech SDK.
 
-    Makes a REST call to the model's ``/audio/speech`` endpoint.
-    Returns the path to the generated audio file (MP3).
+    Uses SSML ``<prosody>`` to control speech rate and volume.
+    Returns the path to the generated WAV file.
     """
     if not settings.tts_configured:
         raise ValueError(
-            "TTS model is not configured.\n"
-            "Set a TTS model deployment name in AI Settings."
+            "TTS is not configured.\n"
+            "Set endpoint and API key in AI Settings."
+        )
+
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError:
+        raise RuntimeError(
+            "azure-cognitiveservices-speech package required for TTS.\n"
+            "Install with: pip install azure-cognitiveservices-speech"
         )
 
     endpoint = settings.endpoint.rstrip("/")
-    url = f"{endpoint}/openai/deployments/{settings.tts_model}/audio/speech?api-version=2025-01-01-preview"
-
-    body = json.dumps({
-        "model": settings.tts_model,
-        "input": text,
-        "voice": settings.tts_voice,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "api-key": settings.api_key,
-        },
-        method="POST",
+    speech_config = speechsdk.SpeechConfig(
+        subscription=settings.api_key,
+        endpoint=endpoint,
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            audio_data = resp.read()
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode(errors="replace")[:500]
-        logger.error("TTS API error %s: %s", exc.code, error_body)
-        raise RuntimeError(f"TTS API error ({exc.code}): {error_body}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"TTS connection error: {exc.reason}") from exc
+    if not output_path.lower().endswith(".wav"):
+        output_path = output_path.rsplit(".", 1)[0] + ".wav" if "." in output_path else output_path + ".wav"
 
-    if not output_path.lower().endswith(".mp3"):
-        output_path += ".mp3"
+    audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
+    synthesizer = speechsdk.SpeechSynthesizer(
+        speech_config=speech_config,
+        audio_config=audio_config,
+    )
 
-    with open(output_path, "wb") as f:
-        f.write(audio_data)
+    # Build SSML with prosody for rate and volume control
+    import html as _html
+    #  rate: decimal multiplier (1.0 = normal, 0.5 = half, 2.0 = double)
+    # volume: map 0.0-3.0 to dB offset (-60dB to +10dB)
+    import math
+    if volume <= 0.01:
+        vol_str = "silent"
+    else:
+        # Map 0.0–3.0 → roughly -40dB to +10dB (1.0 = 0dB)
+        vol_db = 20 * math.log10(max(0.01, volume))
+        vol_str = f"{vol_db:+.1f}dB"
+    ssml = (
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
+        f'<voice name="{_html.escape(settings.tts_voice)}">'
+        f'<prosody rate="{rate:.2f}" volume="{vol_str}">'
+        f'{_html.escape(text)}'
+        '</prosody></voice></speak>'
+    )
 
-    logger.info("TTS audio saved: %s (%d bytes)", output_path, len(audio_data))
-    return output_path
+    result = synthesizer.speak_ssml_async(ssml).get()
+
+    if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+        logger.info("TTS audio saved: %s", output_path)
+        return output_path
+    elif result.reason == speechsdk.ResultReason.Canceled:
+        details = result.cancellation_details
+        error_msg = f"Speech synthesis canceled: {details.reason}"
+        if details.reason == speechsdk.CancellationReason.Error:
+            error_msg += f" — {details.error_details}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+    else:
+        raise RuntimeError(f"Unexpected TTS result: {result.reason}")
 
 
 # ── Background worker ──────────────────────────────────────────────
@@ -612,11 +633,15 @@ class AIWorker(QThread):
         self._kwargs = kwargs
         self.start()
 
-    def run_tts(self, settings: AISettings, segment_id: str, text: str, output_path: str) -> None:
+    def run_tts(self, settings: AISettings, segment_id: str, text: str,
+                output_path: str, rate: float = 1.0, volume: float = 1.0) -> None:
         """Start TTS synthesis in background for a specific voiceover segment."""
         self._task = "tts"
         self._settings = settings
-        self._kwargs = {"segment_id": segment_id, "text": text, "output_path": output_path}
+        self._kwargs = {
+            "segment_id": segment_id, "text": text,
+            "output_path": output_path, "rate": rate, "volume": volume,
+        }
         self.start()
 
     def run(self) -> None:  # noqa: D401

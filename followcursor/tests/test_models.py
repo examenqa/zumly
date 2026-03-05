@@ -266,9 +266,11 @@ class TestVoiceoverSegment:
 
     def test_create_defaults(self) -> None:
         seg = VoiceoverSegment.create(timestamp=500, text="Test")
-        assert seg.voice == "alloy"
+        assert seg.voice == "en-US-Ava:DragonHDLatestNeural"
         assert seg.audio_path == ""
         assert seg.duration_ms == 0.0
+        assert seg.rate == 1.0
+        assert seg.volume == 1.0
 
     def test_roundtrip(self) -> None:
         seg = VoiceoverSegment.create(timestamp=1500, text="Test text", voice="echo")
@@ -293,8 +295,10 @@ class TestVoiceoverSegment:
     def test_from_dict_backward_compat(self) -> None:
         d = {"id": "abc", "timestamp": 100, "text": "Hi"}
         seg = VoiceoverSegment.from_dict(d)
-        assert seg.voice == "alloy"
+        assert seg.voice == "en-US-Ava:DragonHDLatestNeural"
         assert seg.duration_ms == 0.0
+        assert seg.rate == 1.0
+        assert seg.volume == 1.0
 
 
 # ── Constants ───────────────────────────────────────────────────────

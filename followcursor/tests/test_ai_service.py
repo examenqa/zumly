@@ -29,16 +29,13 @@ class TestAISettings:
             chat_model="gpt-4o-mini",
         )
         assert s.chat_configured
-        assert not s.tts_configured
+        assert s.tts_configured  # TTS only needs endpoint + key
 
     def test_tts_configured(self):
         s = AISettings(
             endpoint="https://example.com",
             api_key="key123",
-            chat_model="gpt-4o-mini",
-            tts_model="tts-1",
         )
-        assert s.chat_configured
         assert s.tts_configured
 
     def test_missing_endpoint_not_configured(self):
@@ -55,7 +52,7 @@ class TestAISettings:
 
     def test_default_voice(self):
         s = AISettings()
-        assert s.tts_voice == "alloy"
+        assert s.tts_voice == "en-US-Ava:DragonHDLatestNeural"
 
 
 # ── Activity summary ───────────────────────────────────────────────

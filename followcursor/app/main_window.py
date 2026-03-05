@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QSystemTrayIcon,
     QMessageBox,
+    QDialog,
 )
 
 from .models import (
@@ -252,14 +253,11 @@ class _FinalizeWorker(QThread):
         return actual_fps
 
 
-class _VoiceoverDialog(QMessageBox):
+class _VoiceoverDialog(QDialog):
     """Dialog for creating or editing a voiceover segment.
 
-    Buttons:
-    - **Preview** — synthesize TTS and play the audio without adding
-    - **OK** — synthesize TTS, add/save the segment (don't play)
-    - **Cancel** — discard
-    - **Delete** (edit mode only) — remove the segment
+    Proper QDialog with text edit, voice picker, and action buttons.
+    Buttons: Preview | OK | Cancel (+ Delete in edit mode).
     """
 
     RESULT_OK = 1
@@ -273,119 +271,331 @@ class _VoiceoverDialog(QMessageBox):
         text: str = "",
         title: str = "Add Voiceover",
         is_edit: bool = False,
+        rate: float = 1.0,
+        volume: float = 1.0,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setIcon(QMessageBox.Icon.NoIcon)
+        self.setModal(True)
+        self.setMinimumWidth(420)
 
         self._timestamp_ms = timestamp_ms
-        self._text = text
-        self._voice = voice
+        self._result_code = 0
+        self._init_rate = rate
+        self._init_volume = volume
 
-        t_str = f"{int(timestamp_ms / 1000) // 60}:{int(timestamp_ms / 1000) % 60:02d}"
-        self.setText(f"Voiceover at <b>{t_str}</b>")
-        self.setInformativeText("Enter voiceover text and pick a voice.")
-
-        self.setStyleSheet(
-            "QMessageBox { background: #1b1a2e; }"
-            "QMessageBox QLabel { color: #e4e4ed; font-size: 13px; }"
+        _DLG_STYLE = (
+            "background: #1b1a2e; color: #e4e4ed;"
+        )
+        _BTN_STYLE = (
             "QPushButton { min-width: 80px; min-height: 28px;"
             "  background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
-            "  border-radius: 6px; padding: 4px 16px; }"
+            "  border-radius: 6px; padding: 4px 16px; font-size: 13px; }"
             "QPushButton:hover { background: #8b5cf6; }"
-            "QTextEdit { background: #1b1a2e; color: #e4e4ed; border: 1px solid #3d3a58;"
-            "  border-radius: 6px; padding: 6px; font-size: 12px; }"
-            "QComboBox { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
-            "  border-radius: 6px; padding: 4px 8px; }"
         )
 
-        # Buttons: Preview | OK | Cancel  (+ Delete in edit mode)
-        self._btn_preview = self.addButton("\u25b6 Preview", QMessageBox.ButtonRole.ActionRole)
-        self._btn_ok = self.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-        self._btn_cancel = self.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        if is_edit:
-            self._btn_delete = self.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
-        else:
-            self._btn_delete = None
+        self.setStyleSheet(_DLG_STYLE)
 
-        self._text_edit = None
-        self._voice_combo = None
-        self._result_code = 0
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if self._text_edit is not None:
-            return
-        from PySide6.QtWidgets import QTextEdit, QComboBox, QHBoxLayout, QLabel, QWidget
-        layout = self.layout()
-
-        text_edit = QTextEdit()
-        text_edit.setPlaceholderText("Type your voiceover text here\u2026")
-        text_edit.setPlainText(self._text)
-        text_edit.setFixedHeight(100)
-        text_edit.setMinimumWidth(350)
-        text_edit.setStyleSheet(
-            "QTextEdit { background: #1b1a2e; color: #e4e4ed; border: 1px solid #3d3a58;"
-            "  border-radius: 6px; padding: 6px; font-size: 12px; }"
+        from PySide6.QtWidgets import (
+            QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QComboBox, QPushButton,
         )
-        self._text_edit = text_edit
 
-        voice_widget = QWidget()
-        voice_row = QHBoxLayout(voice_widget)
-        voice_row.setContentsMargins(0, 0, 0, 0)
-        voice_row.setSpacing(6)
+        self._preview_btn = None  # stored for enable/disable
+        self._status_label = None
+        self._preview_audio_path: str = ""  # cached audio from last preview
+        self._preview_text: str = ""  # text that was previewed
+        self._preview_voice: str = ""  # voice that was previewed
+        self._preview_rate: float = 1.0
+        self._preview_volume: float = 1.0
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        # Header
+        t_str = f"{int(timestamp_ms / 1000) // 60}:{int(timestamp_ms / 1000) % 60:02d}"
+        header = QLabel(f"Voiceover at <b>{t_str}</b>")
+        header.setStyleSheet("font-size: 15px; color: #e4e4ed;")
+        layout.addWidget(header)
+
+        desc = QLabel("Enter voiceover text and pick a voice.")
+        desc.setStyleSheet("font-size: 12px; color: #9c99b6;")
+        layout.addWidget(desc)
+
+        # Text edit
+        self._text_edit = QTextEdit()
+        self._text_edit.setPlaceholderText("Type your voiceover text here\u2026")
+        self._text_edit.setPlainText(text)
+        self._text_edit.setFixedHeight(100)
+        self._text_edit.setStyleSheet(
+            "QTextEdit { background: #201f34; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 6px; font-size: 13px; }"
+        )
+        layout.addWidget(self._text_edit)
+
+        # Voice picker
+        voice_row = QHBoxLayout()
+        voice_row.setSpacing(8)
         voice_label = QLabel("Voice:")
-        voice_label.setStyleSheet("color: #9c99b6; font-size: 12px;")
+        voice_label.setStyleSheet("color: #9c99b6; font-size: 13px;")
         voice_row.addWidget(voice_label)
-        voice_combo = QComboBox()
-        for v in ("alloy", "echo", "fable", "onyx", "nova", "shimmer"):
-            voice_combo.addItem(v)
-        voice_combo.setCurrentText(self._voice)
-        voice_combo.setStyleSheet(
-            "QComboBox { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
-            "  border-radius: 6px; padding: 4px 8px; }"
-        )
-        voice_row.addWidget(voice_combo)
-        voice_row.addStretch()
-        self._voice_combo = voice_combo
-
-        row = layout.rowCount() - 1
-        layout.addWidget(text_edit, row, 0, 1, layout.columnCount())
-        layout.addWidget(voice_widget, row + 1, 0, 1, layout.columnCount())
-
-    def done(self, result: int) -> None:
-        """Override done() to capture which button was clicked before closing."""
-        clicked = self.clickedButton()
-        if clicked == self._btn_ok:
-            self._result_code = self.RESULT_OK
-        elif clicked == self._btn_preview:
-            self._result_code = self.RESULT_PREVIEW
-        elif clicked == self._btn_delete:
-            self._result_code = self.RESULT_DELETE
+        self._voice_combo = QComboBox()
+        self._voice_combo.setEditable(True)
+        from .widgets.editor_panel import _cached_voices
+        if _cached_voices:
+            for v in _cached_voices:
+                self._voice_combo.addItem(v)
         else:
-            self._result_code = 0
-        super().done(result)
+            self._voice_combo.addItem("en-US-Ava:DragonHDLatestNeural")
+            self._voice_combo.addItem("en-US-Andrew:DragonHDLatestNeural")
+        self._voice_combo.setCurrentText(voice)
+        self._voice_combo.setStyleSheet(
+            "QComboBox { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 8px; font-size: 13px; }"
+        )
+        voice_row.addWidget(self._voice_combo, 1)
+        layout.addLayout(voice_row)
+
+        # Rate slider
+        from PySide6.QtWidgets import QSlider
+        rate_row = QHBoxLayout()
+        rate_row.setSpacing(8)
+        rate_label = QLabel("Rate:")
+        rate_label.setStyleSheet("color: #9c99b6; font-size: 13px;")
+        rate_row.addWidget(rate_label)
+        self._rate_slider = QSlider(Qt.Orientation.Horizontal)
+        self._rate_slider.setRange(0, 300)  # 0.0x to 3.0x (in hundredths)
+        self._rate_slider.setValue(int(getattr(self, '_init_rate', 1.0) * 100))
+        self._rate_slider.setStyleSheet(
+            "QSlider::groove:horizontal { background: #201f34; height: 4px; border-radius: 2px; }"
+            "QSlider::handle:horizontal { background: #8b5cf6; width: 14px; margin: -5px 0; border-radius: 7px; }"
+        )
+        rate_row.addWidget(self._rate_slider, 1)
+        self._rate_value = QLabel(f"{self._rate_slider.value() / 100:.1f}x")
+        self._rate_value.setFixedWidth(36)
+        self._rate_value.setStyleSheet("color: #9c99b6; font-size: 12px;")
+        self._rate_slider.valueChanged.connect(lambda v: self._rate_value.setText(f"{v / 100:.1f}x"))
+        rate_row.addWidget(self._rate_value)
+        layout.addLayout(rate_row)
+
+        # Volume slider
+        vol_row = QHBoxLayout()
+        vol_row.setSpacing(8)
+        vol_label = QLabel("Volume:")
+        vol_label.setStyleSheet("color: #9c99b6; font-size: 13px;")
+        vol_row.addWidget(vol_label)
+        self._vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self._vol_slider.setRange(0, 300)  # 0.0x to 3.0x (in hundredths)
+        self._vol_slider.setValue(int(getattr(self, '_init_volume', 1.0) * 100))
+        self._vol_slider.setStyleSheet(
+            "QSlider::groove:horizontal { background: #201f34; height: 4px; border-radius: 2px; }"
+            "QSlider::handle:horizontal { background: #8b5cf6; width: 14px; margin: -5px 0; border-radius: 7px; }"
+        )
+        vol_row.addWidget(self._vol_slider, 1)
+        self._vol_value = QLabel(f"{self._vol_slider.value() / 100:.1f}x")
+        self._vol_value.setFixedWidth(36)
+        self._vol_value.setStyleSheet("color: #9c99b6; font-size: 12px;")
+        self._vol_slider.valueChanged.connect(lambda v: self._vol_value.setText(f"{v / 100:.1f}x"))
+        vol_row.addWidget(self._vol_value)
+        layout.addLayout(vol_row)
+
+        # Status label + progress bar (for preview feedback)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #9c99b6; font-size: 12px;")
+        self._status_label.setVisible(False)
+        layout.addWidget(self._status_label)
+
+        from PySide6.QtWidgets import QProgressBar
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)  # indeterminate
+        self._progress.setFixedHeight(4)
+        self._progress.setTextVisible(False)
+        self._progress.setStyleSheet(
+            "QProgressBar { background: #201f34; border: none; border-radius: 2px; }"
+            "QProgressBar::chunk { background: #8b5cf6; border-radius: 2px; }"
+        )
+        self._progress.setVisible(False)
+        layout.addWidget(self._progress)
+
+        # Button row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addStretch()
+
+        self._preview_btn = QPushButton("\u25b6 Preview")
+        self._preview_btn.setStyleSheet(_BTN_STYLE)
+        self._preview_btn.clicked.connect(self._on_preview)
+        btn_row.addWidget(self._preview_btn)
+
+        if is_edit:
+            btn_delete = QPushButton("Delete")
+            btn_delete.setStyleSheet(
+                _BTN_STYLE.replace("#28263e", "#7f1d1d").replace("#3d3a58", "#991b1b")
+            )
+            btn_delete.clicked.connect(lambda: self._finish(self.RESULT_DELETE))
+            btn_row.addWidget(btn_delete)
+
+        btn_ok = QPushButton("OK")
+        btn_ok.setStyleSheet(
+            _BTN_STYLE.replace("#28263e", "#8b5cf6").replace("#3d3a58", "#7c3aed")
+        )
+        btn_ok.clicked.connect(lambda: self._finish(self.RESULT_OK))
+        btn_row.addWidget(btn_ok)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setStyleSheet(_BTN_STYLE)
+        btn_cancel.clicked.connect(lambda: self._finish(0))
+        btn_row.addWidget(btn_cancel)
+
+        layout.addLayout(btn_row)
+
+    def _on_preview(self) -> None:
+        """Synthesize and play TTS in-place without closing the dialog."""
+        text = self._text_edit.toPlainText().strip()
+        if not text:
+            self._status_label.setText("Enter voiceover text first.")
+            self._status_label.setVisible(True)
+            return
+
+        self._preview_btn.setEnabled(False)
+        self._status_label.setText("Generating speech\u2026")
+        self._status_label.setVisible(True)
+        self._progress.setVisible(True)
+        QApplication.processEvents()
+
+        try:
+            import azure.cognitiveservices.speech as speechsdk
+        except ImportError:
+            self._status_label.setText("azure-cognitiveservices-speech not installed.")
+            self._preview_btn.setEnabled(True)
+            self._progress.setVisible(False)
+            return
+
+        # Load AI settings for endpoint + key
+        from PySide6.QtCore import QSettings
+        settings = QSettings("FollowCursor", "FollowCursor")
+        endpoint = settings.value("ai/endpoint", "")
+        api_key = settings.value("ai/apiKey", "")
+        if not endpoint or not api_key:
+            self._status_label.setText("Configure AI Settings first (endpoint + API key).")
+            self._preview_btn.setEnabled(True)
+            self._progress.setVisible(False)
+            return
+
+        voice = self._voice_combo.currentText().strip()
+        rate = self._rate_slider.value() / 100.0
+        vol = self._vol_slider.value() / 100.0
+        try:
+            speech_config = speechsdk.SpeechConfig(
+                subscription=api_key,
+                endpoint=endpoint.rstrip("/"),
+            )
+
+            # Save to temp file so we can reuse on OK
+            import tempfile
+            output_path = os.path.join(
+                tempfile.gettempdir(), "followcursor_vo_preview.wav"
+            )
+            audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=speech_config,
+                audio_config=audio_config,
+            )
+
+            # Build SSML with prosody
+            import html as _html
+            import math
+            # Volume: map multiplier to dB offset (1.0 = 0dB)
+            if vol <= 0.01:
+                vol_str = "silent"
+            else:
+                vol_db = 20 * math.log10(max(0.01, vol))
+                vol_str = f"{vol_db:+.1f}dB"
+            ssml = (
+                '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
+                f'<voice name="{_html.escape(voice)}">'
+                f'<prosody rate="{rate:.2f}" volume="{vol_str}">'
+                f'{_html.escape(text)}'
+                '</prosody></voice></speak>'
+            )
+
+            self._status_label.setText("Generating speech\u2026")
+            QApplication.processEvents()
+
+            result = synthesizer.speak_ssml_async(ssml).get()
+
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                # Cache the generated audio
+                self._preview_audio_path = output_path
+                self._preview_text = text
+                self._preview_voice = voice
+                self._preview_rate = rate
+                self._preview_volume = vol
+
+                # Play through speaker
+                self._status_label.setText("Playing\u2026")
+                self._progress.setVisible(False)
+                QApplication.processEvents()
+                import winsound
+                winsound.PlaySound(
+                    output_path,
+                    winsound.SND_FILENAME | winsound.SND_NODEFAULT,
+                )
+                self._status_label.setText("\u2713 Preview complete.")
+            elif result.reason == speechsdk.ResultReason.Canceled:
+                details = result.cancellation_details
+                err = str(details.error_details)[:150] if details.error_details else str(details.reason)
+                self._status_label.setText(f"Error: {err}")
+            else:
+                self._status_label.setText(f"Unexpected: {result.reason}")
+        except Exception as exc:
+            self._status_label.setText(f"Error: {str(exc)[:150]}")
+        finally:
+            self._preview_btn.setEnabled(True)
+            self._progress.setVisible(False)
+
+    def _finish(self, code: int) -> None:
+        self._result_code = code
+        self.close()
 
     def exec(self) -> int:
         super().exec()
         return self._result_code
 
     def closeEvent(self, event) -> None:
-        """Prevent the close from propagating to the parent window."""
+        """Accept close without propagating to parent."""
         event.accept()
 
     @property
+    def cached_audio_path(self) -> str:
+        """Return the cached audio path if text, voice, rate, volume match the last preview."""
+        if (
+            self._preview_audio_path
+            and os.path.isfile(self._preview_audio_path)
+            and self._text_edit.toPlainText().strip() == self._preview_text
+            and self._voice_combo.currentText().strip() == self._preview_voice
+            and self.rate == self._preview_rate
+            and self.volume == self._preview_volume
+        ):
+            return self._preview_audio_path
+        return ""
+
+    @property
     def text(self) -> str:
-        if self._text_edit:
-            return self._text_edit.toPlainText().strip()
-        return self._text
+        return self._text_edit.toPlainText().strip()
 
     @property
     def voice(self) -> str:
-        if self._voice_combo:
-            return self._voice_combo.currentText()
-        return self._voice
+        return self._voice_combo.currentText()
+
+    @property
+    def rate(self) -> float:
+        return self._rate_slider.value() / 100.0
+
+    @property
+    def volume(self) -> float:
+        return self._vol_slider.value() / 100.0
 
     @property
     def timestamp_ms(self) -> float:
@@ -428,6 +638,7 @@ class MainWindow(QMainWindow):
         self._border_overlay = RecordingBorderOverlay()
         self._ai_worker = None   # AIWorker, created lazily
         self._voiceover_segments: list = []  # List[VoiceoverSegment]
+        self._vo_played_ids: set = set()  # track which voiceovers have played this playback
 
         self._recording = False
         self._selected_monitor: int = 0  # 0 = none selected
@@ -641,10 +852,21 @@ class MainWindow(QMainWindow):
 
         Called via ``QTimer.singleShot(0, ...)`` so the window paints
         immediately.  Creates the system tray icon, updates the encoder
-        label, and pre-imports heavy modules in the background.
+        label, and pre-loads TTS voices if configured.
         """
         self._ensure_tray_icon()
         self._update_encoder_label(self._editor.encoder_id)
+        # Auto-load TTS voices in background if AI settings are already configured
+        ai = self._load_ai_settings()
+        if ai.tts_configured:
+            self._status_text.setText("Loading TTS voices\u2026")
+            self._editor._load_tts_voices(ai.endpoint, ai.api_key)
+            # Clear status after a delay (voices load on background thread)
+            QTimer.singleShot(5000, lambda: (
+                self._status_text.setText("Ready")
+                if self._status_text.text() == "Loading TTS voices\u2026"
+                else None
+            ))
 
     def _ensure_tray_icon(self) -> None:
         """Create the system tray icon on first use."""
@@ -1288,8 +1510,7 @@ class MainWindow(QMainWindow):
             endpoint=self._settings.value("ai/endpoint", ""),
             api_key=self._settings.value("ai/apiKey", ""),
             chat_model=self._settings.value("ai/chatModel", ""),
-            tts_model=self._settings.value("ai/ttsModel", ""),
-            tts_voice=self._settings.value("ai/ttsVoice", "alloy"),
+            tts_voice=self._settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
         )
 
     def _ensure_ai_worker(self):
@@ -1358,15 +1579,31 @@ class MainWindow(QMainWindow):
                 timestamp=dlg.timestamp_ms,
                 text=dlg.text,
                 voice=dlg.voice,
+                rate=dlg.rate,
+                volume=dlg.volume,
             )
             self._voiceover_segments.append(seg)
             self._voiceover_segments.sort(key=lambda s: s.timestamp)
             self._mark_dirty()
             self._refresh_editor()
-            self._synthesize_voiceover(seg)
-        elif result == _VoiceoverDialog.RESULT_PREVIEW:
-            # Synthesize + play without adding
-            self._preview_voiceover(dlg.text, dlg.voice)
+            # Reuse cached preview audio if available
+            cached = dlg.cached_audio_path
+            if cached:
+                import shutil
+                import tempfile
+                dest = os.path.join(
+                    tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
+                )
+                shutil.copy2(cached, dest)
+                seg.audio_path = dest
+                seg.duration_ms = self._probe_audio_duration(dest)
+                self._mark_dirty()
+                self._refresh_editor()
+                self._editor.set_voiceover_status(
+                    f"\u2713 Voiceover added ({seg.duration_ms / 1000:.1f}s)."
+                )
+            else:
+                self._synthesize_voiceover(seg)
 
     def _on_voiceover_clicked(self, seg_id: str) -> None:
         """Show edit/delete dialog for a voiceover segment."""
@@ -1377,6 +1614,8 @@ class MainWindow(QMainWindow):
             seg.timestamp, seg.voice, text=seg.text,
             title="Edit Voiceover",
             is_edit=True,
+            rate=seg.rate,
+            volume=seg.volume,
             parent=self,
         )
         result = dlg.exec()
@@ -1384,14 +1623,29 @@ class MainWindow(QMainWindow):
             seg.timestamp = dlg.timestamp_ms
             seg.text = dlg.text
             seg.voice = dlg.voice
+            seg.rate = dlg.rate
+            seg.volume = dlg.volume
             self._voiceover_segments.sort(key=lambda s: s.timestamp)
             self._mark_dirty()
             self._refresh_editor()
-            # Re-synthesize with updated text/voice
-            self._synthesize_voiceover(seg)
-        elif result == _VoiceoverDialog.RESULT_PREVIEW:
-            # Preview without saving changes
-            self._preview_voiceover(dlg.text, dlg.voice)
+            # Reuse cached preview audio if available
+            cached = dlg.cached_audio_path
+            if cached:
+                import shutil
+                import tempfile
+                dest = os.path.join(
+                    tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
+                )
+                shutil.copy2(cached, dest)
+                seg.audio_path = dest
+                seg.duration_ms = self._probe_audio_duration(dest)
+                self._mark_dirty()
+                self._refresh_editor()
+                self._editor.set_voiceover_status(
+                    f"\u2713 Voiceover updated ({seg.duration_ms / 1000:.1f}s)."
+                )
+            else:
+                self._synthesize_voiceover(seg)
         elif result == _VoiceoverDialog.RESULT_DELETE:
             self._voiceover_segments = [s for s in self._voiceover_segments if s.id != seg_id]
             self._mark_dirty()
@@ -1420,46 +1674,17 @@ class MainWindow(QMainWindow):
         ai_settings.tts_voice = seg.voice
         import tempfile
         output_path = os.path.join(
-            tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.mp3"
+            tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
         )
-        worker.run_tts(ai_settings, seg.id, seg.text, output_path)
+        worker.run_tts(ai_settings, seg.id, seg.text, output_path,
+                       rate=seg.rate, volume=seg.volume)
         self._editor.set_voiceover_status("Synthesizing speech\u2026")
         self._editor.set_ai_busy(True)
 
-    def _preview_voiceover(self, text: str, voice: str) -> None:
-        """Synthesize TTS and play the audio without adding a segment."""
-        ai_settings = self._load_ai_settings()
-        if not ai_settings.tts_configured:
-            self._editor.set_voiceover_status(
-                "TTS not configured. Set a TTS model in \u2699 AI Settings."
-            )
-            return
-        if not text:
-            self._editor.set_voiceover_status("Enter voiceover text first.")
-            return
-        worker = self._ensure_ai_worker()
-        if worker.isRunning():
-            self._editor.set_voiceover_status("AI operation already in progress\u2026")
-            return
-        ai_settings.tts_voice = voice
-        import tempfile
-        output_path = os.path.join(
-            tempfile.gettempdir(), "followcursor_vo_preview.mp3"
-        )
-        # Use a special segment ID so _on_ai_tts_result knows this is a preview
-        worker.run_tts(ai_settings, "__preview__", text, output_path)
-        self._editor.set_voiceover_status("Generating preview\u2026")
-        self._editor.set_ai_busy(True)
-
     def _on_ai_tts_result(self, seg_id: str, audio_path: str) -> None:
-        """Handle TTS audio file result — associate with segment or play preview."""
+        """Handle TTS audio file result — associate with the voiceover segment."""
         self._status_text.setText("Ready")
         self._editor.set_ai_busy(False)
-        if seg_id == "__preview__":
-            # Preview mode: play the audio file, don't save
-            self._editor.set_voiceover_status("\u25b6 Playing preview\u2026")
-            self._play_audio_file(audio_path)
-            return
         seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
         if seg is None:
             return
@@ -1493,30 +1718,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return 3000.0  # fallback estimate
-
-    def _play_audio_file(self, path: str) -> None:
-        """Play an audio file using ffplay (bundled with ffmpeg) in the background."""
-        try:
-            from .utils import ffmpeg_exe, subprocess_kwargs
-            import subprocess
-            # ffplay is next to ffmpeg in the same directory
-            ffmpeg = ffmpeg_exe()
-            ffplay = ffmpeg.replace("ffmpeg", "ffplay")
-            if not os.path.isfile(ffplay):
-                # Fallback: use Windows default player
-                os.startfile(path)
-                return
-            subprocess.Popen(
-                [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", path],
-                **subprocess_kwargs(),
-            )
-        except Exception as exc:
-            logger.warning("Could not play audio: %s", exc)
-            # Fallback: open with default player
-            try:
-                os.startfile(path)
-            except Exception:
-                self._editor.set_voiceover_status("Could not play audio preview.")
 
     @staticmethod
     def _fmt_time(ms: float) -> str:
@@ -2131,6 +2332,8 @@ class MainWindow(QMainWindow):
 
     def _on_seek(self, time_ms: float) -> None:
         self._playback_time = time_ms
+        self._vo_played_ids.clear()  # reset voiceover playback on seek
+        self._stop_voiceover_audio()
         self._preview.seek_to(time_ms)
         self._preview.set_current_time(time_ms)
         self._zoom_engine.update(time_ms)
@@ -2181,9 +2384,12 @@ class MainWindow(QMainWindow):
                 self._trim_end_ms,
                 self._voiceover_segments,
             )
+            # Play voiceover audio at the right time
+            self._check_voiceover_playback(t)
         else:
             # Preview may have self-paused (end of video) — sync button state
             self._timeline.set_playing(False)
+            self._stop_voiceover_audio()
 
     # ── save / load ─────────────────────────────────────────────────
 
@@ -2253,10 +2459,39 @@ class MainWindow(QMainWindow):
         if self._preview.is_playing:
             self._preview.pause()
             self._timeline.set_playing(False)
+            self._stop_voiceover_audio()
         else:
+            self._vo_played_ids.clear()  # reset so segments play again
             self._preview.play()
             # Only update the button if play actually started
             self._timeline.set_playing(self._preview.is_playing)
+
+    def _check_voiceover_playback(self, t_ms: float) -> None:
+        """Play voiceover audio when the playhead reaches a segment's timestamp."""
+        import winsound
+        for seg in self._voiceover_segments:
+            if (
+                seg.id not in self._vo_played_ids
+                and seg.audio_path
+                and os.path.isfile(seg.audio_path)
+                and seg.timestamp <= t_ms  # trigger once playhead passes the timestamp
+            ):
+                self._vo_played_ids.add(seg.id)
+                try:
+                    winsound.PlaySound(
+                        seg.audio_path,
+                        winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+                    )
+                except Exception as exc:
+                    logger.warning("Could not play voiceover audio: %s", exc)
+
+    def _stop_voiceover_audio(self) -> None:
+        """Stop any currently playing voiceover audio."""
+        try:
+            import winsound
+            winsound.PlaySound(None, winsound.SND_PURGE)
+        except Exception:
+            pass
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         """Handle keyboard shortcuts in edit view."""

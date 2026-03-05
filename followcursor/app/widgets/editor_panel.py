@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QApplication,
 )
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent
@@ -63,7 +64,8 @@ SENSITIVITY_PRESETS = {
 }
 
 # TTS voice options
-TTS_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+# TTS voice cache (populated from Azure Speech Service on first settings save)
+_cached_voices: list[str] = []
 
 
 class _CollapsibleSection(QWidget):
@@ -131,8 +133,8 @@ class _AISettingsDialog(QDialog):
 
         info = QLabel(
             "Configure your Azure AI Foundry credentials.\n"
-            "Chat model is used for AI zoom analysis and narration.\n"
-            "TTS model is used for speech synthesis."
+            "Chat model is used for AI zoom analysis.\n"
+            "TTS uses Azure Speech Service with the same key."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #9c99b6; font-size: 12px;")
@@ -154,16 +156,6 @@ class _AISettingsDialog(QDialog):
         self._chat_model.setPlaceholderText("e.g. gpt-4o-mini")
         form.addRow("Chat Model:", self._chat_model)
 
-        self._tts_model = QLineEdit(current_settings.tts_model)
-        self._tts_model.setPlaceholderText("e.g. tts-1 (optional)")
-        form.addRow("TTS Model:", self._tts_model)
-
-        self._tts_voice = QComboBox()
-        for v in TTS_VOICES:
-            self._tts_voice.addItem(v)
-        self._tts_voice.setCurrentText(current_settings.tts_voice)
-        form.addRow("Voice:", self._tts_voice)
-
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
@@ -179,8 +171,6 @@ class _AISettingsDialog(QDialog):
             endpoint=self._endpoint.text().strip(),
             api_key=self._api_key.text().strip(),
             chat_model=self._chat_model.text().strip(),
-            tts_model=self._tts_model.text().strip(),
-            tts_voice=self._tts_voice.currentText(),
         )
 
 
@@ -211,7 +201,7 @@ class EditorPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("EditorPanel")
-        self.setFixedWidth(280)
+        self.setFixedWidth(340)
 
         # Outer layout: collapsible sections + fixed bottom bar
         outer = QVBoxLayout(self)
@@ -272,7 +262,7 @@ class EditorPanel(QWidget):
         sens_row.addWidget(self._sensitivity_combo, 1)
         zoom_lay.addLayout(sens_row)
 
-        activity_btn = QPushButton("✨ Auto-generate zoom keyframes")
+        activity_btn = QPushButton("✨ Auto-generate zoom (local)")
         activity_btn.setObjectName("CtrlBtn")
         activity_btn.setFixedHeight(36)
         activity_btn.clicked.connect(self._auto_keyframe)
@@ -301,7 +291,7 @@ class EditorPanel(QWidget):
         or_row.addWidget(or_line_r, 1)
         zoom_lay.addLayout(or_row)
 
-        ai_zoom_btn = QPushButton("\U0001f916 AI Auto-generate zoom")
+        ai_zoom_btn = QPushButton("\U0001f916 Auto-generate zoom (AI)")
         ai_zoom_btn.setObjectName("CtrlBtn")
         ai_zoom_btn.setFixedHeight(36)
         ai_zoom_btn.setToolTip("Use AI (Azure AI Foundry) to analyze activity\nand generate zoom keyframes.")
@@ -328,21 +318,7 @@ class EditorPanel(QWidget):
         vo_desc.setWordWrap(True)
         vo_lay.addWidget(vo_desc)
 
-        voice_row = QHBoxLayout()
-        voice_row.setSpacing(6)
-        voice_label = QLabel("Voice")
-        voice_label.setObjectName("Secondary")
-        voice_label.setFixedWidth(35)
-        voice_row.addWidget(voice_label)
-        self._voice_combo = QComboBox()
-        self._voice_combo.setObjectName("DepthCombo")
-        self._voice_combo.setFixedHeight(28)
-        for voice in ("alloy", "echo", "fable", "onyx", "nova", "shimmer"):
-            self._voice_combo.addItem(voice)
-        voice_row.addWidget(self._voice_combo, 1)
-        vo_lay.addLayout(voice_row)
-
-        self._btn_add_voiceover = QPushButton("\U0001f399 Add AI Voiceover")
+        self._btn_add_voiceover = QPushButton("\U0001f399 Add voiceover (AI)")
         self._btn_add_voiceover.setObjectName("CtrlBtn")
         self._btn_add_voiceover.setFixedHeight(32)
         self._btn_add_voiceover.setToolTip("Add an AI voiceover segment at the current playback position.")
@@ -895,8 +871,7 @@ class EditorPanel(QWidget):
 
     def _on_add_voiceover(self) -> None:
         """Request adding a voiceover segment at the current playback position."""
-        voice = self._voice_combo.currentText()
-        self.add_voiceover_requested.emit(-1.0, voice)  # -1 = use current playback time
+        self.add_voiceover_requested.emit(-1.0, "")  # voice selected in dialog
 
     def set_voiceover_status(self, text: str) -> None:
         """Update the voiceover status label from outside."""
@@ -911,8 +886,11 @@ class EditorPanel(QWidget):
 
     @property
     def selected_voice(self) -> str:
-        """Return the currently selected TTS voice."""
-        return self._voice_combo.currentText()
+        """Return the default TTS voice from settings."""
+        from PySide6.QtCore import QSettings
+        return QSettings("FollowCursor", "FollowCursor").value(
+            "ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"
+        )
 
     def _show_ai_settings(self) -> None:
         """Open the AI settings dialog."""
@@ -924,8 +902,7 @@ class EditorPanel(QWidget):
             endpoint=settings.value("ai/endpoint", ""),
             api_key=settings.value("ai/apiKey", ""),
             chat_model=settings.value("ai/chatModel", ""),
-            tts_model=settings.value("ai/ttsModel", ""),
-            tts_voice=settings.value("ai/ttsVoice", "alloy"),
+            tts_voice=settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
         )
 
         dlg = _AISettingsDialog(current, self)
@@ -934,11 +911,40 @@ class EditorPanel(QWidget):
             settings.setValue("ai/endpoint", result.endpoint)
             settings.setValue("ai/apiKey", result.api_key)
             settings.setValue("ai/chatModel", result.chat_model)
-            settings.setValue("ai/ttsModel", result.tts_model)
-            settings.setValue("ai/ttsVoice", result.tts_voice)
-            self._voice_combo.setCurrentText(result.tts_voice)
             self.ai_settings_changed.emit()
             logger.info("AI settings updated")
+            # Load available TTS voices in the background
+            self._load_tts_voices(result.endpoint, result.api_key)
+
+    def _load_tts_voices(self, endpoint: str, api_key: str) -> None:
+        """Fetch en-US voices from Azure Speech Service on a background thread."""
+        global _cached_voices
+        if not endpoint or not api_key:
+            return
+        import threading
+
+        def _fetch() -> None:
+            global _cached_voices
+            try:
+                import azure.cognitiveservices.speech as speechsdk
+                speech_config = speechsdk.SpeechConfig(
+                    subscription=api_key,
+                    endpoint=endpoint.rstrip("/"),
+                )
+                synthesizer = speechsdk.SpeechSynthesizer(
+                    speech_config=speech_config, audio_config=None,
+                )
+                result = synthesizer.get_voices_async().get()
+                if result.reason == speechsdk.ResultReason.VoicesListRetrieved:
+                    _cached_voices = sorted(
+                        v.short_name for v in result.voices
+                        if v.locale == "en-US" and "Neural" in v.short_name
+                    )
+                    logger.info("Loaded %d en-US voices", len(_cached_voices))
+            except Exception as exc:
+                logger.warning("Failed to load TTS voices: %s", exc)
+
+        threading.Thread(target=_fetch, daemon=True).start()
 
     def _show_about(self) -> None:
         """Show the About dialog with links to GitHub."""
@@ -956,6 +962,9 @@ class EditorPanel(QWidget):
             'style="color: #a78bfa;">GitHub Repository</a></p>'
             '<p><a href="https://github.com/sabbour/followcursor/issues" '
             'style="color: #a78bfa;">Report a Bug / Request a Feature</a></p>'
+            '<p style="color: #6c6890; font-size: 11px; margin-top: 8px;">'
+            "MIT License<br>"
+            "Copyright \u00a9 2026 Ahmed Sabbour</p>"
         )
         dlg.setStyleSheet(
             "QMessageBox { background: #1b1a2e; }"

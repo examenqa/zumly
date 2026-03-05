@@ -220,15 +220,19 @@ class VoiceoverSegment:
     id: str
     timestamp: float  # ms — start position on the timeline
     text: str  # user-authored voiceover text
-    voice: str = "alloy"  # TTS voice name
+    voice: str = "en-US-Ava:DragonHDLatestNeural"  # TTS voice name
     audio_path: str = ""  # path to synthesized audio file (empty = not yet synthesized)
     duration_ms: float = 0.0  # audio duration in ms (0 = unknown/not synthesized)
+    rate: float = 1.0  # speech rate multiplier (0.0–3.0, 1.0 = normal)
+    volume: float = 1.0  # volume multiplier (0.0–3.0, 1.0 = normal)
 
     @staticmethod
     def create(
         timestamp: float,
         text: str,
-        voice: str = "alloy",
+        voice: str = "en-US-Ava:DragonHDLatestNeural",
+        rate: float = 1.0,
+        volume: float = 1.0,
     ) -> "VoiceoverSegment":
         """Factory that auto-generates a UUID."""
         return VoiceoverSegment(
@@ -236,6 +240,8 @@ class VoiceoverSegment:
             timestamp=timestamp,
             text=text,
             voice=voice,
+            rate=rate,
+            volume=volume,
         )
 
     def to_dict(self) -> dict:
@@ -247,6 +253,10 @@ class VoiceoverSegment:
         }
         if self.duration_ms > 0:
             d["durationMs"] = self.duration_ms
+        if self.rate != 1.0:
+            d["rate"] = self.rate
+        if self.volume != 1.0:
+            d["volume"] = self.volume
         return d
 
     @staticmethod
@@ -255,8 +265,10 @@ class VoiceoverSegment:
             id=d["id"],
             timestamp=d["timestamp"],
             text=d["text"],
-            voice=d.get("voice", "alloy"),
+            voice=d.get("voice", "en-US-Ava:DragonHDLatestNeural"),
             duration_ms=d.get("durationMs", 0.0),
+            rate=d.get("rate", 1.0),
+            volume=d.get("volume", 1.0),
         )
 
 
