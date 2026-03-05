@@ -736,17 +736,25 @@ class VideoExporter(QObject):
                         break
                     last_f = frame.copy()
 
+                    # Use recording-relative timestamp for trim decisions
                     if frame_timestamps and f_idx < len(frame_timestamps):
-                        t_ms = frame_timestamps[f_idx]
+                        content_t_ms = frame_timestamps[f_idx]
                     else:
-                        t_ms = (f_idx / fps) * 1000.0
+                        content_t_ms = (f_idx / fps) * 1000.0
 
                     f_idx += 1
 
-                    if t_ms < eff_ts:
+                    if content_t_ms < eff_ts:
                         continue
-                    if t_ms > eff_te:
+                    if content_t_ms > eff_te:
                         break
+
+                    # Use output-aligned time for all animations so that
+                    # zoom, cursor, and click timing matches the constant-
+                    # fps output timeline — exactly as the preview uses
+                    # wall-clock time.  This prevents VFR recordings from
+                    # causing audio/animation desync in the exported video.
+                    t_ms = (exported / fps) * 1000.0 + eff_ts
 
                     zoom, px, py = engine.compute_at(t_ms)
 
@@ -780,14 +788,12 @@ class VideoExporter(QObject):
                 if last_f is not None and engine.keyframes and not pipe_err.is_set():
                     last_kf = engine.keyframes[-1]
                     end_time = last_kf.timestamp + last_kf.duration
-                    if frame_timestamps and f_idx > 0 and f_idx - 1 < len(frame_timestamps):
-                        video_end_ms = frame_timestamps[f_idx - 1]
-                    else:
-                        video_end_ms = (f_idx / fps) * 1000.0
+                    # Use output-aligned time for the last exported frame
+                    video_end_ms = ((exported - 1) / fps) * 1000.0 + eff_ts if exported > 0 else eff_ts
                     if end_time > video_end_ms:
                         extra = int((end_time - video_end_ms) / 1000.0 * fps) + 1
                         for ei in range(extra):
-                            t_ms = video_end_ms + (ei / fps) * 1000.0
+                            t_ms = video_end_ms + ((ei + 1) / fps) * 1000.0
                             zoom, px, py = engine.compute_at(t_ms)
                             fc = last_f.copy()
                             if _has_cursor:

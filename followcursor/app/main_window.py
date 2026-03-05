@@ -253,6 +253,89 @@ class _FinalizeWorker(QThread):
         return actual_fps
 
 
+class _PreviewSynthWorker(QThread):
+    """Background thread for voiceover preview TTS synthesis.
+
+    Uses the same ``_build_speech_config`` helper as the final synthesis
+    path so voice resolution is identical (region vs endpoint).
+    """
+    done = CoreSignal(str)    # output audio path
+    error = CoreSignal(str)   # error message
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        voice: str,
+        text: str,
+        output_path: str,
+        rate: float,
+        volume: float,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._endpoint = endpoint
+        self._api_key = api_key
+        self._voice = voice
+        self._text = text
+        self._output_path = output_path
+        self._rate = rate
+        self._volume = volume
+
+    def run(self) -> None:  # noqa: D401
+        try:
+            import azure.cognitiveservices.speech as speechsdk
+        except ImportError:
+            self.error.emit("azure-cognitiveservices-speech not installed.")
+            return
+
+        try:
+            from .ai_service import _build_speech_config
+            speech_config = _build_speech_config(self._api_key, self._endpoint)
+            speech_config.speech_synthesis_voice_name = self._voice
+
+            audio_config = speechsdk.audio.AudioOutputConfig(
+                filename=self._output_path
+            )
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=speech_config,
+                audio_config=audio_config,
+            )
+
+            use_ssml = (
+                abs(self._rate - 1.0) > 0.05 or abs(self._volume - 1.0) > 0.05
+            )
+            if use_ssml:
+                import html as _html
+                rate_str = f"{int((self._rate - 1.0) * 100):+d}%"
+                vol_str = f"{int((self._volume - 1.0) * 100):+d}%"
+                ssml = (
+                    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
+                    f'<voice name="{_html.escape(self._voice)}">'
+                    f'<prosody rate="{rate_str}" volume="{vol_str}">'
+                    f'{_html.escape(self._text)}'
+                    '</prosody></voice></speak>'
+                )
+                result = synthesizer.speak_ssml_async(ssml).get()
+            else:
+                result = synthesizer.speak_text_async(self._text).get()
+
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                self.done.emit(self._output_path)
+            elif result.reason == speechsdk.ResultReason.Canceled:
+                details = result.cancellation_details
+                err = (
+                    str(details.error_details)[:150]
+                    if details.error_details
+                    else str(details.reason)
+                )
+                self.error.emit(f"Error: {err}")
+            else:
+                self.error.emit(f"Unexpected: {result.reason}")
+        except Exception as exc:
+            self.error.emit(f"Error: {str(exc)[:150]}")
+
+
 class _VoiceoverDialog(QDialog):
     """Dialog for creating or editing a voiceover segment.
 
@@ -458,20 +541,6 @@ class _VoiceoverDialog(QDialog):
             self._status_label.setVisible(True)
             return
 
-        self._preview_btn.setEnabled(False)
-        self._status_label.setText("Generating speech\u2026")
-        self._status_label.setVisible(True)
-        self._progress.setVisible(True)
-        QApplication.processEvents()
-
-        try:
-            import azure.cognitiveservices.speech as speechsdk
-        except ImportError:
-            self._status_label.setText("azure-cognitiveservices-speech not installed.")
-            self._preview_btn.setEnabled(True)
-            self._progress.setVisible(False)
-            return
-
         # Load AI settings for endpoint + key
         from PySide6.QtCore import QSettings
         settings = QSettings("FollowCursor", "FollowCursor")
@@ -479,83 +548,70 @@ class _VoiceoverDialog(QDialog):
         api_key = settings.value("ai/apiKey", "")
         if not endpoint or not api_key:
             self._status_label.setText("Configure AI Settings first (endpoint + API key).")
-            self._preview_btn.setEnabled(True)
-            self._progress.setVisible(False)
+            self._status_label.setVisible(True)
             return
+
+        # Stop any currently playing preview audio
+        try:
+            import winsound
+            winsound.PlaySound(None, winsound.SND_PURGE)
+        except Exception:
+            pass
+
+        self._preview_btn.setEnabled(False)
+        self._status_label.setText("Generating speech\u2026")
+        self._status_label.setVisible(True)
+        self._progress.setVisible(True)
 
         voice = self._voice_combo.currentText().strip()
         rate = self._rate_slider.value() / 100.0
         vol = self._vol_slider.value() / 100.0
-        try:
-            speech_config = speechsdk.SpeechConfig(
-                subscription=api_key,
-                endpoint=endpoint.rstrip("/"),
-            )
 
-            speech_config.speech_synthesis_voice_name = voice
+        # Run synthesis in a background thread to keep the dialog responsive.
+        # Uses _build_speech_config from ai_service so the same region-based
+        # config is used as in the final "Add" path (avoids voice mismatch).
+        import tempfile
+        output_path = os.path.join(
+            tempfile.gettempdir(), "followcursor_vo_preview.wav"
+        )
 
-            # Save to temp file so we can reuse on OK
-            import tempfile
-            output_path = os.path.join(
-                tempfile.gettempdir(), "followcursor_vo_preview.wav"
-            )
-            audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
-            synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=speech_config,
-                audio_config=audio_config,
-            )
+        self._synth_worker = _PreviewSynthWorker(
+            endpoint, api_key, voice, text, output_path, rate, vol, parent=self,
+        )
+        self._synth_worker.done.connect(self._on_preview_synth_done)
+        self._synth_worker.error.connect(self._on_preview_synth_error)
+        self._synth_worker.start()
 
-            self._status_label.setText("Generating speech\u2026")
-            QApplication.processEvents()
+    def _on_preview_synth_done(self, output_path: str) -> None:
+        """Handle successful TTS synthesis — play the audio."""
+        voice = self._voice_combo.currentText().strip()
+        text = self._text_edit.toPlainText().strip()
+        rate = self._rate_slider.value() / 100.0
+        vol = self._vol_slider.value() / 100.0
 
-            # Use plain text when rate and volume are at defaults
-            use_ssml = abs(rate - 1.0) > 0.05 or abs(vol - 1.0) > 0.05
-            if use_ssml:
-                import html as _html
-                rate_rel = int((rate - 1.0) * 100)
-                rate_str = f"{rate_rel:+d}%"
-                vol_rel = int((vol - 1.0) * 100)
-                vol_str = f"{vol_rel:+d}%"
-                ssml = (
-                    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
-                    f'<voice name="{_html.escape(voice)}">'
-                    f'<prosody rate="{rate_str}" volume="{vol_str}">'
-                    f'{_html.escape(text)}'
-                    '</prosody></voice></speak>'
-                )
-                result = synthesizer.speak_ssml_async(ssml).get()
-            else:
-                result = synthesizer.speak_text_async(text).get()
+        self._preview_audio_path = output_path
+        self._preview_text = text
+        self._preview_voice = voice
+        self._preview_rate = rate
+        self._preview_volume = vol
 
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                # Cache the generated audio
-                self._preview_audio_path = output_path
-                self._preview_text = text
-                self._preview_voice = voice
-                self._preview_rate = rate
-                self._preview_volume = vol
+        self._status_label.setText("Playing\u2026")
+        self._progress.setVisible(False)
+        self._preview_btn.setEnabled(True)
 
-                # Play through speaker
-                self._status_label.setText("Playing\u2026")
-                self._progress.setVisible(False)
-                QApplication.processEvents()
-                import winsound
-                winsound.PlaySound(
-                    output_path,
-                    winsound.SND_FILENAME | winsound.SND_NODEFAULT,
-                )
-                self._status_label.setText("\u2713 Preview complete.")
-            elif result.reason == speechsdk.ResultReason.Canceled:
-                details = result.cancellation_details
-                err = str(details.error_details)[:150] if details.error_details else str(details.reason)
-                self._status_label.setText(f"Error: {err}")
-            else:
-                self._status_label.setText(f"Unexpected: {result.reason}")
-        except Exception as exc:
-            self._status_label.setText(f"Error: {str(exc)[:150]}")
-        finally:
-            self._preview_btn.setEnabled(True)
-            self._progress.setVisible(False)
+        # Play asynchronously so the dialog stays responsive
+        import winsound
+        winsound.PlaySound(
+            output_path,
+            winsound.SND_FILENAME | winsound.SND_NODEFAULT | winsound.SND_ASYNC,
+        )
+        self._status_label.setText("\u2713 Preview complete.")
+
+    def _on_preview_synth_error(self, msg: str) -> None:
+        """Handle TTS synthesis failure."""
+        self._status_label.setText(msg)
+        self._preview_btn.setEnabled(True)
+        self._progress.setVisible(False)
 
     def _finish(self, code: int) -> None:
         self._result_code = code
