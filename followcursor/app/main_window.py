@@ -555,6 +555,7 @@ class MainWindow(QMainWindow):
             lambda t: self._on_add_voiceover_requested(t, self._editor.selected_voice)
         )
         self._timeline.voiceover_clicked.connect(self._on_voiceover_clicked)
+        self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
@@ -1396,6 +1397,13 @@ class MainWindow(QMainWindow):
             self._mark_dirty()
             self._refresh_editor()
             self._editor.set_voiceover_status("Voiceover removed.")
+
+    def _on_voiceover_deleted(self, seg_id: str) -> None:
+        """Handle direct voiceover deletion (keyboard Delete key)."""
+        self._voiceover_segments = [s for s in self._voiceover_segments if s.id != seg_id]
+        self._mark_dirty()
+        self._refresh_editor()
+        self._editor.set_voiceover_status("Voiceover removed.")
 
     def _synthesize_voiceover(self, seg) -> None:
         """Synthesize TTS audio for a voiceover segment."""

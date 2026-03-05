@@ -241,19 +241,6 @@ class EditorPanel(QWidget):
         self._trim_end_ms: float = 0.0
         self._duration: float = 0.0
 
-        # ── Add Keyframe (always visible, not collapsible) ───────────
-        kf_widget = QWidget()
-        kf_layout = QVBoxLayout(kf_widget)
-        kf_layout.setContentsMargins(16, 8, 16, 8)
-        kf_layout.setSpacing(6)
-        self._btn_add_zoom = QPushButton("🔍 Add Zoom")
-        self._btn_add_zoom.setObjectName("CtrlBtn")
-        self._btn_add_zoom.setFixedHeight(32)
-        self._btn_add_zoom.setToolTip("Add a zoom-in + auto zoom-out keyframe pair at the current position")
-        self._btn_add_zoom.clicked.connect(self._on_manual_zoom_in)
-        kf_layout.addWidget(self._btn_add_zoom)
-        self._container.addWidget(kf_widget)
-
         # ── Smart Zoom (collapsible) ─────────────────────────────────
         zoom_body = QWidget()
         zoom_lay = QVBoxLayout(zoom_body)
@@ -296,6 +283,23 @@ class EditorPanel(QWidget):
         self._auto_status.setWordWrap(True)
         self._auto_status.setVisible(False)
         zoom_lay.addWidget(self._auto_status)
+
+        # "or" separator
+        or_row = QHBoxLayout()
+        or_row.setSpacing(8)
+        or_line_l = QFrame()
+        or_line_l.setFrameShape(QFrame.Shape.HLine)
+        or_line_l.setStyleSheet("background-color: #2d2b45; max-height: 1px;")
+        or_row.addWidget(or_line_l, 1)
+        or_label = QLabel("or")
+        or_label.setObjectName("Secondary")
+        or_label.setStyleSheet("color: #6c6890; font-size: 11px;")
+        or_row.addWidget(or_label)
+        or_line_r = QFrame()
+        or_line_r.setFrameShape(QFrame.Shape.HLine)
+        or_line_r.setStyleSheet("background-color: #2d2b45; max-height: 1px;")
+        or_row.addWidget(or_line_r, 1)
+        zoom_lay.addLayout(or_row)
 
         ai_zoom_btn = QPushButton("\U0001f916 AI Auto-generate zoom")
         ai_zoom_btn.setObjectName("CtrlBtn")
@@ -471,9 +475,9 @@ class EditorPanel(QWidget):
 
         info_row.addStretch()
 
-        self._btn_settings = QPushButton("⚙")
+        self._btn_settings = QPushButton("Settings")
         self._btn_settings.setObjectName("CtrlBtn")
-        self._btn_settings.setFixedSize(28, 28)
+        self._btn_settings.setFixedHeight(28)
         self._btn_settings.setToolTip("Settings")
         self._btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_settings.clicked.connect(self._show_settings_menu)
@@ -533,6 +537,11 @@ class EditorPanel(QWidget):
             act = encoder_menu.addAction(f"{tick}{label}")
             act.setData(enc_id)
             act.triggered.connect(lambda checked=False, eid=enc_id: self._set_encoder(eid))
+
+        # About
+        menu.addSeparator()
+        about_act = menu.addAction("About FollowCursor\u2026")
+        about_act.triggered.connect(self._show_about)
 
         menu.exec(self._btn_settings.mapToGlobal(self._btn_settings.rect().topRight()))
 
@@ -930,3 +939,30 @@ class EditorPanel(QWidget):
             self._voice_combo.setCurrentText(result.tts_voice)
             self.ai_settings_changed.emit()
             logger.info("AI settings updated")
+
+    def _show_about(self) -> None:
+        """Show the About dialog with links to GitHub."""
+        from PySide6.QtWidgets import QMessageBox
+        from ..version import __version__
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("About FollowCursor")
+        dlg.setIcon(QMessageBox.Icon.NoIcon)
+        dlg.setTextFormat(Qt.TextFormat.RichText)
+        dlg.setText(
+            f"<h3>FollowCursor v{__version__}</h3>"
+            "<p>A Windows screen recorder with cinematic<br>"
+            "cursor-following zoom and AI features.</p>"
+            '<p><a href="https://github.com/sabbour/followcursor" '
+            'style="color: #a78bfa;">GitHub Repository</a></p>'
+            '<p><a href="https://github.com/sabbour/followcursor/issues" '
+            'style="color: #a78bfa;">Report a Bug / Request a Feature</a></p>'
+        )
+        dlg.setStyleSheet(
+            "QMessageBox { background: #1b1a2e; }"
+            "QMessageBox QLabel { color: #e4e4ed; font-size: 13px; }"
+            "QPushButton { min-width: 80px; min-height: 28px;"
+            "  background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 16px; }"
+            "QPushButton:hover { background: #8b5cf6; }"
+        )
+        dlg.exec()

@@ -44,7 +44,8 @@ class _TimelineTrack(QWidget):
     pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)   # timestamp ms — add zoom at this time
     add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover at this time
-    voiceover_clicked = Signal(str)       # voiceover segment id — edit/delete
+    voiceover_clicked = Signal(str)       # voiceover segment id — edit
+    voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()             # emitted when any drag completes
 
@@ -96,6 +97,8 @@ class _TimelineTrack(QWidget):
 
         # Zoom segment selection
         self._selected_segment_id: str = ""     # start kf id of selected segment
+        # Voiceover selection
+        self._selected_vo_id: str = ""          # voiceover segment id
         # Track mouse press position to distinguish click from drag
         self._press_pos: QPointF | None = None
         self._drag_actually_moved: bool = False
@@ -142,7 +145,15 @@ class _TimelineTrack(QWidget):
         # Check voiceover segment
         vo_id = self._voiceover_hit_test(mx, my)
         if vo_id:
-            self.voiceover_clicked.emit(vo_id)
+            self._selected_vo_id = vo_id
+            self.update()
+            menu = QMenu(self)
+            menu.setStyleSheet(self._MENU_STYLE)
+            edit_act = menu.addAction("✏  Edit voiceover")
+            edit_act.triggered.connect(lambda: self.voiceover_clicked.emit(vo_id))
+            del_act = menu.addAction("🗑  Delete voiceover")
+            del_act.triggered.connect(lambda: self._delete_selected_voiceover())
+            menu.exec(self.mapToGlobal(pos))
             return
         # Empty space — offer to add a zoom section or voiceover
         if self.duration > 0 and self.width() > 0:
@@ -358,6 +369,15 @@ class _TimelineTrack(QWidget):
         """Draw rounded-rect zoom segment blocks with internal zoom-in/out markers."""
         self._segments = []
         self._pan_point_markers = []
+
+        # Always draw track label
+        label_font = QFont()
+        label_font.setFamily("Segoe UI Variable")
+        label_font.setPixelSize(10)
+        painter.setFont(label_font)
+        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.drawText(4, top + h - 3, "Zoom")
+
         if not self.keyframes or self.duration <= 0:
             return
 
@@ -541,16 +561,18 @@ class _TimelineTrack(QWidget):
     def _draw_voiceover_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
         """Draw voiceover segments as teal pill-shaped blocks with text labels."""
         dur = self.duration
-        if dur <= 0 or not self.voiceover_segments:
-            return
+        self._vo_rects: list[tuple] = []  # [(x, w, seg_id)] for hit testing
 
-        # Track label
+        # Always draw track label
         label_font = QFont()
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
         painter.setPen(QPen(QColor("#6c6890"), 1))
         painter.drawText(4, top + h - 3, "Voice")
+
+        if dur <= 0 or not self.voiceover_segments:
+            return
 
         seg_font = QFont()
         seg_font.setFamily("Segoe UI Variable")
@@ -566,10 +588,19 @@ class _TimelineTrack(QWidget):
             else:
                 seg_w = max(20, 40)  # minimum visible width
 
-            # Segment fill
-            color = QColor("#0d9488") if seg.audio_path else QColor("#475569")
+            # Segment fill — highlight selected
+            is_selected = (seg.id == self._selected_vo_id)
+            if is_selected:
+                color = QColor("#14b8a6")
+                border_color = QColor("#5eead4")
+            elif seg.audio_path:
+                color = QColor("#0d9488")
+                border_color = QColor("#14b8a6")
+            else:
+                color = QColor("#475569")
+                border_color = QColor("#64748b")
             painter.setBrush(QBrush(color))
-            painter.setPen(QPen(QColor("#14b8a6" if seg.audio_path else "#64748b"), 1))
+            painter.setPen(QPen(border_color, 2 if is_selected else 1))
             painter.drawRoundedRect(QRectF(sx, top, seg_w, h), 4, 4)
 
             # Text label (truncated)
@@ -754,11 +785,21 @@ class _TimelineTrack(QWidget):
             if click_idx >= 0:
                 self._selected_click_idx = click_idx
                 self._selected_segment_id = ""
+                self._selected_vo_id = ""
                 self.update()
                 return
-            # Regular click — seek (and deselect any click/segment)
+            # Check voiceover segment selection (left-click)
+            vo_id = self._voiceover_hit_test(mx, my)
+            if vo_id:
+                self._selected_vo_id = vo_id
+                self._selected_click_idx = -1
+                self._selected_segment_id = ""
+                self.update()
+                return
+            # Regular click — seek (and deselect any click/segment/voiceover)
             self._selected_click_idx = -1
             self._selected_segment_id = ""
+            self._selected_vo_id = ""
             ratio = max(0.0, min(1.0, mx / self.width()))
             self.clicked.emit(ratio)
             self.update()
@@ -898,12 +939,26 @@ class _TimelineTrack(QWidget):
             self._selected_click_idx = -1
             self.update()
 
+    def _delete_selected_voiceover(self) -> None:
+        """Delete the currently selected voiceover segment."""
+        if self._selected_vo_id:
+            vid = self._selected_vo_id
+            self._selected_vo_id = ""
+            self.voiceover_clicked.emit(vid)  # main_window handles via edit dialog
+            self.update()
+
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self._selected_segment_id:
                 sid = self._selected_segment_id
                 self._selected_segment_id = ""
                 self.segment_deleted.emit(sid)
+                self.update()
+                return
+            if self._selected_vo_id:
+                vid = self._selected_vo_id
+                self._selected_vo_id = ""
+                self.voiceover_deleted.emit(vid)
                 self.update()
                 return
             if self._selected_click_idx >= 0:
@@ -924,7 +979,8 @@ class TimelineWidget(QWidget):
     pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)  # timestamp ms — add zoom at this time
     add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover here
-    voiceover_clicked = Signal(str)       # voiceover segment id — edit/delete
+    voiceover_clicked = Signal(str)       # voiceover segment id — edit
+    voiceover_deleted = Signal(str)       # voiceover segment id — delete
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()            # emitted when any drag completes
 
@@ -994,6 +1050,7 @@ class TimelineWidget(QWidget):
         self._track.add_zoom_requested.connect(self.add_zoom_requested)
         self._track.add_voiceover_requested.connect(self.add_voiceover_requested)
         self._track.voiceover_clicked.connect(self.voiceover_clicked)
+        self._track.voiceover_deleted.connect(self.voiceover_deleted)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
         layout.addWidget(self._track)
