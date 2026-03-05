@@ -784,52 +784,40 @@ class PreviewWidget(QWidget):
         W: float, H: float,
         cx: float, cy: float, cw: float, ch: float,
     ) -> None:
-        """Draw crosshatch pattern on letterbox/pillarbox margins.
+        """Draw semi-transparent overlay on letterbox/pillarbox margins.
 
         These areas won't appear in the exported video.
+        Uses a simple dark fill with a dashed border — no per-pixel
+        crosshatch to avoid CPU overhead during playback.
         """
         from PySide6.QtGui import QColor, QPen, QBrush
         from PySide6.QtCore import QRectF
 
-        # Semi-transparent dark fill
-        margin_color = QColor(0, 0, 0, 140)
-
         # Margin rects (up to 4 regions around the canvas)
         rects: list[QRectF] = []
-        if cy > 0.5:  # top bar
+        if cy > 0.5:
             rects.append(QRectF(0, 0, W, cy))
-        if cy + ch < H - 0.5:  # bottom bar
+        if cy + ch < H - 0.5:
             rects.append(QRectF(0, cy + ch, W, H - cy - ch))
-        if cx > 0.5:  # left bar
+        if cx > 0.5:
             rects.append(QRectF(0, cy, cx, ch))
-        if cx + cw < W - 0.5:  # right bar
+        if cx + cw < W - 0.5:
             rects.append(QRectF(cx + cw, cy, W - cx - cw, ch))
 
         if not rects:
             return
 
-        # Fill margins
+        # Semi-transparent dark fill
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(margin_color))
+        painter.setBrush(QBrush(QColor(0, 0, 0, 160)))
         for r in rects:
             painter.drawRect(r)
 
-        # Draw crosshatch lines
-        hatch_pen = QPen(QColor(255, 255, 255, 40), 1)
-        painter.setPen(hatch_pen)
+        # Dashed border along the canvas edge
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        spacing = 12
-        for r in rects:
-            painter.save()
-            painter.setClipRect(r)
-            x0, y0 = int(r.x()), int(r.y())
-            x1, y1 = int(r.x() + r.width()), int(r.y() + r.height())
-            # Diagonal lines (top-left to bottom-right)
-            start = x0 + y0 - max(int(r.width()), int(r.height()))
-            end = x1 + y1
-            for k in range(start, end, spacing):
-                painter.drawLine(k - y0 + y0, y0, k - y1 + y0, y1)
-            painter.restore()
+        pen = QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawRect(QRectF(cx, cy, cw, ch))
 
     # ── debug overlay helpers ───────────────────────────────────────
 

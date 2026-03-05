@@ -2728,10 +2728,16 @@ class MainWindow(QMainWindow):
             self._project_path = path
             self._unsaved_changes = False
             self._update_title()
+            self._title_bar.set_export_text("Saving\u2026")
+            self._title_bar.set_export_enabled(False)
+            self._btn_save.setEnabled(False)
             self._save_worker.start()
 
     def _on_save_done(self, path: str) -> None:
         """Background save finished successfully."""
+        self._title_bar.set_export_text("\u2b06  Export")
+        self._title_bar.set_export_enabled(True)
+        self._btn_save.setEnabled(True)
         name = os.path.basename(path)
         self._status_text.setText(
             f'Saved <a href="file:///{path.replace(os.sep, "/")}" '
@@ -2743,6 +2749,9 @@ class MainWindow(QMainWindow):
 
     def _on_save_failed(self, error: str) -> None:
         """Background save failed."""
+        self._title_bar.set_export_text("\u2b06  Export")
+        self._title_bar.set_export_enabled(True)
+        self._btn_save.setEnabled(True)
         self._unsaved_changes = True
         self._update_title()
         self._status_text.setText(f"Save error: {error}")
@@ -2796,6 +2805,9 @@ class MainWindow(QMainWindow):
             self._frame_timestamps = session.frame_timestamps or []
             self._trim_start_ms = session.trim_start_ms
             self._trim_end_ms = session.trim_end_ms
+
+            # Restore voiceover segments
+            self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []
 
             # Restore background preset if saved
             loaded_bg = proj.get("bg_preset")
