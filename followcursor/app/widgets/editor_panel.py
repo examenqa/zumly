@@ -463,7 +463,7 @@ class EditorPanel(QWidget):
         outer.addWidget(bottom_bar)
 
         # Debug overlay state (managed via settings menu) — on by default
-        self._debug_overlay_enabled = True
+        self._debug_overlay_enabled = False
 
         # Encoder preference — deferred detection for faster startup.
         # Actual detection happens lazily on first settings menu open or export.

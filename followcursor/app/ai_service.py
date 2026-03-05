@@ -528,6 +528,45 @@ def generate_narration(
 # ── Text-to-Speech ──────────────────────────────────────────────────
 
 
+def _extract_region(endpoint: str) -> str:
+    """Extract the Azure region from a Cognitive Services endpoint URL.
+
+    ``https://eastus.api.cognitive.microsoft.com`` → ``eastus``
+    ``https://myresource.cognitiveservices.azure.com`` → extracts via REST
+    Returns empty string if region cannot be determined.
+    """
+    import re
+    # Regional endpoint: https://<region>.api.cognitive.microsoft.com
+    m = re.match(r"https?://([^.]+)\.api\.cognitive\.microsoft\.com", endpoint)
+    if m:
+        return m.group(1)
+    # Custom domain: https://<name>.cognitiveservices.azure.com
+    # Try to get region from the resource — use a known region mapping
+    # For now, try extracting from a HEAD request's headers
+    try:
+        req = urllib.request.Request(endpoint, method="HEAD")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            region = resp.headers.get("x-]]ms-region", "")
+            if region:
+                return region.lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _build_speech_config(api_key: str, endpoint: str):
+    """Create a SpeechConfig that works with both regional and custom-domain endpoints."""
+    import azure.cognitiveservices.speech as speechsdk
+
+    # Try to use region-based config for better compatibility with HD voices
+    region = _extract_region(endpoint)
+    if region:
+        return speechsdk.SpeechConfig(subscription=api_key, region=region)
+
+    # Fallback to endpoint-based config
+    return speechsdk.SpeechConfig(subscription=api_key, endpoint=endpoint)
+
+
 def synthesize_speech(
     settings: AISettings,
     text: str,
@@ -555,10 +594,7 @@ def synthesize_speech(
         )
 
     endpoint = settings.endpoint.rstrip("/")
-    speech_config = speechsdk.SpeechConfig(
-        subscription=settings.api_key,
-        endpoint=endpoint,
-    )
+    speech_config = _build_speech_config(settings.api_key, endpoint)
 
     if not output_path.lower().endswith(".wav"):
         output_path = output_path.rsplit(".", 1)[0] + ".wav" if "." in output_path else output_path + ".wav"
@@ -569,26 +605,31 @@ def synthesize_speech(
         audio_config=audio_config,
     )
 
-    # Build SSML with prosody for rate and volume control
-    import html as _html
-    #  rate: decimal multiplier (1.0 = normal, 0.5 = half, 2.0 = double)
-    # volume: map 0.0-3.0 to dB offset (-60dB to +10dB)
-    import math
-    if volume <= 0.01:
-        vol_str = "silent"
-    else:
-        # Map 0.0–3.0 → roughly -40dB to +10dB (1.0 = 0dB)
-        vol_db = 20 * math.log10(max(0.01, volume))
-        vol_str = f"{vol_db:+.1f}dB"
-    ssml = (
-        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
-        f'<voice name="{_html.escape(settings.tts_voice)}">'
-        f'<prosody rate="{rate:.2f}" volume="{vol_str}">'
-        f'{_html.escape(text)}'
-        '</prosody></voice></speak>'
-    )
+    speech_config.speech_synthesis_voice_name = settings.tts_voice
 
-    result = synthesizer.speak_ssml_async(ssml).get()
+    # Use plain text when rate and volume are at defaults
+    use_ssml = abs(rate - 1.0) > 0.05 or abs(volume - 1.0) > 0.05
+
+    if use_ssml:
+        # Build SSML with prosody
+        import html as _html
+        # Rate: Azure SSML uses relative percentage (+0% = normal, -50% = half, +100% = double)
+        rate_rel = int((rate - 1.0) * 100)
+        rate_str = f"{rate_rel:+d}%"
+        # Volume: relative percentage (+0% = normal)
+        vol_rel = int((volume - 1.0) * 100)
+        vol_str = f"{vol_rel:+d}%"
+        ssml = (
+            '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
+            f'<voice name="{_html.escape(settings.tts_voice)}">'
+            f'<prosody rate="{rate_str}" volume="{vol_str}">'
+            f'{_html.escape(text)}'
+            '</prosody></voice></speak>'
+        )
+        logger.info("TTS SSML: rate=%s volume=%s", rate_str, vol_str)
+        result = synthesizer.speak_ssml_async(ssml).get()
+    else:
+        result = synthesizer.speak_text_async(text).get()
 
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
         logger.info("TTS audio saved: %s", output_path)

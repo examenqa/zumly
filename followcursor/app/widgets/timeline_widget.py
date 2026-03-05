@@ -46,6 +46,7 @@ class _TimelineTrack(QWidget):
     add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover at this time
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
+    voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()             # emitted when any drag completes
 
@@ -788,12 +789,21 @@ class _TimelineTrack(QWidget):
                 self._selected_vo_id = ""
                 self.update()
                 return
-            # Check voiceover segment selection (left-click)
+            # Check voiceover segment selection (left-click) — start drag
             vo_id = self._voiceover_hit_test(mx, my)
             if vo_id:
                 self._selected_vo_id = vo_id
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
+                # Start voiceover drag
+                self._dragging = True
+                self._drag_mode = "voiceover"
+                self._drag_kf_id = vo_id
+                click_ms = (mx / self.width()) * self.duration
+                seg = next((s for s in self.voiceover_segments if s.id == vo_id), None)
+                self._drag_body_offset = click_ms - seg.timestamp if seg else 0.0
+                self._press_pos = event.position()
+                self._drag_actually_moved = False
                 self.update()
                 return
             # Regular click — seek (and deselect any click/segment/voiceover)
@@ -877,6 +887,18 @@ class _TimelineTrack(QWidget):
                     new_time = max(min_t, min(new_time, max_t))
                 self.keyframe_moved.emit(self._drag_kf_id, new_time)
                 return
+            elif self._drag_mode == "voiceover" and self._drag_kf_id:
+                ratio = max(0.0, min(1.0, mx / self.width()))
+                new_time = max(0.0, ratio * self.duration - self._drag_body_offset)
+                new_time = min(new_time, self.duration)
+                if self._press_pos and (
+                    abs(mx - self._press_pos.x()) > 3
+                    or abs(my - self._press_pos.y()) > 3
+                ):
+                    self._drag_actually_moved = True
+                if self._drag_actually_moved:
+                    self.voiceover_moved.emit(self._drag_kf_id, new_time)
+                return
 
         # Update cursor based on hover over edge handles, trim handles, pan points, or segment body
         # Check pan point hover
@@ -894,6 +916,8 @@ class _TimelineTrack(QWidget):
         elif trim_hit:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
         elif self._segment_body_hit_info(mx, my):
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif self._voiceover_hit_test(mx, my):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
             self.setCursor(Qt.CursorShape.CrossCursor)
@@ -981,6 +1005,7 @@ class TimelineWidget(QWidget):
     add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover here
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete
+    voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()            # emitted when any drag completes
 
@@ -1051,6 +1076,7 @@ class TimelineWidget(QWidget):
         self._track.add_voiceover_requested.connect(self.add_voiceover_requested)
         self._track.voiceover_clicked.connect(self.voiceover_clicked)
         self._track.voiceover_deleted.connect(self.voiceover_deleted)
+        self._track.voiceover_moved.connect(self.voiceover_moved)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
         layout.addWidget(self._track)

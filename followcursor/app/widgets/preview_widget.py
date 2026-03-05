@@ -706,6 +706,10 @@ class PreviewWidget(QWidget):
         painter.setClipping(False)
         painter.resetTransform()
 
+        # Crosshatch overlay on letterbox/pillarbox margins (areas not in final video)
+        if has_margins:
+            self._draw_margin_overlay(painter, W, H, canvas_x, canvas_y, canvas_w, canvas_h)
+
         # Debug overlay: zoom target markers
         if self._debug_overlay and self._debug_keyframes:
             self._draw_debug_overlay(painter)
@@ -772,6 +776,60 @@ class PreviewWidget(QWidget):
         painter.setFont(font)
         painter.setPen(QColor(160, 160, 185))
         painter.drawText(0, cy + 50, W, 24, Qt.AlignmentFlag.AlignHCenter, "Preview paused for better performance")
+
+    # ── margin overlay ────────────────────────────────────────────
+
+    def _draw_margin_overlay(
+        self, painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float, cw: float, ch: float,
+    ) -> None:
+        """Draw crosshatch pattern on letterbox/pillarbox margins.
+
+        These areas won't appear in the exported video.
+        """
+        from PySide6.QtGui import QColor, QPen, QBrush
+        from PySide6.QtCore import QRectF
+
+        # Semi-transparent dark fill
+        margin_color = QColor(0, 0, 0, 140)
+
+        # Margin rects (up to 4 regions around the canvas)
+        rects: list[QRectF] = []
+        if cy > 0.5:  # top bar
+            rects.append(QRectF(0, 0, W, cy))
+        if cy + ch < H - 0.5:  # bottom bar
+            rects.append(QRectF(0, cy + ch, W, H - cy - ch))
+        if cx > 0.5:  # left bar
+            rects.append(QRectF(0, cy, cx, ch))
+        if cx + cw < W - 0.5:  # right bar
+            rects.append(QRectF(cx + cw, cy, W - cx - cw, ch))
+
+        if not rects:
+            return
+
+        # Fill margins
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(margin_color))
+        for r in rects:
+            painter.drawRect(r)
+
+        # Draw crosshatch lines
+        hatch_pen = QPen(QColor(255, 255, 255, 40), 1)
+        painter.setPen(hatch_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        spacing = 12
+        for r in rects:
+            painter.save()
+            painter.setClipRect(r)
+            x0, y0 = int(r.x()), int(r.y())
+            x1, y1 = int(r.x() + r.width()), int(r.y() + r.height())
+            # Diagonal lines (top-left to bottom-right)
+            start = x0 + y0 - max(int(r.width()), int(r.height()))
+            end = x1 + y1
+            for k in range(start, end, spacing):
+                painter.drawLine(k - y0 + y0, y0, k - y1 + y0, y1)
+            painter.restore()
 
     # ── debug overlay helpers ───────────────────────────────────────
 

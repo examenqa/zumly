@@ -609,10 +609,15 @@ class VideoExporter(QObject):
             if voiceover_segments and not _is_gif:
                 ready = [s for s in voiceover_segments if s.audio_path and os.path.isfile(s.audio_path)]
                 if ready:
+                    self.status.emit(f"Merging {len(ready)} voiceover segment(s)\u2026")
                     _merged_audio_path = _merge_voiceover_segments(
                         ready, duration_ms, trim_start_ms, trim_end_ms, ffmpeg
                     )
                     _has_audio = bool(_merged_audio_path) and os.path.isfile(_merged_audio_path)
+                    if _has_audio:
+                        logger.info("Voiceover audio ready: %s", _merged_audio_path)
+                    else:
+                        logger.warning("Voiceover merge produced no output, exporting without audio")
 
             def _launch_ffmpeg(enc_id: str) -> subprocess.Popen:
                 if _is_gif:
@@ -645,7 +650,7 @@ class VideoExporter(QObject):
                         cmd += ["-i", _merged_audio_path]
                     cmd += enc_args
                     if _has_audio:
-                        cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
+                        cmd += ["-c:a", "aac", "-b:a", "192k"]
                     cmd += [output_path]
                     logger.info("Launching ffmpeg with encoder %s: %s", enc_id, " ".join(cmd))
                 return subprocess.Popen(

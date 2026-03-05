@@ -492,6 +492,8 @@ class _VoiceoverDialog(QDialog):
                 endpoint=endpoint.rstrip("/"),
             )
 
+            speech_config.speech_synthesis_voice_name = voice
+
             # Save to temp file so we can reuse on OK
             import tempfile
             output_path = os.path.join(
@@ -503,27 +505,27 @@ class _VoiceoverDialog(QDialog):
                 audio_config=audio_config,
             )
 
-            # Build SSML with prosody
-            import html as _html
-            import math
-            # Volume: map multiplier to dB offset (1.0 = 0dB)
-            if vol <= 0.01:
-                vol_str = "silent"
-            else:
-                vol_db = 20 * math.log10(max(0.01, vol))
-                vol_str = f"{vol_db:+.1f}dB"
-            ssml = (
-                '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
-                f'<voice name="{_html.escape(voice)}">'
-                f'<prosody rate="{rate:.2f}" volume="{vol_str}">'
-                f'{_html.escape(text)}'
-                '</prosody></voice></speak>'
-            )
-
             self._status_label.setText("Generating speech\u2026")
             QApplication.processEvents()
 
-            result = synthesizer.speak_ssml_async(ssml).get()
+            # Use plain text when rate and volume are at defaults
+            use_ssml = abs(rate - 1.0) > 0.05 or abs(vol - 1.0) > 0.05
+            if use_ssml:
+                import html as _html
+                rate_rel = int((rate - 1.0) * 100)
+                rate_str = f"{rate_rel:+d}%"
+                vol_rel = int((vol - 1.0) * 100)
+                vol_str = f"{vol_rel:+d}%"
+                ssml = (
+                    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
+                    f'<voice name="{_html.escape(voice)}">'
+                    f'<prosody rate="{rate_str}" volume="{vol_str}">'
+                    f'{_html.escape(text)}'
+                    '</prosody></voice></speak>'
+                )
+                result = synthesizer.speak_ssml_async(ssml).get()
+            else:
+                result = synthesizer.speak_text_async(text).get()
 
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 # Cache the generated audio
@@ -767,6 +769,7 @@ class MainWindow(QMainWindow):
         )
         self._timeline.voiceover_clicked.connect(self._on_voiceover_clicked)
         self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
+        self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
@@ -791,7 +794,7 @@ class MainWindow(QMainWindow):
         content.addWidget(self._editor)
 
         # Enable zoom debug overlay by default
-        self._preview.set_debug_overlay(True)
+        self._preview.set_debug_overlay(False)
 
         root.addLayout(content, 1)
 
@@ -1574,6 +1577,8 @@ class MainWindow(QMainWindow):
         dlg = _VoiceoverDialog(timestamp_ms, voice, parent=self)
         result = dlg.exec()
         if result == _VoiceoverDialog.RESULT_OK:
+            # Remember the chosen voice for next time
+            self._settings.setValue("ai/ttsVoice", dlg.voice)
             # Synthesize + add the segment
             seg = VoiceoverSegment.create(
                 timestamp=dlg.timestamp_ms,
@@ -1620,6 +1625,8 @@ class MainWindow(QMainWindow):
         )
         result = dlg.exec()
         if result == _VoiceoverDialog.RESULT_OK:
+            # Remember the chosen voice for next time
+            self._settings.setValue("ai/ttsVoice", dlg.voice)
             seg.timestamp = dlg.timestamp_ms
             seg.text = dlg.text
             seg.voice = dlg.voice
@@ -1658,6 +1665,16 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
         self._refresh_editor()
         self._editor.set_voiceover_status("Voiceover removed.")
+
+    def _on_voiceover_moved(self, seg_id: str, new_time: float) -> None:
+        """Handle voiceover segment drag on the timeline."""
+        seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
+        if seg is None:
+            return
+        seg.timestamp = max(0.0, new_time)
+        self._voiceover_segments.sort(key=lambda s: s.timestamp)
+        self._mark_dirty()
+        self._refresh_editor()
 
     def _synthesize_voiceover(self, seg) -> None:
         """Synthesize TTS audio for a voiceover segment."""
@@ -2332,7 +2349,13 @@ class MainWindow(QMainWindow):
 
     def _on_seek(self, time_ms: float) -> None:
         self._playback_time = time_ms
-        self._vo_played_ids.clear()  # reset voiceover playback on seek
+        # Mark voiceovers whose audio has fully passed as already played.
+        # Segments the playhead is currently inside remain unplayed so
+        # _check_voiceover_playback can start them from the offset.
+        self._vo_played_ids = {
+            seg.id for seg in self._voiceover_segments
+            if (seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)) < time_ms
+        }
         self._stop_voiceover_audio()
         self._preview.seek_to(time_ms)
         self._preview.set_current_time(time_ms)
@@ -2461,29 +2484,86 @@ class MainWindow(QMainWindow):
             self._timeline.set_playing(False)
             self._stop_voiceover_audio()
         else:
-            self._vo_played_ids.clear()  # reset so segments play again
+            # Only mark voiceovers as played if their audio has fully passed
+            self._vo_played_ids = {
+                seg.id for seg in self._voiceover_segments
+                if (seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)) < self._playback_time
+            }
             self._preview.play()
             # Only update the button if play actually started
             self._timeline.set_playing(self._preview.is_playing)
 
     def _check_voiceover_playback(self, t_ms: float) -> None:
-        """Play voiceover audio when the playhead reaches a segment's timestamp."""
+        """Play voiceover audio when the playhead reaches a segment's timestamp.
+
+        Also handles mid-segment playback: if the playhead lands inside
+        a segment (e.g. after seek or resume), plays from the offset.
+        """
         import winsound
         for seg in self._voiceover_segments:
-            if (
-                seg.id not in self._vo_played_ids
-                and seg.audio_path
-                and os.path.isfile(seg.audio_path)
-                and seg.timestamp <= t_ms  # trigger once playhead passes the timestamp
-            ):
-                self._vo_played_ids.add(seg.id)
-                try:
+            if seg.id in self._vo_played_ids:
+                continue
+            if not seg.audio_path or not os.path.isfile(seg.audio_path):
+                continue
+            if seg.timestamp > t_ms:
+                continue  # not reached yet
+
+            self._vo_played_ids.add(seg.id)
+
+            # Calculate how far into the segment we are
+            offset_ms = t_ms - seg.timestamp
+            seg_end = seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)
+
+            if t_ms >= seg_end:
+                continue  # playhead is past the end of this segment
+
+            try:
+                if offset_ms < 100:
+                    # At or near the start — play the whole file
                     winsound.PlaySound(
                         seg.audio_path,
                         winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
                     )
-                except Exception as exc:
-                    logger.warning("Could not play voiceover audio: %s", exc)
+                else:
+                    # Mid-segment — play from offset
+                    self._play_wav_from_offset(seg.audio_path, offset_ms)
+            except Exception as exc:
+                logger.warning("Could not play voiceover audio: %s", exc)
+
+    def _play_wav_from_offset(self, wav_path: str, offset_ms: float) -> None:
+        """Play a WAV file starting from *offset_ms* into the audio."""
+        import wave
+        import winsound
+        import tempfile
+
+        try:
+            with wave.open(wav_path, "rb") as wf:
+                framerate = wf.getframerate()
+                n_channels = wf.getnchannels()
+                sampwidth = wf.getsampwidth()
+                total_frames = wf.getnframes()
+
+                skip_frames = int(framerate * offset_ms / 1000)
+                if skip_frames >= total_frames:
+                    return  # nothing left to play
+
+                wf.setpos(skip_frames)
+                remaining = wf.readframes(total_frames - skip_frames)
+
+            # Write trimmed audio to a temp file
+            tmp = os.path.join(tempfile.gettempdir(), "followcursor_vo_trimmed.wav")
+            with wave.open(tmp, "wb") as out:
+                out.setnchannels(n_channels)
+                out.setsampwidth(sampwidth)
+                out.setframerate(framerate)
+                out.writeframes(remaining)
+
+            winsound.PlaySound(
+                tmp,
+                winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+            )
+        except Exception as exc:
+            logger.warning("Could not play trimmed voiceover: %s", exc)
 
     def _stop_voiceover_audio(self) -> None:
         """Stop any currently playing voiceover audio."""
@@ -2607,6 +2687,7 @@ class MainWindow(QMainWindow):
             frame_timestamps=self._frame_timestamps or None,
             trim_start_ms=self._trim_start_ms,
             trim_end_ms=self._trim_end_ms,
+            voiceover_segments=list(self._voiceover_segments) if self._voiceover_segments else None,
         )
         # Re-use existing path unless Save As or no path yet
         path = self._project_path if self._project_path and not save_as else ""
