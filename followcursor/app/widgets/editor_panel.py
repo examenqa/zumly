@@ -303,6 +303,7 @@ class EditorPanel(QWidget):
         ai_zoom_btn.setToolTip("Use AI (Azure AI Foundry) to analyze activity\nand generate zoom keyframes.")
         ai_zoom_btn.clicked.connect(self._on_ai_zoom)
         zoom_lay.addWidget(ai_zoom_btn)
+        self._btn_ai_zoom = ai_zoom_btn
 
         self._ai_zoom_status = QLabel("")
         self._ai_zoom_status.setObjectName("Secondary")
@@ -337,10 +338,10 @@ class EditorPanel(QWidget):
         voice_row.addWidget(self._voice_combo, 1)
         vo_lay.addLayout(voice_row)
 
-        self._btn_add_voiceover = QPushButton("\U0001f399 Add Voiceover")
+        self._btn_add_voiceover = QPushButton("\U0001f399 Add AI Voiceover")
         self._btn_add_voiceover.setObjectName("CtrlBtn")
         self._btn_add_voiceover.setFixedHeight(32)
-        self._btn_add_voiceover.setToolTip("Add a voiceover segment at the current playback position.")
+        self._btn_add_voiceover.setToolTip("Add an AI voiceover segment at the current playback position.")
         self._btn_add_voiceover.clicked.connect(self._on_add_voiceover)
         vo_lay.addWidget(self._btn_add_voiceover)
 
@@ -874,12 +875,14 @@ class EditorPanel(QWidget):
         max_clusters, min_gap = SENSITIVITY_PRESETS.get(sens_name, (6, 4000))
         self._ai_zoom_status.setText("Requesting AI analysis\u2026")
         self._ai_zoom_status.setVisible(True)
+        self._btn_ai_zoom.setEnabled(False)
         self.ai_zoom_requested.emit(max_clusters, self._current_zoom_level, min_gap)
 
     def set_ai_zoom_status(self, text: str) -> None:
         """Update the AI zoom status label from outside."""
         self._ai_zoom_status.setText(text)
         self._ai_zoom_status.setVisible(bool(text))
+        self._btn_ai_zoom.setEnabled(True)
 
     def _on_add_voiceover(self) -> None:
         """Request adding a voiceover segment at the current playback position."""
@@ -890,6 +893,12 @@ class EditorPanel(QWidget):
         """Update the voiceover status label from outside."""
         self._vo_status.setText(text)
         self._vo_status.setVisible(bool(text))
+        self._btn_add_voiceover.setEnabled(True)
+
+    def set_ai_busy(self, busy: bool) -> None:
+        """Disable/enable AI buttons while an operation is in progress."""
+        self._btn_ai_zoom.setEnabled(not busy)
+        self._btn_add_voiceover.setEnabled(not busy)
 
     @property
     def selected_voice(self) -> str:

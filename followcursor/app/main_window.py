@@ -311,6 +311,7 @@ class _VoiceoverDialog(QMessageBox):
 
         self._text_edit = None
         self._voice_combo = None
+        self._result_code = 0
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -353,16 +354,26 @@ class _VoiceoverDialog(QMessageBox):
         layout.addWidget(text_edit, row, 0, 1, layout.columnCount())
         layout.addWidget(voice_widget, row + 1, 0, 1, layout.columnCount())
 
-    def exec(self) -> int:
-        super().exec()
+    def done(self, result: int) -> None:
+        """Override done() to capture which button was clicked before closing."""
         clicked = self.clickedButton()
         if clicked == self._btn_ok:
-            return self.RESULT_OK
+            self._result_code = self.RESULT_OK
         elif clicked == self._btn_preview:
-            return self.RESULT_PREVIEW
+            self._result_code = self.RESULT_PREVIEW
         elif clicked == self._btn_delete:
-            return self.RESULT_DELETE
-        return 0  # cancel
+            self._result_code = self.RESULT_DELETE
+        else:
+            self._result_code = 0
+        super().done(result)
+
+    def exec(self) -> int:
+        super().exec()
+        return self._result_code
+
+    def closeEvent(self, event) -> None:
+        """Prevent the close from propagating to the parent window."""
+        event.accept()
 
     @property
     def text(self) -> str:
@@ -1314,10 +1325,12 @@ class MainWindow(QMainWindow):
             zoom_level=zoom_level,
             min_gap_ms=min_gap_ms,
         )
+        self._editor.set_ai_busy(True)
 
     def _on_ai_zoom_result(self, keyframes) -> None:
         """Handle AI zoom analysis results — same flow as local auto-keyframes."""
         self._status_text.setText("Ready")
+        self._editor.set_ai_busy(False)
         if not keyframes:
             self._editor.set_ai_zoom_status("AI found no significant activity.")
             return
@@ -1403,6 +1416,7 @@ class MainWindow(QMainWindow):
         )
         worker.run_tts(ai_settings, seg.id, seg.text, output_path)
         self._editor.set_voiceover_status("Synthesizing speech\u2026")
+        self._editor.set_ai_busy(True)
 
     def _preview_voiceover(self, text: str, voice: str) -> None:
         """Synthesize TTS and play the audio without adding a segment."""
@@ -1427,10 +1441,12 @@ class MainWindow(QMainWindow):
         # Use a special segment ID so _on_ai_tts_result knows this is a preview
         worker.run_tts(ai_settings, "__preview__", text, output_path)
         self._editor.set_voiceover_status("Generating preview\u2026")
+        self._editor.set_ai_busy(True)
 
     def _on_ai_tts_result(self, seg_id: str, audio_path: str) -> None:
         """Handle TTS audio file result — associate with segment or play preview."""
         self._status_text.setText("Ready")
+        self._editor.set_ai_busy(False)
         if seg_id == "__preview__":
             # Preview mode: play the audio file, don't save
             self._editor.set_voiceover_status("\u25b6 Playing preview\u2026")
@@ -1503,6 +1519,7 @@ class MainWindow(QMainWindow):
         """Handle AI operation errors."""
         logger.error("AI error: %s", msg)
         self._status_text.setText("Ready")
+        self._editor.set_ai_busy(False)
         self._editor.set_ai_zoom_status("")
         self._editor.set_voiceover_status(f"AI error: {msg[:200]}")
 

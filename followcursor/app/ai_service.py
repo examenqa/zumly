@@ -116,6 +116,8 @@ Return a JSON array where each element has:
 
 Rules:
 - Minimum {min_gap_ms}ms gap between consecutive zoom sections
+- Zoom sections MUST NOT overlap — each section must end (start_ms + hold_ms) \
+  before the next section's start_ms begins
 - Merge nearby activity into one longer zoom rather than multiple short ones
 - Use at most {max_clusters} sections total — leave some moments un-zoomed
 - pan_points timestamps must be between start_ms and start_ms + hold_ms"""
@@ -404,6 +406,46 @@ def _parse_zoom_response(
         keyframes.append(kf_out)
 
     keyframes.sort(key=lambda k: k.timestamp)
+
+    # ── Prevent overlapping zoom sections ───────────────────────────
+    # Find zoom-in/zoom-out pairs and ensure each zoom-out completes
+    # before the next zoom-in starts.
+    segments: list[tuple[int, int]] = []
+    seg_start: int | None = None
+    for idx, kf in enumerate(keyframes):
+        if kf.zoom > 1.01 and seg_start is None:
+            seg_start = idx
+        elif kf.zoom <= 1.01 and seg_start is not None:
+            segments.append((seg_start, idx))
+            seg_start = None
+
+    for s_idx in range(len(segments) - 1):
+        _, out_idx = segments[s_idx]
+        next_in_idx, _ = segments[s_idx + 1]
+        out_kf = keyframes[out_idx]
+        in_kf = keyframes[next_in_idx]
+        out_end = out_kf.timestamp + out_kf.duration
+        if out_end > in_kf.timestamp:
+            available = in_kf.timestamp - out_kf.timestamp
+            if available > 100:
+                keyframes[out_idx] = ZoomKeyframe.create(
+                    timestamp=out_kf.timestamp,
+                    zoom=out_kf.zoom,
+                    x=out_kf.x,
+                    y=out_kf.y,
+                    duration=max(100, int(available) - 50),
+                    reason=out_kf.reason,
+                )
+            else:
+                keyframes[next_in_idx] = ZoomKeyframe.create(
+                    timestamp=out_end + 50,
+                    zoom=in_kf.zoom,
+                    x=in_kf.x,
+                    y=in_kf.y,
+                    duration=in_kf.duration,
+                    reason=in_kf.reason,
+                )
+
     return keyframes
 
 

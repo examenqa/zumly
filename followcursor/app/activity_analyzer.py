@@ -555,6 +555,10 @@ def analyze_activity(
         zoom_out_time = last_ci["end"] + last_ci["hold_ms"]
         zoom_out_dur = TRANSITION_MS * 2  # zoom-out is slower
 
+        # Clamp so zoom-out start + transition doesn't exceed duration
+        max_zoom_out_start = duration - zoom_out_dur
+        if max_zoom_out_start > 0:
+            zoom_out_time = min(zoom_out_time, max_zoom_out_start)
         if zoom_out_time > duration:
             zoom_out_time = duration
 
