@@ -343,6 +343,7 @@ Segment-based voiceover system:
 ### Configuration
 
 AI settings are persisted via `QSettings` under the `ai/` prefix:
+
 - `ai/endpoint` — Azure AI Foundry endpoint URL
 - `ai/apiKey` — API key or token
 - `ai/chatModel` — chat model deployment name

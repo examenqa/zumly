@@ -4,6 +4,18 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-03-05
+
+### Added
+
+- **Mermaid architecture diagrams** — replaced ASCII diagrams in ARCHITECTURE.md with 12 interactive Mermaid diagrams covering high-level overview, recording flow, zoom interpolation, activity analyzer pipeline, export pipeline, encoder fallback, AI data flow, widget communication, and project file structure
+- **Phased export status messages** — export progress now reports what's actually happening: preparing video, building background & frame, rendering/encoding, and finalizing
+
+### Changed
+
+- **Export performance** — pre-compute device-frame mask once instead of per-frame, eliminating ~12M NumPy operations per frame in the zoomed-device-frame path
+- **CFR floor lowered to 24 fps** — reduced constant-frame-rate minimum from 30 fps to 24 fps (cinematic standard), cutting output frame count by ~20 % for low-fps recordings
+
 ## [0.2.0] — 2026-03-03
 
 ### Added

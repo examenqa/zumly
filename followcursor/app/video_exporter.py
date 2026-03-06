@@ -359,7 +359,7 @@ def _merge_voiceover_segments(
 
         mix_inputs = "".join(f"[a{i}]" for i in range(len(segments)))
         filter_parts.append(
-            f"{mix_inputs}amix=inputs={len(segments)}:duration=longest"
+            f"{mix_inputs}amix=inputs={len(segments)}:duration=longest:normalize=0"
         )
         filtergraph = ";".join(filter_parts)
 
