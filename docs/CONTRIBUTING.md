@@ -9,7 +9,8 @@ Thanks for your interest in contributing! This guide covers everything you need 
 ### Prerequisites
 
 - **Windows 10 (build 1903+) or Windows 11**
-- **Python 3.10+** — [Download](https://www.python.org/downloads/) (check "Add to PATH")
+- **Python 3.10+** — [Download](https://www.python.org/downloads/) (check "Add to PATH")  
+  > **ARM64 Windows:** Install the **x64** (Windows installer 64-bit) edition, not ARM64. Many dependencies (OpenCV, dxcam) have no ARM64 wheels; x64 Python runs fine via emulation.
 - **Git** — [Download](https://git-scm.com/downloads)
 - **VS Code** (recommended) — [Download](https://code.visualstudio.com/)
 

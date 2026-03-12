@@ -9,7 +9,7 @@ Get up and running in under 5 minutes.
 | Requirement | Notes |
 | ----------- | ----- |
 | **Windows 10 (build 1903+) or Windows 11** | Required for Windows Graphics Capture API |
-| **Python 3.10 or newer** | [Download](https://www.python.org/downloads/) — check **"Add to PATH"** during install |
+| **Python 3.10 or newer** | [Download](https://www.python.org/downloads/) — check **"Add to PATH"** during install. **ARM64 Windows:** install the **x64** edition (not ARM64). |
 | **ffmpeg** | Bundled automatically via `imageio-ffmpeg` — no manual install needed |
 
 ## 2. Install & Launch

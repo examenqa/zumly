@@ -63,7 +63,8 @@ Record your screen or any individual window, then export a polished MP4 video wh
 ### Prerequisites
 
 - **Windows 10/11**
-- **Python 3.10+** — [Download](https://www.python.org/downloads/) (check "Add to PATH" during install)
+- **Python 3.10+** — [Download](https://www.python.org/downloads/) (check "Add to PATH" during install)  
+  > **ARM64 Windows:** Install the **x64** edition — ARM64 native Python is not supported.
 
 ### Quick Start
 

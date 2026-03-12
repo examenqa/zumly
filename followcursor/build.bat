@@ -9,9 +9,25 @@ if not exist ".venv\Scripts\python.exe" (
     echo Creating virtual environment...
     python -m venv .venv
     if errorlevel 1 (
-        echo ✗ Failed to create virtual environment. Is Python installed and on PATH?
+        echo ✗ Failed to create virtual environment. Is Python x64 installed and on PATH?
         exit /b 1
     )
+)
+
+REM ── Verify Python is x64 (ARM64 native has no binary wheels) ─
+.venv\Scripts\python.exe -c "import sys; exit(1 if 'ARM64' in sys.version else 0)" 2>nul
+if errorlevel 1 (
+    echo.
+    echo ✗ ARM64 native Python detected in .venv.
+    echo   Several dependencies ^(OpenCV, dxcam^) have no ARM64 wheels.
+    echo   Please install Python x64 and recreate the virtual environment:
+    echo.
+    echo   1. Install "Windows installer ^(64-bit^)" from https://www.python.org/downloads/
+    echo   2. Delete .venv:  rmdir /s /q .venv
+    echo   3. Recreate:      "C:\path\to\python-x64\python.exe" -m venv .venv
+    echo   4. Run build.bat again.
+    echo.
+    exit /b 1
 )
 
 echo Installing dependencies...
