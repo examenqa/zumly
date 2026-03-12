@@ -33,6 +33,8 @@ echo Building FollowCursor...
     --noconfirm ^
     --clean ^
     --add-data "app;app" ^
+    --hidden-import "shiboken6" ^
+    --hidden-import "shiboken6.Shiboken" ^
     --hidden-import "PySide6.QtSvg" ^
     --hidden-import "mss" ^
     --hidden-import "cv2" ^
