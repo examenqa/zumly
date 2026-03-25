@@ -144,7 +144,7 @@ jobs:
         working-directory: followcursor
         shell: pwsh
         run: |
-          .\Build-Msix.ps1 `
+          .\scripts\Build-Msix.ps1 `
             -Version "${{ steps.version.outputs.APP_VERSION }}" `
             -Publisher "${{ secrets.MSIX_PUBLISHER }}" `
             -AzureEndpoint "${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}" `
