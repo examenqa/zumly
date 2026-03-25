@@ -96,7 +96,8 @@ All data classes live in `app/models.py`.
 | `KeyEvent` | `timestamp, x, y` | Keystroke time + cursor position (no key identity — privacy) |
 | `ClickEvent` | `x, y, timestamp` | Mouse click position + time |
 | `ZoomKeyframe` | `id, timestamp, zoom, x, y, duration, reason` | Zoom instruction |
-| `RecordingSession` | All of the above bundled + trim range | Serializable session data |
+| `VideoSegment` | `id, start_ms, end_ms` | Contiguous time range of a split recording |
+| `RecordingSession` | All of the above bundled + trim range + video segments | Serializable session data |
 
 ### ZoomKeyframe anatomy
 

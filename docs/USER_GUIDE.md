@@ -35,13 +35,14 @@ A comprehensive reference for every feature in FollowCursor.
    - [Export Settings](#export-settings)
    - [What Gets Rendered](#what-gets-rendered)
 8. [Trimming](#trimming)
-9. [Undo & Redo](#undo--redo)
-10. [Project Files](#project-files)
+9. [Segment Deletion](#segment-deletion)
+10. [Undo & Redo](#undo--redo)
+11. [Project Files](#project-files)
     - [Saving a Project](#saving-a-project)
     - [Loading a Project](#loading-a-project)
-11. [Open in Clipchamp](#open-in-clipchamp)
-12. [Keyboard Shortcuts](#keyboard-shortcuts)
-13. [UI Reference](#ui-reference)
+12. [Open in Clipchamp](#open-in-clipchamp)
+13. [Keyboard Shortcuts](#keyboard-shortcuts)
+14. [UI Reference](#ui-reference)
     - [Title Bar](#title-bar)
     - [Editor Panel](#editor-panel)
     - [Preview Widget](#preview-widget)
@@ -450,9 +451,34 @@ When trim handles are set, the export only renders frames within the trimmed ran
 
 ---
 
+## Segment Deletion
+
+After splitting a recording into segments, individual segments can be deleted to remove unwanted portions from the timeline and exported output.
+
+### Deleting a Segment
+
+- **Right-click** a video segment on the Clips track → select **Delete segment**
+- **Left-click** a video segment to select it, then press **Delete** or **Backspace**
+
+### Ripple Delete
+
+When a segment is deleted, adjacent segments close the gap — the remaining segments are played and exported sequentially with no gap between them.
+
+### Constraints
+
+- At least **one segment must remain** — the last segment cannot be deleted
+- Zoom keyframes and voiceover segments inside a deleted segment are removed automatically
+- Segment deletion is **undoable** via **Ctrl+Z**
+
+### Effect on Export
+
+Deleted segments are excluded from the exported video. Only frames within remaining segments are rendered.
+
+---
+
 ## Undo & Redo
 
-All zoom keyframe and click event changes can be undone and redone. The undo history supports up to **50 snapshots**.
+All zoom keyframe, click event, and video segment changes can be undone and redone. The undo history supports up to **50 snapshots**.
 
 ### Supported Actions
 
@@ -466,6 +492,7 @@ Every zoom keyframe and click event mutation is tracked:
 - Deleting a zoom section
 - Auto-generating keyframes (the entire batch)
 - Deleting a click event
+- Deleting a video segment
 
 ### How to Undo/Redo
 
@@ -533,8 +560,8 @@ For additional editing beyond what FollowCursor offers, you can hand off your re
 | **Space** | Play / Pause |
 | **Z** | Insert zoom keyframe at playhead |
 | **⏮ / ⏭** | Skip to start / end |
-| **Delete** | Remove selected zoom segment or click event |
-| **Ctrl+Z** | Undo last zoom/click change |
+| **Delete** | Remove selected zoom segment, video segment, or click event |
+| **Ctrl+Z** | Undo last zoom/click/segment change |
 | **Ctrl+Shift+Z** | Redo last undone change |
 | **Ctrl+Y** | Redo last undone change (alternate) |
 | **Ctrl+S** | Save project |
@@ -546,9 +573,11 @@ For additional editing beyond what FollowCursor offers, you can hand off your re
 | **Left-click** | Timeline | Seek to that time |
 | **Left-click** | Zoom segment | Select segment |
 | **Left-click** | Click event dot | Select click event |
+| **Left-click** | Video segment | Select video segment |
 | **Right-click** | Preview | Add zoom at click position |
 | **Right-click** | Timeline (empty space) | Add zoom section at that time |
 | **Right-click** | Zoom segment | Context menu (depth, centroid, delete) |
+| **Right-click** | Video segment | Context menu (delete segment) |
 | **Drag edge** | Zoom segment | Resize segment duration |
 | **Drag body** | Zoom segment | Move segment in time |
 | **Drag handle** | Timeline edge | Set trim start/end point |

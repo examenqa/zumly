@@ -2838,12 +2838,12 @@ class MainWindow(QMainWindow):
         # Remove zoom keyframes inside the deleted segment
         self._zoom_engine.keyframes = [
             kf for kf in self._zoom_engine.keyframes
-            if not (seg.start_ms <= kf.timestamp < seg.end_ms)
+            if not (seg.start_ms <= kf.timestamp <= seg.end_ms)
         ]
         # Remove voiceover segments inside the deleted segment
         self._voiceover_segments = [
             v for v in self._voiceover_segments
-            if not (seg.start_ms <= v.timestamp < seg.end_ms)
+            if not (seg.start_ms <= v.timestamp <= seg.end_ms)
         ]
         # Remove the video segment
         self._video_segments = [s for s in self._video_segments if s.id != seg_id]

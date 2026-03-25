@@ -888,9 +888,12 @@ class VideoExporter(QObject):
                     if t_ms > eff_te + 0.0001:
                         break
 
-                    # Skip frames outside any video segment (ripple delete)
+                    # Skip frames outside any video segment (ripple delete).
+                    # Uses half-open intervals [start, end) for interior
+                    # segments; the last segment's end is inclusive to
+                    # avoid clipping the final frame.
                     if _seg_ranges:
-                        in_seg = any(s <= t_ms < e for s, e in _seg_ranges)
+                        in_seg = any(s <= t_ms <= e for s, e in _seg_ranges)
                         if not in_seg:
                             out_idx += 1
                             continue

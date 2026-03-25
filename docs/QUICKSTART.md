@@ -147,12 +147,13 @@ Click **⬆ Export** in the title bar.
 | `Ctrl+Shift+=` | Zoom in at cursor position (during recording) |
 | `Ctrl+Shift+-` | Zoom out to 1.0× (during recording) |
 | Right-click zoom segment | Edit depth / centroid / delete |
+| Right-click video segment | Delete segment |
 | Right-click preview | Add zoom at click position |
 | Drag segment edge | Resize zoom duration |
 | Drag segment body | Move zoom in time |
 | Click event dot | Select click event |
-| `Delete` | Remove selected click event |
-| `Ctrl+Z` | Undo last zoom keyframe change |
+| `Delete` | Remove selected zoom segment, video segment, or click event |
+| `Ctrl+Z` | Undo last zoom/click/segment change |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo last undone change |
 | `Space` | Play / Pause |
 | `Z` | Insert zoom keyframe at playhead |
