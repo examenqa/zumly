@@ -22,6 +22,7 @@ from PySide6.QtGui import QImage, QPainter, QColor, QFont, QPen
 from PySide6.QtWidgets import QWidget, QMenu
 
 from ..models import MousePosition, ClickEvent, ZoomKeyframe
+from ..zoom_engine import speed_at_time
 
 
 class PreviewWidget(QWidget):
@@ -1071,36 +1072,8 @@ class PreviewWidget(QWidget):
         self.update()
 
     def _get_segment_speed(self, time_ms: float) -> float:
-        """Return the playback speed at *time_ms* based on zoom keyframes.
-
-        The speed is stored on the zoom-in keyframe that starts each
-        segment.  Returns 1.0 outside zoom segments or when no keyframes
-        are available.
-        """
-        kfs = self._debug_keyframes
-        if not kfs:
-            return 1.0
-        sorted_kfs = sorted(kfs, key=lambda k: k.timestamp)
-        i = 0
-        while i < len(sorted_kfs):
-            kf = sorted_kfs[i]
-            if kf.zoom > 1.01:
-                start_ms = kf.timestamp
-                speed = kf.speed
-                j = i + 1
-                while j < len(sorted_kfs) and sorted_kfs[j].zoom > 1.01:
-                    j += 1
-                if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
-                    end_ms = sorted_kfs[j].timestamp + sorted_kfs[j].duration
-                    i = j + 1
-                else:
-                    end_ms = float('inf')
-                    i = len(sorted_kfs)
-                if start_ms <= time_ms <= end_ms:
-                    return speed
-            else:
-                i += 1
-        return 1.0
+        """Return the playback speed at *time_ms* based on zoom keyframes."""
+        return speed_at_time(self._debug_keyframes, time_ms, self._video_duration_ms)
 
     @staticmethod
     def _numpy_to_qimage(frame: np.ndarray) -> QImage:

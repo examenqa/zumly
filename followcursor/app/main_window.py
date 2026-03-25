@@ -1527,6 +1527,9 @@ class MainWindow(QMainWindow):
             self._start_recording()
 
     def _refresh_editor(self) -> None:
+        out_dur = self._zoom_engine.compute_output_duration(
+            self._rec_duration_ms, self._trim_start_ms, self._trim_end_ms,
+        )
         self._editor.refresh(
             self._zoom_engine.keyframes,
             self._mouse_track,
@@ -1536,6 +1539,7 @@ class MainWindow(QMainWindow):
             self._click_events,
             self._trim_start_ms,
             self._trim_end_ms,
+            output_duration=out_dur,
         )
         self._timeline.set_data(
             self._rec_duration_ms,

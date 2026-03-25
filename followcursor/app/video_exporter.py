@@ -870,7 +870,7 @@ class VideoExporter(QObject):
                     duration_ms or eff_te, eff_ts, eff_te,
                 ) / 1000.0 * fps) + 1)
                 out_idx = 0
-                t_ms = eff_ts  # recording-time cursor
+                t_ms = eff_ts  # recording-time cursor (advances by speed-adjusted intervals)
 
                 while True:
                     if t_ms > eff_te + 0.0001:

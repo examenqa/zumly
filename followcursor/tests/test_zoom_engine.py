@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.zoom_engine import ease_out, smooth_step, ZoomEngine, MAX_UNDO
+from app.zoom_engine import ease_out, smooth_step, speed_at_time, ZoomEngine, MAX_UNDO
 from app.models import ClickEvent, ZoomKeyframe
 
 
@@ -403,6 +403,15 @@ class TestPanPointInterpolation:
 
 class TestSegmentSpeed:
     """Tests for per-segment playback speed helpers."""
+
+    def test_standalone_speed_at_time(self) -> None:
+        kfs = [
+            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=3.0),
+            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=600),
+        ]
+        assert speed_at_time(kfs, 2000, 10000) == 3.0
+        assert speed_at_time(kfs, 500, 10000) == 1.0
+        assert speed_at_time([], 500, 10000) == 1.0
 
     def test_speed_default_outside_segments(self) -> None:
         engine = ZoomEngine()

@@ -52,6 +52,35 @@ def ease_in_out(t: float) -> float:
 smooth_step = ease_out
 
 
+def speed_at_time(keyframes: List[ZoomKeyframe], time_ms: float, duration_ms: float = 0.0) -> float:
+    """Return the playback speed at *time_ms* from a list of keyframes.
+
+    The speed is stored on the zoom-in keyframe that starts each
+    segment.  Returns 1.0 outside zoom segments.
+    """
+    sorted_kfs = sorted(keyframes, key=lambda k: k.timestamp)
+    i = 0
+    while i < len(sorted_kfs):
+        kf = sorted_kfs[i]
+        if kf.zoom > 1.01:
+            start_ms = kf.timestamp
+            speed = kf.speed
+            j = i + 1
+            while j < len(sorted_kfs) and sorted_kfs[j].zoom > 1.01:
+                j += 1
+            if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
+                end_ms = min(sorted_kfs[j].timestamp + sorted_kfs[j].duration, duration_ms) if duration_ms > 0 else sorted_kfs[j].timestamp + sorted_kfs[j].duration
+                i = j + 1
+            else:
+                end_ms = duration_ms if duration_ms > 0 else float('inf')
+                i = len(sorted_kfs)
+            if start_ms <= time_ms <= end_ms:
+                return speed
+        else:
+            i += 1
+    return 1.0
+
+
 MAX_UNDO = 50  # maximum undo history depth
 
 
@@ -212,13 +241,9 @@ class ZoomEngine:
     def get_speed_at(self, time_ms: float, duration_ms: float = 0.0) -> float:
         """Return the playback speed at the given recording time.
 
-        Speed comes from the zoom-in keyframe that starts the segment
-        containing *time_ms*.  Returns 1.0 outside zoom segments.
+        Delegates to the module-level ``speed_at_time()`` function.
         """
-        for start, end, speed in self._build_speed_segments(duration_ms):
-            if start <= time_ms <= end:
-                return speed
-        return 1.0
+        return speed_at_time(self.keyframes, time_ms, duration_ms)
 
     def compute_output_duration(
         self, duration_ms: float, trim_start_ms: float = 0.0, trim_end_ms: float = 0.0,
