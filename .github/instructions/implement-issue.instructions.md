@@ -4,9 +4,19 @@ description: "Use when implementing a GitHub issue — covers branching strategy
 
 # Implementing a GitHub Issue
 
+## Issue title convention
+
+Issue titles use a conventional-commit prefix:
+
+- `feat:` — new feature or capability
+- `fix:` — bug fix
+- `refactor:` — restructuring without behaviour change
+- `chore:` — maintenance, CI, dependencies
+- `docs:` — documentation only
+
 ## Branch naming
 
-Create a branch from `main` before making changes:
+Create a branch from `main` before making changes. The branch prefix matches the issue title prefix:
 
 - Bug fix: `fix/<short-kebab-description>` (e.g. `fix/export-silent-failure`)
 - Feature: `feat/<short-kebab-description>` (e.g. `feat/scroll-wheel-zoom`)

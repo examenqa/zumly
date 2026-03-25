@@ -14,10 +14,11 @@ Read the user's input carefully. If it contains multiple distinct items (numbere
 
 For each work item, determine:
 
-- **Type**: `bug`, `enhancement`, or `documentation`
-- **Title**: Clear, imperative-mood summary (e.g. "Add scroll-wheel zoom on timeline")
+- **Type**: `bug`, `enhancement`, `documentation`, or `chore`
+- **Title**: Prefixed with a conventional-commit type — `feat: Add scroll-wheel zoom on timeline`, `fix: Export fails when ffmpeg missing`, `refactor: Extract GIF codepath`, `chore: Update CI runner image`, `docs: Add voiceover section to user guide`
 - **Scope**: Which source files or modules are likely affected
 - **Acceptance criteria**: What "done" looks like — observable behaviour, not implementation detail
+- **Milestone**: Proposed semver version for when this should ship (e.g. `v0.7.0`). Bug fixes → patch bump, features → minor bump, breaking changes → major bump. Group related issues under the same milestone
 
 If the request is ambiguous, search the codebase to understand the current behaviour before asking the user for clarification.
 
@@ -25,8 +26,8 @@ If the request is ambiguous, search the codebase to understand the current behav
 
 Present a numbered summary table of all planned issues to the user:
 
-| # | Type | Title | Labels |
-|---|------|-------|--------|
+| # | Type | Title | Labels | Milestone |
+|---|------|-------|--------|----------|
 
 For each issue, also show the proposed body (Markdown) containing:
 
@@ -35,7 +36,24 @@ For each issue, also show the proposed body (Markdown) containing:
 3. **Affected areas** — Source files or modules likely involved (as a short list)
 4. **Notes** — Any implementation hints, edge cases, or dependencies on other issues
 
-Available labels: `bug`, `enhancement`, `documentation`, `good first issue`, `help wanted`.
+### Labels
+
+**Type labels** (pick one): `bug`, `enhancement`, `documentation`.
+
+**Area labels** (pick one or more): `area/capture`, `area/export`, `area/timeline`, `area/zoom`, `area/ui`, `area/ai`, `area/ci`, `area/project`.
+
+| Area | Scope |
+|------|-------|
+| `area/capture` | Screen/window capture and input tracking |
+| `area/export` | Video/GIF export pipeline |
+| `area/timeline` | Timeline, segments, and trimming |
+| `area/zoom` | Zoom engine, keyframes, and activity analysis |
+| `area/ui` | UI widgets, theme, and layout |
+| `area/ai` | AI zoom analysis and voiceover |
+| `area/ci` | CI/CD, build, packaging, and signing |
+| `area/project` | Project file save/load and settings |
+
+**Extra labels** (optional): `good first issue`, `help wanted`.
 
 ## Step 3 — Confirm with the user
 
@@ -49,10 +67,14 @@ Wait for the user's answers before proceeding. Incorporate any feedback.
 
 ## Step 4 — Create the issues
 
-For each confirmed issue, run `gh issue create` in the terminal:
+For each confirmed issue:
+
+1. Create the milestone if it doesn't exist: `gh api repos/{owner}/{repo}/milestones -f title="<milestone>"` (skip if it already exists)
+2. Get the milestone number: `gh api repos/{owner}/{repo}/milestones --jq '.[] | select(.title=="<milestone>") | .number'`
+3. Create the issue:
 
 ```
-gh issue create --title "<title>" --body "<body>" --label "<label1>,<label2>"
+gh issue create --title "<type>: <title>" --body "<body>" --label "<type-label>,<area-label>" --milestone "<milestone>"
 ```
 
 After creating each issue, note its number and URL.
