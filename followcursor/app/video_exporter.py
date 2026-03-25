@@ -36,7 +36,7 @@ import numpy as np
 
 from PySide6.QtCore import QObject, Signal
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent, VoiceoverSegment
+from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment
 from .zoom_engine import ZoomEngine
 from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
@@ -416,6 +416,7 @@ class VideoExporter(QObject):
         trim_end_ms: float = 0.0,
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
+        video_segments: Optional[List[VideoSegment]] = None,
     ) -> None:
         """Start export in a background thread.
 
@@ -433,6 +434,8 @@ class VideoExporter(QObject):
         ``"h264_qsv"``, ``"h264_amf"``, ``"libx264"``).
         *voiceover_segments* — optional list of ``VoiceoverSegment``
         objects; each with an audio file to mux at a specific time.
+        *video_segments* — optional list of ``VideoSegment`` objects;
+        when present, only frames within these time ranges are exported.
         """
         self._thread = threading.Thread(
             target=self._run,
@@ -447,7 +450,8 @@ class VideoExporter(QObject):
                   trim_start_ms,
                   trim_end_ms,
                   encoder_id,
-                  voiceover_segments or []),
+                  voiceover_segments or [],
+                  video_segments or []),
             daemon=True,
         )
         self._thread.start()
@@ -472,6 +476,7 @@ class VideoExporter(QObject):
         trim_end_ms: float = 0.0,
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
+        video_segments: Optional[List[VideoSegment]] = None,
     ) -> None:
         """Execute the full export algorithm on a worker thread.
 
@@ -856,6 +861,15 @@ class VideoExporter(QObject):
                 if eff_te < eff_ts:
                     eff_te = eff_ts
 
+                # Build a sorted list of (start, end) time ranges from video
+                # segments.  Only frames whose source timestamp falls inside
+                # one of these ranges will be exported (ripple delete).
+                _seg_ranges: list[tuple[float, float]] = []
+                if video_segments:
+                    _seg_ranges = sorted(
+                        (s.start_ms, s.end_ms) for s in video_segments
+                    )
+
                 # Move decoder to the source frame active at trim start.
                 start_src_idx = max(0, bisect.bisect_right(source_timestamps, eff_ts) - 1)
                 start_src_idx = min(start_src_idx, len(source_timestamps) - 1)
@@ -873,6 +887,13 @@ class VideoExporter(QObject):
                     t_ms = eff_ts + (out_idx / fps) * 1000.0
                     if t_ms > eff_te + 0.0001:
                         break
+
+                    # Skip frames outside any video segment (ripple delete)
+                    if _seg_ranges:
+                        in_seg = any(s <= t_ms < e for s, e in _seg_ranges)
+                        if not in_seg:
+                            out_idx += 1
+                            continue
 
                     # Pick the source frame for this output timestamp
                     target_src_idx = max(0, bisect.bisect_right(source_timestamps, t_ms) - 1)

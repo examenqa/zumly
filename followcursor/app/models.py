@@ -156,6 +156,7 @@ class RecordingSession:
     trim_start_ms: float = 0.0
     trim_end_ms: float = 0.0  # 0 = no trim (use full duration)
     voiceover_segments: List["VoiceoverSegment"] | None = None
+    video_segments: List["VideoSegment"] | None = None
 
     def to_json(self) -> str:
         """Serialize the entire session to a JSON string."""
@@ -178,6 +179,8 @@ class RecordingSession:
             data["trimEndMs"] = self.trim_end_ms
         if self.voiceover_segments:
             data["voiceoverSegments"] = [v.to_dict() for v in self.voiceover_segments]
+        if self.video_segments:
+            data["videoSegments"] = [s.to_dict() for s in self.video_segments]
         return json.dumps(data, indent=2)
 
     @staticmethod
@@ -194,6 +197,9 @@ class RecordingSession:
         voiceover_segments = None
         if "voiceoverSegments" in d:
             voiceover_segments = [VoiceoverSegment.from_dict(v) for v in d["voiceoverSegments"]]
+        video_segments = None
+        if "videoSegments" in d:
+            video_segments = [VideoSegment.from_dict(s) for s in d["videoSegments"]]
         return RecordingSession(
             id=d["id"],
             start_time=d["startTime"],
@@ -206,6 +212,38 @@ class RecordingSession:
             trim_start_ms=d.get("trimStartMs", 0.0),
             trim_end_ms=d.get("trimEndMs", 0.0),
             voiceover_segments=voiceover_segments,
+            video_segments=video_segments,
+        )
+
+
+@dataclass
+class VideoSegment:
+    """A contiguous section of the recording timeline.
+
+    Created when a recording is split — each segment represents a time
+    range in the original recording.  Segments can be deleted to
+    remove portions from the exported output (ripple delete: remaining
+    segments close the gap).
+    """
+
+    id: str
+    start_ms: float  # start time in the original recording
+    end_ms: float    # end time in the original recording
+
+    @staticmethod
+    def create(start_ms: float, end_ms: float) -> "VideoSegment":
+        """Factory that auto-generates a UUID."""
+        return VideoSegment(id=str(uuid.uuid4()), start_ms=start_ms, end_ms=end_ms)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "startMs": self.start_ms, "endMs": self.end_ms}
+
+    @staticmethod
+    def from_dict(d: dict) -> "VideoSegment":
+        return VideoSegment(
+            id=d["id"],
+            start_ms=d["startMs"],
+            end_ms=d["endMs"],
         )
 
 

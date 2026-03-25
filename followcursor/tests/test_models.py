@@ -11,6 +11,7 @@ from app.models import (
     ClickEvent,
     ZoomKeyframe,
     RecordingSession,
+    VideoSegment,
     VoiceoverSegment,
     DEFAULT_FPS,
     DEFAULT_MOUSE_INTERVAL,
@@ -299,6 +300,85 @@ class TestVoiceoverSegment:
         assert seg.duration_ms == 0.0
         assert seg.rate == 1.0
         assert seg.volume == 1.0
+
+
+# ── VideoSegment ────────────────────────────────────────────────────
+
+
+class TestVideoSegment:
+    def test_create_generates_uuid(self) -> None:
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        assert seg.id
+        uuid.UUID(seg.id)  # validates format
+
+    def test_create_fields(self) -> None:
+        seg = VideoSegment.create(start_ms=1000, end_ms=3000)
+        assert seg.start_ms == 1000
+        assert seg.end_ms == 3000
+
+    def test_roundtrip(self) -> None:
+        seg = VideoSegment.create(start_ms=500, end_ms=2500)
+        d = seg.to_dict()
+        seg2 = VideoSegment.from_dict(d)
+        assert seg2.id == seg.id
+        assert seg2.start_ms == seg.start_ms
+        assert seg2.end_ms == seg.end_ms
+
+    def test_dict_keys(self) -> None:
+        seg = VideoSegment.create(start_ms=0, end_ms=1000)
+        d = seg.to_dict()
+        assert set(d.keys()) == {"id", "startMs", "endMs"}
+
+
+class TestRecordingSessionVideoSegments:
+    def test_json_includes_video_segments(self) -> None:
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        session = RecordingSession(
+            id="vs", start_time=0, duration=5000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+            video_segments=[seg],
+        )
+        d = json.loads(session.to_json())
+        assert "videoSegments" in d
+        assert len(d["videoSegments"]) == 1
+        assert d["videoSegments"][0]["startMs"] == 0
+        assert d["videoSegments"][0]["endMs"] == 5000
+
+    def test_json_roundtrip_video_segments(self) -> None:
+        seg1 = VideoSegment.create(start_ms=0, end_ms=3000)
+        seg2 = VideoSegment.create(start_ms=5000, end_ms=8000)
+        session = RecordingSession(
+            id="vs2", start_time=0, duration=8000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+            video_segments=[seg1, seg2],
+        )
+        s2 = RecordingSession.from_json(session.to_json())
+        assert s2.video_segments is not None
+        assert len(s2.video_segments) == 2
+        assert s2.video_segments[0].start_ms == 0
+        assert s2.video_segments[0].end_ms == 3000
+        assert s2.video_segments[1].start_ms == 5000
+
+    def test_json_omits_video_segments_when_empty(self) -> None:
+        session = RecordingSession(
+            id="bare3", start_time=0, duration=100,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+        )
+        d = json.loads(session.to_json())
+        assert "videoSegments" not in d
+
+    def test_json_backward_compat_no_video_segments(self) -> None:
+        """Old projects without videoSegments should load fine."""
+        session = RecordingSession(
+            id="old", start_time=0, duration=1000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+        )
+        s2 = RecordingSession.from_json(session.to_json())
+        assert s2.video_segments is None
 
 
 # ── Constants ───────────────────────────────────────────────────────
