@@ -54,6 +54,7 @@ class _TimelineTrack(QWidget):
     EDGE_GRAB_PX = 6  # pixel tolerance for grabbing a segment edge
     CLICK_HIT_PX = 8  # pixel tolerance for clicking on a click marker
     TRIM_GRAB_PX = 8  # pixel tolerance for grabbing a trim handle
+    MIN_VIEW_SCALE = 1.0  # 1.0 = fit-all (minimum zoom level)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -109,7 +110,6 @@ class _TimelineTrack(QWidget):
         # ── View zoom / pan state ─────────────────────────────
         self._view_scale: float = 1.0   # 1.0 = fit-all
         self._view_offset: float = 0.0  # ms offset of the left edge of the viewport
-        self.MIN_VIEW_SCALE: float = 1.0
         # MAX_VIEW_SCALE is computed dynamically: 1 px = 10 ms → scale = duration / (10 * widget_width)
 
     _MENU_STYLE = (
@@ -313,15 +313,16 @@ class _TimelineTrack(QWidget):
     def _draw_time_markers(self, painter: QPainter, w: int) -> None:
         if self.duration <= 0:
             return
-        # Visible duration determines tick spacing
+        # Visible duration determines tick spacing: denser ticks when zoomed in
+        # so labels stay readable without overlapping.
         visible_duration = self.duration / self._view_scale
-        if visible_duration < 5000:
+        if visible_duration < 5000:       # <5 s visible → 1 s ticks
             interval_ms = 1000
-        elif visible_duration < 30000:
+        elif visible_duration < 30000:    # <30 s visible → 5 s ticks
             interval_ms = 5000
-        elif visible_duration < 120000:
+        elif visible_duration < 120000:   # <2 min visible → 10 s ticks
             interval_ms = 10000
-        else:
+        else:                             # ≥2 min visible → 30 s ticks
             interval_ms = 30000
 
         font = QFont()

@@ -135,6 +135,16 @@ class TestMaxViewScale:
         """Duration so small the formula would give <1.0 — clamp to 1."""
         assert max_view_scale(100, 800) == 1.0
 
+    def test_1px_equals_10ms(self) -> None:
+        """At max zoom each pixel represents exactly 10 ms.
+        1000 px, 100000 ms → scale = 100000 / (10 * 1000) = 10.0.
+        Visible duration = 100000 / 10.0 = 10000 ms over 1000 px → 10 ms/px."""
+        scale = max_view_scale(100000, 1000)
+        assert scale == pytest.approx(10.0)
+        visible_ms = 100000 / scale
+        ms_per_px = visible_ms / 1000
+        assert ms_per_px == pytest.approx(10.0)
+
     def test_zero_width(self) -> None:
         assert max_view_scale(10000, 0) == 1.0
 
