@@ -33,6 +33,7 @@ from .models import (
     KeyEvent,
     ClickEvent,
     RecordingSession,
+    VideoSegment,
     DEFAULT_FPS,
     DEFAULT_MOUSE_INTERVAL,
 )
@@ -1318,7 +1319,6 @@ class MainWindow(QMainWindow):
             self._actual_fps_override = actual_fps
 
             # Initialize a single video segment spanning the full recording
-            from .models import VideoSegment
             self._video_segments = [VideoSegment.create(start_ms=0.0, end_ms=self._rec_duration_ms)]
             self._zoom_engine.video_segments = self._video_segments
 
@@ -1970,7 +1970,6 @@ class MainWindow(QMainWindow):
         self._zoom_engine.push_undo()
 
         # Create two new segments replacing the target
-        from .models import VideoSegment
         seg_left = VideoSegment.create(start_ms=target.start_ms, end_ms=time_ms, speed=target.speed)
         seg_right = VideoSegment.create(start_ms=time_ms, end_ms=target.end_ms, speed=target.speed)
 
@@ -3078,7 +3077,6 @@ class MainWindow(QMainWindow):
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []
 
             # Restore video segments (or create a default spanning full duration)
-            from .models import VideoSegment
             if session.video_segments:
                 self._video_segments = list(session.video_segments)
             else:

@@ -1169,7 +1169,7 @@ class TimelineWidget(QWidget):
 
         # ── Bottom hints ────────────────────────────────────────
         hints_row = QHBoxLayout()
-        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim")
+        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim · S to split")
         hint_kf.setObjectName("Muted")
         hints_row.addWidget(hint_kf)
         hints_row.addStretch()
