@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
 from ..utils import fmt_time as _fmt
+from .timeline_math import trim_eff_start, trim_eff_end, trim_eff_dur, trim_ms_to_x, trim_x_to_ms
 
 
 def _fmt_precise(ms: float) -> str:
@@ -114,30 +115,25 @@ class _TimelineTrack(QWidget):
     @property
     def _eff_start(self) -> float:
         """Effective start of the visible timeline range (ms)."""
-        return self.trim_start_ms
+        return trim_eff_start(self.trim_start_ms)
 
     @property
     def _eff_end(self) -> float:
         """Effective end of the visible timeline range (ms)."""
-        return self.trim_end_ms if self.trim_end_ms > 0 else self.duration
+        return trim_eff_end(self.trim_end_ms, self.duration)
 
     @property
     def _eff_dur(self) -> float:
         """Effective visible duration (ms)."""
-        return self._eff_end - self._eff_start
+        return trim_eff_dur(self.trim_start_ms, self.trim_end_ms, self.duration)
 
     def _ms_to_x(self, time_ms: float, w: int) -> float:
         """Convert absolute time (ms) to x-pixel within the trimmed viewport."""
-        eff_dur = self._eff_dur
-        if eff_dur <= 0:
-            return 0.0
-        return ((time_ms - self._eff_start) / eff_dur) * w
+        return trim_ms_to_x(time_ms, w, self.trim_start_ms, self.trim_end_ms, self.duration)
 
     def _x_to_ms(self, x: float, w: int) -> float:
         """Convert x-pixel position to absolute time (ms) in the trimmed viewport."""
-        if w <= 0:
-            return self._eff_start
-        return (x / w) * self._eff_dur + self._eff_start
+        return trim_x_to_ms(x, w, self.trim_start_ms, self.trim_end_ms, self.duration)
 
     _MENU_STYLE = (
         "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
@@ -310,7 +306,7 @@ class _TimelineTrack(QWidget):
 
         eff_start = self._eff_start
         eff_end = self._eff_end
-        buckets = min(w, 200)
+        buckets = max(1, min(w, 200))
         speeds = [0.0] * buckets
         max_speed = 0.0
 
@@ -356,7 +352,7 @@ class _TimelineTrack(QWidget):
 
         eff_start = self._eff_start
         eff_end = self._eff_end
-        buckets = min(w, 200)
+        buckets = max(1, min(w, 200))
         counts = [0] * buckets
         max_count = 0
 
@@ -871,6 +867,8 @@ class _TimelineTrack(QWidget):
 
         if self._dragging and self.duration > 0:
             if self._drag_mode == "trim_start":
+                if self.width() <= 0:
+                    return
                 # Relative drag: map pixel delta to time delta using full duration
                 delta_px = mx - self._drag_trim_start_x
                 delta_ms = (delta_px / self.width()) * self.duration
@@ -882,6 +880,8 @@ class _TimelineTrack(QWidget):
                 self.update()
                 return
             elif self._drag_mode == "trim_end":
+                if self.width() <= 0:
+                    return
                 delta_px = mx - self._drag_trim_start_x
                 delta_ms = (delta_px / self.width()) * self.duration
                 new_time = self._drag_trim_initial_val + delta_ms

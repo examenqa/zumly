@@ -1922,6 +1922,14 @@ class MainWindow(QMainWindow):
         self._preview.set_playback_end(end_ms)
         self._mark_dirty()
 
+        # Clamp the current playhead into the new trim range so it cannot sit
+        # outside [trim_start, trim_end] after a trim change.
+        eff_end = end_ms if end_ms > 0 else self._rec_duration_ms
+        if self._playback_time < start_ms:
+            self._on_seek(start_ms)
+        elif self._playback_time > eff_end:
+            self._on_seek(eff_end)
+
     def _on_drag_finished(self) -> None:
         """Reset undo debounce flag when a timeline drag completes."""
         self._drag_undo_pushed = False

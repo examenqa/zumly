@@ -1,42 +1,20 @@
 """Tests for timeline trim-aware coordinate mapping and playback clamping.
 
-These tests exercise the pure-logic trim coordinate mapping functions
-(_ms_to_x, _x_to_ms, _eff_start, _eff_end, _eff_dur) without
-requiring a running Qt application.  The math is extracted and tested
-inline to avoid a PySide6 dependency.
+These tests exercise the production trim-mapping functions from
+``app.widgets.timeline_math`` — the same code that ``_TimelineTrack``
+delegates to — so they cover the real code path without requiring a
+PySide6 dependency.
 """
 
 import pytest
 
-
-# ── Extracted trim mapping logic ───────────────────────────────────
-# Mirrors the implementation in _TimelineTrack for testability.
-
-def eff_start(trim_start_ms: float) -> float:
-    return trim_start_ms
-
-
-def eff_end(trim_end_ms: float, duration: float) -> float:
-    return trim_end_ms if trim_end_ms > 0 else duration
-
-
-def eff_dur(trim_start_ms: float, trim_end_ms: float, duration: float) -> float:
-    return eff_end(trim_end_ms, duration) - eff_start(trim_start_ms)
-
-
-def ms_to_x(time_ms: float, w: int, trim_start_ms: float, trim_end_ms: float, duration: float) -> float:
-    """Convert absolute time (ms) to x-pixel within the trimmed viewport."""
-    ed = eff_dur(trim_start_ms, trim_end_ms, duration)
-    if ed <= 0:
-        return 0.0
-    return ((time_ms - eff_start(trim_start_ms)) / ed) * w
-
-
-def x_to_ms(x: float, w: int, trim_start_ms: float, trim_end_ms: float, duration: float) -> float:
-    """Convert x-pixel position to absolute time (ms) in the trimmed viewport."""
-    if w <= 0:
-        return eff_start(trim_start_ms)
-    return (x / w) * eff_dur(trim_start_ms, trim_end_ms, duration) + eff_start(trim_start_ms)
+from app.widgets.timeline_math import (
+    trim_eff_start as eff_start,
+    trim_eff_end as eff_end,
+    trim_eff_dur as eff_dur,
+    trim_ms_to_x as ms_to_x,
+    trim_x_to_ms as x_to_ms,
+)
 
 
 # ── Tests ──────────────────────────────────────────────────────────
