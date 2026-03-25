@@ -21,6 +21,7 @@ FollowCursor is a **Windows screen recorder** with cinematic cursor-following zo
 | Image Processing | OpenCV (cv2) + NumPy | Frame manipulation, thumbnails, cursor rendering |
 | Input Tracking | Win32 Hooks (ctypes) | WH_MOUSE_LL, WH_KEYBOARD_LL via WINFUNCTYPE |
 | Build | PyInstaller | Single-folder .exe distribution |
+| Installer | MSIX | Signed Windows package via Azure Trusted Signing |
 | CI | GitHub Actions | Windows runner, artifact upload |
 | AI Features | azure-ai-inference | Optional AI zoom analysis, TTS voiceover via Azure AI Foundry |
 
@@ -38,8 +39,13 @@ followcursor/                    ← repo root
 │   ├── main.py                  ← Entry point
 │   ├── requirements.txt         ← Python dependencies
 │   ├── build.bat                ← PyInstaller build script
+│   ├── Build-Msix.ps1           ← MSIX packaging + signing script
+│   ├── generate_msix_assets.py  ← Generate MSIX tile PNGs from app icon
 │   ├── dev.bat                  ← Dev setup & launch script
 │   ├── followcursor.ico         ← App icon
+│   ├── msix/                    ← MSIX packaging files
+│   │   ├── AppxManifest.xml     ← Package manifest template
+│   │   └── Assets/              ← Generated tile PNGs (gitignored)
 │   └── app/                     ← Application package
 │       ├── main_window.py       ← Central coordinator
 │       ├── models.py            ← Data classes
