@@ -1,6 +1,7 @@
 name: Build
 permissions:
   contents: write
+  pull-requests: write  # Required for PR artifact comments
   id-token: write  # Required for Azure Trusted Signing OIDC
 on:
   push:
@@ -135,6 +136,40 @@ jobs:
           name: ${{ steps.artifact.outputs.NAME }}
           path: followcursor/dist/FollowCursor/
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+      - name: Comment PR with artifact link
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const name = '${{ steps.artifact.outputs.NAME }}';
+            const body = `### 📦 Build artifact ready\n\n` +
+              `**${name}**\n\n` +
+              `[Download from workflow run](${runUrl}#artifacts)`;
+
+            // Delete previous bot comments to keep the PR clean
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const c of comments) {
+              if (c.user.type === 'Bot' && c.body.includes('Build artifact ready')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: c.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
 
       - name: Install Azure Trusted Signing client
         if: startsWith(github.ref, 'refs/tags/v')
