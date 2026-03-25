@@ -58,7 +58,7 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Build MSIX",
+			"label": "Build MSIX (Unsigned)",
 			"type": "process",
 			"command": "powershell",
 			"args": [
@@ -66,6 +66,28 @@
 				"-File", "${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
 				"-Version", "${input:msixVersion}",
 				"-SkipSign"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/followcursor"
+			},
+			"group": "build",
+			"dependsOn": "Build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Build MSIX (Signed with PFX)",
+			"type": "process",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
+				"-Version", "${input:msixVersion}",
+				"-Publisher", "${input:msixPublisher}",
+				"-LocalPfx", "${input:pfxPath}"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
@@ -126,6 +148,16 @@
 			"type": "promptString",
 			"description": "MSIX version (e.g. 0.5.0)",
 			"default": "0.5.0"
+		},
+		{
+			"id": "msixPublisher",
+			"type": "promptString",
+			"description": "Certificate subject (e.g. CN=Name, O=Org, L=City, S=State, C=US)"
+		},
+		{
+			"id": "pfxPath",
+			"type": "promptString",
+			"description": "Path to .pfx certificate file"
 		}
 	]
 }
