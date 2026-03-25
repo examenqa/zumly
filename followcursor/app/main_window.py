@@ -1191,6 +1191,7 @@ class MainWindow(QMainWindow):
         self._vo_played_ids = set()
         self._trim_start_ms = 0.0
         self._trim_end_ms = 0.0
+        self._preview.set_playback_end(0.0)
         self._project_path = ""
         self._unsaved_changes = False
         self._output_dim = "auto"
@@ -1918,6 +1919,7 @@ class MainWindow(QMainWindow):
         """Handle trim handle changes from the timeline."""
         self._trim_start_ms = start_ms
         self._trim_end_ms = end_ms
+        self._preview.set_playback_end(end_ms)
         self._mark_dirty()
 
     def _on_drag_finished(self) -> None:
@@ -2475,6 +2477,11 @@ class MainWindow(QMainWindow):
     # ── playback / timeline ─────────────────────────────────────────
 
     def _on_seek(self, time_ms: float) -> None:
+        # Clamp to the effective (trimmed) playback range
+        eff_start = self._trim_start_ms
+        eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+        time_ms = max(eff_start, min(time_ms, eff_end))
+
         self._playback_time = time_ms
         # Mark voiceovers whose audio has fully passed as already played.
         # Segments the playhead is currently inside remain unplayed so
@@ -2510,11 +2517,15 @@ class MainWindow(QMainWindow):
             return
         if self._preview.is_playing:
             t = self._preview.playback_pos_ms
-            # Soft-clamp: keep the displayed time within the recording
-            # duration so the timer label never exceeds the total, but
-            # do NOT force-pause — let the video stop naturally when it
-            # runs out of frames.
-            if self._rec_duration_ms > 0:
+            # Clamp to the effective (trimmed) playback range
+            eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+            if t >= eff_end:
+                # Reached the end of the trimmed range — pause playback
+                self._preview.pause()
+                t = eff_end
+                self._timeline.set_playing(False)
+                self._stop_voiceover_audio()
+            elif self._rec_duration_ms > 0:
                 t = min(t, self._rec_duration_ms)
             self._playback_time = t
             self._zoom_engine.update(t)
@@ -2688,6 +2699,13 @@ class MainWindow(QMainWindow):
             self._timeline.set_playing(False)
             self._stop_voiceover_audio()
         else:
+            # Wrap to trim start if playhead is at/past the effective end
+            eff_start = self._trim_start_ms
+            eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+            if self._playback_time >= eff_end - 100:
+                self._playback_time = eff_start
+                self._preview.seek_to(eff_start)
+                self._preview.set_current_time(eff_start)
             # Only mark voiceovers as played if their audio has fully passed
             self._vo_played_ids = {
                 seg.id for seg in self._voiceover_segments
@@ -3009,6 +3027,7 @@ class MainWindow(QMainWindow):
             self._frame_timestamps = session.frame_timestamps or []
             self._trim_start_ms = session.trim_start_ms
             self._trim_end_ms = session.trim_end_ms
+            self._preview.set_playback_end(session.trim_end_ms)
 
             # Restore voiceover segments
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []

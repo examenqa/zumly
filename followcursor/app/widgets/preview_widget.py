@@ -99,6 +99,8 @@ class PreviewWidget(QWidget):
         self._play_start_pos_ms: float = 0.0
         self._last_displayed_frame: int = -1
         self._frame_timestamps: Optional[List[float]] = None  # per-frame ms offsets
+        # Trim-aware playback boundary (0 = use full video duration)
+        self._playback_end_ms: float = 0.0
 
     # ── public API ──────────────────────────────────────────────────
 
@@ -373,6 +375,10 @@ class PreviewWidget(QWidget):
         if self._video_cap:
             self._video_cap.release()
             self._video_cap = None
+
+    def set_playback_end(self, end_ms: float) -> None:
+        """Set the effective end time for playback (0 = full video duration)."""
+        self._playback_end_ms = end_ms
 
     @property
     def playback_pos_ms(self) -> float:
@@ -1030,6 +1036,14 @@ class PreviewWidget(QWidget):
             self.pause()
             self._playback_pos_ms = self._video_duration_ms
             self._current_time_ms = self._video_duration_ms
+            return
+
+        # Clamp to effective trim end when set
+        eff_end = self._playback_end_ms if self._playback_end_ms > 0 else self._video_duration_ms
+        if target_ms >= eff_end:
+            self.pause()
+            self._playback_pos_ms = eff_end
+            self._current_time_ms = eff_end
             return
 
         target_frame = self._time_to_frame(target_ms)
