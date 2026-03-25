@@ -658,7 +658,7 @@ class AIWorker(QThread):
 
     zoom_result = Signal(list)  # List[ZoomKeyframe]
     tts_result = Signal(str, str)  # (segment_id, audio_file_path)
-    error = Signal(str)  # error message
+    error = Signal(str, str)  # (task "zoom"|"tts", error message)
     status = Signal(str)  # progress text
 
     def __init__(self, parent=None) -> None:
@@ -698,4 +698,4 @@ class AIWorker(QThread):
                 self.tts_result.emit(seg_id, result)
         except Exception as exc:
             logger.exception("AI operation failed: %s", self._task)
-            self.error.emit(str(exc))
+            self.error.emit(self._task, str(exc))

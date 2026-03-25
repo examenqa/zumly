@@ -63,6 +63,20 @@ QWidget:focus { outline: none; }
 #ExportBtn:hover {
     background-color: #9d74f7;
 }
+#DiscardBtn {
+    height: 32px;
+    padding: 0 20px;
+    border-radius: 6px;
+    background-color: #374151;
+    border: none;
+    color: #ef5350;
+    font-size: 13px;
+    font-weight: 600;
+}
+#DiscardBtn:hover {
+    background-color: #4b5563;
+    color: #f87171;
+}
 
 /* ── Sidebar ────────────────────────────────────────── */
 #Sidebar {

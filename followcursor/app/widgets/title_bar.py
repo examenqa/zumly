@@ -14,6 +14,7 @@ class TitleBar(QWidget):
     """
 
     export_clicked = Signal()
+    discard_clicked = Signal()
 
     def __init__(self, window: QWidget) -> None:
         super().__init__(window)
@@ -51,6 +52,12 @@ class TitleBar(QWidget):
         self._btn_export.clicked.connect(self.export_clicked.emit)
         layout.addWidget(self._btn_export)
 
+        self._btn_discard = QPushButton("🗑  Discard")
+        self._btn_discard.setObjectName("DiscardBtn")
+        self._btn_discard.clicked.connect(self.discard_clicked.emit)
+        self._btn_discard.setVisible(False)
+        layout.addWidget(self._btn_discard)
+
         layout.addSpacing(12)
 
         # window controls
@@ -74,6 +81,10 @@ class TitleBar(QWidget):
     def set_export_text(self, text: str) -> None:
         """Update the export button label (e.g. during export progress)."""
         self._btn_export.setText(text)
+
+    def set_discard_visible(self, visible: bool) -> None:
+        """Show or hide the discard button."""
+        self._btn_discard.setVisible(visible)
 
     def set_title(self, project_name: str = "", unsaved: bool = False) -> None:
         """Update the title bar text to show the current project name."""

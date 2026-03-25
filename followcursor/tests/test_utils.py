@@ -46,7 +46,7 @@ class TestFmtTime:
 
 class TestEncoderProfiles:
     def test_all_required_keys(self) -> None:
-        expected = {"h264_nvenc", "h264_qsv", "h264_amf", "libx264"}
+        expected = {"h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libx264"}
         assert set(ENCODER_PROFILES.keys()) == expected
 
     def test_profile_structure(self) -> None:

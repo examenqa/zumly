@@ -37,14 +37,15 @@ def fmt_time(ms: float) -> str:
 # Encoder ID → (display name, ffmpeg codec name, quality args)
 # Quality args approximate CRF 18 equivalent for each encoder.
 ENCODER_PROFILES: Dict[str, Tuple[str, str, List[str]]] = {
-    "h264_nvenc":  ("NVIDIA NVENC",   "h264_nvenc",  ["-preset", "p4", "-cq", "18", "-b:v", "0"]),
-    "h264_qsv":    ("Intel QuickSync", "h264_qsv",   ["-preset", "medium", "-global_quality", "18"]),
-    "h264_amf":    ("AMD AMF",         "h264_amf",    ["-quality", "quality", "-qp_i", "18", "-qp_p", "18"]),
-    "libx264":     ("Software (x264)", "libx264",     ["-preset", "medium", "-crf", "18"]),
+    "h264_nvenc":  ("NVIDIA NVENC",    "h264_nvenc",  ["-preset", "p4", "-cq", "18", "-b:v", "0"]),
+    "h264_qsv":    ("Intel QuickSync",  "h264_qsv",   ["-preset", "medium", "-global_quality", "18"]),
+    "h264_amf":    ("AMD AMF",          "h264_amf",    ["-quality", "quality", "-qp_i", "18", "-qp_p", "18"]),
+    "h264_mf":     ("Media Foundation", "h264_mf",     ["-rate_control", "quality", "-quality", "80"]),
+    "libx264":     ("Software (x264)",  "libx264",     ["-preset", "medium", "-crf", "18"]),
 }
 
 # Order of preference for auto-detection
-_HW_ENCODER_ORDER = ["h264_nvenc", "h264_qsv", "h264_amf"]
+_HW_ENCODER_ORDER = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf"]
 
 # Cached result so we only probe once per process
 _available_encoders: List[str] | None = None

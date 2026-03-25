@@ -752,6 +752,7 @@ class MainWindow(QMainWindow):
         # title bar
         self._title_bar = TitleBar(self)
         self._title_bar.export_clicked.connect(self._save_recording)
+        self._title_bar.discard_clicked.connect(self._discard_recording)
         root.addWidget(self._title_bar)
 
         # main content row
@@ -1448,6 +1449,7 @@ class MainWindow(QMainWindow):
             self._btn_change_source.setVisible(False)
             self._preview_stack.setCurrentWidget(self._preview)
             self._title_bar.set_export_enabled(bool(self._video_path))
+            self._title_bar.set_discard_visible(bool(self._video_path))
             if self._video_path and os.path.isfile(self._video_path):
                 # Use actual recorded FPS so playback speed matches reality
                 fps = self._actual_fps_override if self._actual_fps_override > 0 else self._recorder.actual_fps
@@ -1857,13 +1859,16 @@ class MainWindow(QMainWindow):
         s = int(ms / 1000)
         return f"{s // 60}:{s % 60:02d}"
 
-    def _on_ai_error(self, msg: str) -> None:
+    def _on_ai_error(self, task: str, msg: str) -> None:
         """Handle AI operation errors."""
-        logger.error("AI error: %s", msg)
+        logger.error("AI error (%s): %s", task, msg)
         self._status_text.setText("Ready")
         self._editor.set_ai_busy(False)
-        self._editor.set_ai_zoom_status("")
-        self._editor.set_voiceover_status(f"AI error: {msg[:200]}")
+        truncated = msg[:200]
+        if task == "zoom":
+            self._editor.set_ai_zoom_status(f"AI error: {truncated}")
+        else:
+            self._editor.set_voiceover_status(f"AI error: {truncated}")
 
     def _on_ai_status(self, msg: str) -> None:
         """Handle AI status updates."""
@@ -2588,6 +2593,85 @@ class MainWindow(QMainWindow):
                 self._title_bar.set_export_text("\u2b06  Export")
                 self._title_bar.set_export_enabled(True)
                 self._status_text.setText("Export failed to start")
+
+    def _discard_recording(self) -> None:
+        """Delete the current recording and return to record mode."""
+        if not self._video_path:
+            return
+
+        # Confirmation dialog — offer Save when there are unsaved changes
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Discard Recording")
+        dlg.setIcon(QMessageBox.Icon.Warning)
+        if self._unsaved_changes:
+            dlg.setText(
+                "Discard this recording and all unsaved changes?\n"
+                "This cannot be undone."
+            )
+            btn_save = dlg.addButton("Save First", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            dlg.setText(
+                "Discard this recording?\nThis cannot be undone."
+            )
+            btn_save = None
+        btn_discard = dlg.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        btn_cancel = dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dlg.setDefaultButton(btn_cancel)
+        dlg.setStyleSheet("""
+            QMessageBox {
+                background-color: #1a1829;
+                color: #e4e4ed;
+            }
+            QMessageBox QLabel {
+                color: #e4e4ed;
+                font-size: 13px;
+            }
+            QPushButton {
+                height: 32px;
+                min-width: 80px;
+                padding: 0 18px;
+                border-radius: 6px;
+                border: 1px solid #3d3b55;
+                background-color: #28263e;
+                color: #e4e4ed;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #353350;
+                border-color: #4e4c68;
+            }
+            QPushButton:default {
+                background-color: #8b5cf6;
+                border: none;
+                color: white;
+                font-weight: 600;
+            }
+            QPushButton:default:hover {
+                background-color: #9d74f7;
+            }
+        """)
+        dlg.exec()
+        clicked = dlg.clickedButton()
+        if clicked == btn_cancel:
+            return
+        if clicked == btn_save:
+            self._save_session()
+            if self._unsaved_changes:
+                return  # user cancelled save dialog
+
+        # Delete the temporary video file
+        try:
+            if os.path.isfile(self._video_path):
+                os.unlink(self._video_path)
+                logger.info("Discarded recording: %s", self._video_path)
+        except Exception:
+            logger.exception("Failed to delete recording file: %s", self._video_path)
+
+        self._video_path = ""
+        self._reset_session()
+        self._title_bar.set_discard_visible(False)
+        self._set_view("record")
 
     def _on_play_pause(self) -> None:
         if self._preview.is_playing:
