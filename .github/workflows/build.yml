@@ -37,6 +37,18 @@ jobs:
           $ver = python -c "exec(open('app/version.py').read()); print(__version__)"
           echo "APP_VERSION=$ver" >> $env:GITHUB_OUTPUT
 
+      - name: Build artifact name
+        id: artifact
+        shell: pwsh
+        run: |
+          $base = "FollowCursor-${{ steps.version.outputs.APP_VERSION }}"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $name = "$base-pr${{ github.event.pull_request.number }}-$("${{ github.event.pull_request.head.sha }}".Substring(0,7))"
+          } else {
+            $name = "$base-windows"
+          }
+          echo "NAME=$name" >> $env:GITHUB_OUTPUT
+
       - name: Install dependencies
         working-directory: followcursor
         run: |
@@ -120,9 +132,9 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FollowCursor-${{ steps.version.outputs.APP_VERSION }}-windows
+          name: ${{ steps.artifact.outputs.NAME }}
           path: followcursor/dist/FollowCursor/
-          retention-days: 30
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
       - name: Install Azure Trusted Signing client
         if: startsWith(github.ref, 'refs/tags/v')
