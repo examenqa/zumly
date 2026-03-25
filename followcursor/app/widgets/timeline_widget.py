@@ -267,7 +267,7 @@ class _TimelineTrack(QWidget):
         eff_dur = self._eff_dur
         if eff_dur <= 0:
             return
-        # draw tick marks every 5 seconds based on visible duration
+        # draw tick marks at intervals based on visible duration
         interval_ms = 5000
         if eff_dur < 30000:
             interval_ms = 5000
@@ -634,7 +634,6 @@ class _TimelineTrack(QWidget):
 
         eff_start = self._eff_start
         eff_end = self._eff_end
-        self._vo_rects: list[tuple] = []  # [(x, w, seg_id)] for hit testing
 
         for seg in self.voiceover_segments:
             # Filter voiceover segments outside the trimmed range
