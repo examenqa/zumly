@@ -1094,14 +1094,16 @@ class _TimelineTrack(QWidget):
         my = event.position().y()
 
         if self._dragging and self.duration > 0:
-            # Snap-to-playhead helper: check whether mx is close enough to
-            # the playhead position and Alt is not held (Alt suppresses snap).
-            alt_held = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
-            playhead_px = (self.current_time / self.duration) * self.width()
-            snap_active = (
-                not alt_held
-                and abs(mx - playhead_px) <= self.TRIM_SNAP_PX
-            )
+            # Snap-to-playhead helper (only for trim handle drags): check
+            # whether mx is close enough to the playhead and Alt is not held.
+            snap_active = False
+            if self._drag_mode in ("trim_start", "trim_end"):
+                alt_held = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+                playhead_px = (self.current_time / self.duration) * self.width()
+                snap_active = (
+                    not alt_held
+                    and abs(mx - playhead_px) <= self.TRIM_SNAP_PX
+                )
 
             if self._drag_mode == "trim_start":
                 if self.width() <= 0:
