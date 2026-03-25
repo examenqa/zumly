@@ -31,6 +31,7 @@ followcursor/                    ← repo root
 ├── .github/
 │   ├── copilot-instructions.md  ← This file (general context)
 │   ├── instructions/            ← Domain-specific Copilot instructions
+│   ├── prompts/                 ← Copilot prompt files (e.g. fix-errors)
 │   └── workflows/build.yml     ← GitHub Actions CI
 ├── .vscode/                     ← VS Code config (launch, tasks, settings)
 ├── followcursor/                ← Python project root
@@ -100,6 +101,7 @@ All **features, bug fixes, and significant changes** must be developed on a dedi
 - Type hints on all function signatures
 - Docstrings on classes and complex methods
 - **Logging** via Python's `logging` module — no bare `print()`. Each module uses `logger = logging.getLogger(__name__)`. `logging.basicConfig()` is configured in `main.py` with format `"%(name)s | %(levelname)s | %(message)s"` at level `INFO`
+- **Error log file**: A `RotatingFileHandler` in `main.py` writes ERROR+ entries to `%LOCALAPPDATA%/FollowCursor/error.log` (2 MB, 3 backups). Entries include timestamp, module, file path, line number, function name, and full traceback. Use the `/fix-errors` prompt to diagnose and fix logged errors.
 
 ## Documentation Maintenance
 
