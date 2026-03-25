@@ -95,6 +95,22 @@ Output: `dist\FollowCursor\FollowCursor.exe`
 
 The build script automatically creates a virtual environment and installs all dependencies if needed.
 
+### VS Code Tasks
+
+All build steps are available as VS Code tasks (`Ctrl+Shift+P` → **Tasks: Run Task**):
+
+| Task | What it does |
+| ---- | ------------ |
+| **Run** | Launches the app from source (`main.py`) |
+| **Start Dev** | Creates venv, installs deps, then launches the app |
+| **Build** (`Ctrl+Shift+B`) | Runs `Build-App.ps1` — produces `dist\FollowCursor\FollowCursor.exe` |
+| **Build MSIX (Unsigned)** | Builds the app, then packages an unsigned `.msix` for local testing |
+| **Build MSIX (Signed with PFX)** | Builds the app, then packages and signs the `.msix` with a local certificate |
+| **Install Dependencies** | Runs `pip install -r requirements.txt` into the venv |
+| **Run Tests** | Runs the pytest suite — **always run before merging or releasing** |
+
+The MSIX tasks depend on **Build** and will run it automatically first. When prompted, enter the version string (e.g. `0.6.0`) and, for signed builds, the certificate subject and `.pfx` path.
+
 ### MSIX Package
 
 To produce a single-file installer (`.msix`), first run `Build-App.ps1` to create the
@@ -133,9 +149,13 @@ You can also trigger a build manually from the Actions tab.
 ### Releasing a new version
 
 1. Update `__version__` in `followcursor/app/version.py`
-2. Commit and push to `main`
-3. Tag the commit: `git tag v0.2.0 && git push --tags`
-4. The CI workflow automatically creates a GitHub Release
+2. Add a new section to `CHANGELOG.md` with today's date
+3. Run the **Run Tests** VS Code task — all tests must pass
+4. Commit and push to `main`
+5. Tag the commit: `git tag v0.2.0 && git push --tags`
+6. The CI workflow automatically builds the `.exe` + signed `.msix` and creates a GitHub Release
+
+To build locally before tagging, use the **Build** task (`Ctrl+Shift+B`) or the **Build MSIX** tasks from the VS Code task list.
 
 ## Shortcuts
 

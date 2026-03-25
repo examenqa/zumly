@@ -65,17 +65,17 @@ Record your screen or any individual window, then export a polished MP4 video wh
 
 ### Quick Start
 
-```bat
-dev.bat
+```powershell
+.\scripts\Start-Dev.ps1
 ```
 
 Creates a virtual environment, installs dependencies, and launches the app.
 
 ### Manual Setup
 
-```bat
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python main.py
 ```
@@ -84,13 +84,27 @@ python main.py
 
 Build a standalone `.exe` with PyInstaller:
 
-```bat
-build.bat
+```powershell
+.\scripts\Build-App.ps1
 ```
 
 Output: `dist\FollowCursor\FollowCursor.exe`
 
 The build script automatically creates a virtual environment and installs all dependencies if needed.
+
+### VS Code Tasks
+
+All build steps are available as VS Code tasks (`Ctrl+Shift+P` → **Tasks: Run Task**):
+
+| Task | What it does |
+| ---- | ------------ |
+| **Run** | Launches the app from source (`main.py`) |
+| **Start Dev** | Creates venv, installs deps, then launches the app |
+| **Build** (`Ctrl+Shift+B`) | Runs `Build-App.ps1` — produces `dist\FollowCursor\FollowCursor.exe` |
+| **Build MSIX (Unsigned)** | Builds the app, then packages an unsigned `.msix` for local testing |
+| **Build MSIX (Signed with PFX)** | Builds the app, then packages and signs the `.msix` with a local certificate |
+| **Install Dependencies** | Runs `pip install -r requirements.txt` into the venv |
+| **Run Tests** | Runs the pytest suite — **always run before merging or releasing** |
 
 ## CI/CD
 
@@ -136,9 +150,12 @@ You can also trigger a build manually from the Actions tab.
 followcursor/
 ├── main.py                          # Entry point, QApplication setup
 ├── requirements.txt                 # Python dependencies
-├── build.bat                        # PyInstaller build script
-├── dev.bat                          # Dev setup & launch script
 ├── followcursor.ico                 # App icon
+├── scripts/                         # Build & infra PowerShell scripts
+│   ├── Build-App.ps1                # PyInstaller build script
+│   ├── Start-Dev.ps1                # Dev setup & launch script
+│   ├── Build-Msix.ps1               # MSIX packaging + signing
+│   └── Setup-AzureSigning.ps1       # Provision Azure Trusted Signing resources
 ├── app/
 │   ├── version.py                   # Semantic version (__version__)
 │   ├── models.py                    # Data classes (MousePosition, ZoomKeyframe, ClickEvent, …)

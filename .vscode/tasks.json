@@ -23,8 +23,10 @@
 			"type": "process",
 			"command": "powershell",
 			"args": [
-				"-ExecutionPolicy", "Bypass",
-				"-File", "${workspaceFolder}/followcursor/scripts/Start-Dev.ps1"
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}/followcursor/scripts/Start-Dev.ps1"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
@@ -41,8 +43,10 @@
 			"type": "process",
 			"command": "powershell",
 			"args": [
-				"-ExecutionPolicy", "Bypass",
-				"-File", "${workspaceFolder}/followcursor/scripts/Build-App.ps1"
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}/followcursor/scripts/Build-App.ps1"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
@@ -62,9 +66,12 @@
 			"type": "process",
 			"command": "powershell",
 			"args": [
-				"-ExecutionPolicy", "Bypass",
-				"-File", "${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
-				"-Version", "${input:msixVersion}",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
+				"-Version",
+				"${input:msixVersion}",
 				"-SkipSign"
 			],
 			"options": {
@@ -83,11 +90,16 @@
 			"type": "process",
 			"command": "powershell",
 			"args": [
-				"-ExecutionPolicy", "Bypass",
-				"-File", "${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
-				"-Version", "${input:msixVersion}",
-				"-Publisher", "${input:msixPublisher}",
-				"-LocalPfx", "${input:pfxPath}"
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
+				"-Version",
+				"${input:msixVersion}",
+				"-Publisher",
+				"${input:msixPublisher}",
+				"-LocalPfx",
+				"${input:pfxPath}"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
