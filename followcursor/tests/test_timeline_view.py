@@ -1,46 +1,18 @@
 """Tests for timeline view zoom coordinate mapping logic.
 
-The _TimelineTrack widget uses _ms_to_x / _x_to_ms helpers with
-view_scale and view_offset.  Since these require a live QWidget, we
-test the underlying math directly with a lightweight stand-in.
+The _TimelineTrack widget uses _ms_to_x / _x_to_ms helpers that delegate
+to the pure functions in ``app.widgets.timeline_math``.  The tests import
+those functions directly so they assert against the real implementation.
 """
 
 import pytest
 
-
-# ── replicate the coordinate mapping math ──────────────────────────
-
-
-def ms_to_x(ms: float, duration: float, view_scale: float, view_offset: float, w: float) -> float:
-    """Mirror of _TimelineTrack._ms_to_x."""
-    if duration <= 0:
-        return 0.0
-    visible_duration = duration / view_scale
-    return ((ms - view_offset) / visible_duration) * w
-
-
-def x_to_ms(x: float, duration: float, view_scale: float, view_offset: float, w: float) -> float:
-    """Mirror of _TimelineTrack._x_to_ms."""
-    if duration <= 0 or w <= 0:
-        return 0.0
-    visible_duration = duration / view_scale
-    return view_offset + (x / w) * visible_duration
-
-
-def max_view_scale(duration: float, w: float) -> float:
-    """Mirror of _TimelineTrack._max_view_scale.  1 px = 10 ms."""
-    if w <= 0 or duration <= 0:
-        return 1.0
-    return max(1.0, duration / (10.0 * w))
-
-
-def clamp_offset(view_offset: float, duration: float, view_scale: float) -> float:
-    """Mirror of _TimelineTrack._clamp_offset."""
-    if duration <= 0:
-        return 0.0
-    visible_duration = duration / view_scale
-    max_offset = duration - visible_duration
-    return max(0.0, min(view_offset, max_offset))
+from app.widgets.timeline_math import (
+    view_ms_to_x as ms_to_x,
+    view_x_to_ms as x_to_ms,
+    view_max_scale as max_view_scale,
+    view_clamp_offset as clamp_offset,
+)
 
 
 # ── tests ──────────────────────────────────────────────────────────
@@ -201,5 +173,24 @@ class TestWheelZoomLogic:
     def test_zoom_out_at_max_resets(self) -> None:
         """Zooming out past scale=1 clamps to 1.0 with offset 0."""
         duration = 10000.0
-        new_scale = max(1.0, 0.8)  # should clamp
+        w = 800.0
+        old_scale = 2.0
+        view_offset = 3000.0
+        cursor_x = 400.0  # center
+
+        # Compute the ms under cursor before zoom
+        cursor_ms = x_to_ms(cursor_x, duration, old_scale, view_offset, w)
+
+        # Apply zoom out (0.5×) which would drop below scale=1, then clamp
+        zoom_factor = 0.5
+        new_scale = max(1.0, old_scale * zoom_factor)
         assert new_scale == 1.0
+
+        # Recompute offset based on the clamped scale and clamp it
+        visible_duration = duration / new_scale
+        ratio = cursor_x / w
+        new_offset = cursor_ms - ratio * visible_duration
+        new_offset = clamp_offset(new_offset, duration, new_scale)
+
+        # When scale returns to 1.0, no scrolling is possible → offset should be 0
+        assert new_offset == pytest.approx(0.0)

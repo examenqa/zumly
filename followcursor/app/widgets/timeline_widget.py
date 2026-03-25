@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
 from ..utils import fmt_time as _fmt
+from .timeline_math import view_ms_to_x, view_x_to_ms, view_max_scale, view_clamp_offset
 
 
 def _fmt_precise(ms: float) -> str:
@@ -124,37 +125,55 @@ class _TimelineTrack(QWidget):
 
     def _ms_to_x(self, ms: float) -> float:
         """Map a time in milliseconds to a widget x-coordinate, accounting for view zoom/pan."""
-        if self.duration <= 0:
-            return 0.0
-        w = self.width()
-        visible_duration = self.duration / self._view_scale
-        return ((ms - self._view_offset) / visible_duration) * w
+        return view_ms_to_x(ms, self.duration, self._view_scale, self._view_offset, self.width())
 
     def _x_to_ms(self, x: float) -> float:
         """Map a widget x-coordinate to a time in milliseconds, accounting for view zoom/pan."""
-        if self.duration <= 0:
-            return 0.0
-        w = self.width()
-        if w <= 0:
-            return 0.0
-        visible_duration = self.duration / self._view_scale
-        return self._view_offset + (x / w) * visible_duration
+        return view_x_to_ms(x, self.duration, self._view_scale, self._view_offset, self.width())
 
     def _max_view_scale(self) -> float:
         """Maximum view scale: 1 pixel = 10 ms."""
-        w = self.width()
-        if w <= 0 or self.duration <= 0:
-            return 1.0
-        return max(1.0, self.duration / (10.0 * w))
+        return view_max_scale(self.duration, self.width())
 
     def _clamp_offset(self) -> None:
         """Clamp _view_offset so the viewport stays within [0, duration]."""
-        if self.duration <= 0:
-            self._view_offset = 0.0
-            return
-        visible_duration = self.duration / self._view_scale
-        max_offset = self.duration - visible_duration
-        self._view_offset = max(0.0, min(self._view_offset, max_offset))
+        self._view_offset = view_clamp_offset(self._view_offset, self.duration, self._view_scale)
+
+    def _clamp_view(self) -> None:
+        """Ensure view scale/offset are valid for the current duration and width."""
+        self._view_scale = max(self.MIN_VIEW_SCALE, min(self._view_scale, self._max_view_scale()))
+        self._clamp_offset()
+
+    # ── public view API ────────────────────────────────────────────
+
+    @property
+    def view_scale(self) -> float:
+        """Current time-axis zoom factor (1.0 = fit-all, read-only)."""
+        return self._view_scale
+
+    @property
+    def view_offset(self) -> float:
+        """Left-edge offset of the viewport in ms (read-only)."""
+        return self._view_offset
+
+    def set_view_offset(self, offset_ms: float) -> None:
+        """Set the left-edge offset and clamp to valid range."""
+        self._view_offset = offset_ms
+        self._clamp_offset()
+        self.update()
+
+    def reset_view(self) -> None:
+        """Reset zoom to fit-all (scale=1, offset=0)."""
+        self._view_scale = 1.0
+        self._view_offset = 0.0
+        self.view_changed.emit()
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        """Clamp view state when the widget is resized."""
+        super().resizeEvent(event)
+        self._clamp_view()
+        self.view_changed.emit()
 
     # ── scroll-wheel zoom ─────────────────────────────────────────
 
@@ -775,11 +794,11 @@ class _TimelineTrack(QWidget):
         trim_s = self.trim_start_ms
         trim_e = self.trim_end_ms if self.trim_end_ms > 0 else self.duration
 
-        # Left handle — always at x=0 when trim_s==0, else at the trim position
+        # Left handle — at the view-relative position of trim_s (may be offscreen when zoomed)
         sx = self._ms_to_x(trim_s) if trim_s > 0 else self._ms_to_x(0)
         if abs(x - sx) <= grab:
             return "trim_start"
-        # Right handle — always at x=w when trim_e==duration, else at the trim position
+        # Right handle — at the view-relative position of trim_e (may be offscreen when zoomed)
         ex = self._ms_to_x(trim_e) if trim_e < self.duration else self._ms_to_x(self.duration)
         if abs(x - ex) <= grab:
             return "trim_end"
@@ -1193,32 +1212,28 @@ class TimelineWidget(QWidget):
     def _sync_scrollbar(self) -> None:
         """Update scrollbar range/position to match the track's view state."""
         track = self._track
-        if track._view_scale <= 1.0:
+        if track.view_scale <= 1.0:
             self._hscroll.setVisible(False)
             return
         self._hscroll.setVisible(True)
-        visible_duration = track.duration / track._view_scale
+        visible_duration = track.duration / track.view_scale
         max_offset = track.duration - visible_duration
         # Use integer steps (1 step = 1 ms) for fine granularity
         self._hscroll.blockSignals(True)
         self._hscroll.setMinimum(0)
         self._hscroll.setMaximum(int(max_offset))
         self._hscroll.setPageStep(int(visible_duration))
-        self._hscroll.setValue(int(track._view_offset))
+        self._hscroll.setValue(int(track.view_offset))
         self._hscroll.blockSignals(False)
 
     def _on_scrollbar(self, value: int) -> None:
         """Scroll the timeline track when the user moves the scrollbar."""
-        self._track._view_offset = float(value)
-        self._track._clamp_offset()
-        self._track.update()
+        self._track.set_view_offset(float(value))
 
     def reset_view(self) -> None:
         """Reset the timeline zoom to fit-all."""
-        self._track._view_scale = 1.0
-        self._track._view_offset = 0.0
+        self._track.reset_view()
         self._hscroll.setVisible(False)
-        self._track.update()
 
     def set_data(
         self,
@@ -1247,6 +1262,9 @@ class TimelineWidget(QWidget):
             self._track.voiceover_segments = voiceover_segments
         self._time_current.setText(_fmt_precise(current_time))
         self._time_total.setText(_fmt_precise(duration))
+        # Clamp view state after duration changes (scale may exceed new max)
+        self._track._clamp_view()
+        self._sync_scrollbar()
         self._track.update()
 
     def set_playing(self, playing: bool) -> None:
