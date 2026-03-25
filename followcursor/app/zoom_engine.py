@@ -12,14 +12,15 @@ undo/redo covers click deletions as well as keyframe edits.
 import copy
 from dataclasses import dataclass, field
 from typing import List, Tuple
-from .models import ClickEvent, ZoomKeyframe
+from .models import ClickEvent, VideoSegment, ZoomKeyframe
 
 
 @dataclass
 class _Snapshot:
-    """Internal snapshot for undo/redo — keyframes + click events."""
+    """Internal snapshot for undo/redo — keyframes + click events + video segments."""
     keyframes: List[ZoomKeyframe] = field(default_factory=list)
     click_events: List[ClickEvent] = field(default_factory=list)
+    video_segments: List[VideoSegment] = field(default_factory=list)
 
 
 def ease_out(t: float) -> float:
@@ -65,21 +66,23 @@ class ZoomEngine:
     def __init__(self) -> None:
         self.keyframes: List[ZoomKeyframe] = []
         self.click_events: List[ClickEvent] = []
+        self.video_segments: List[VideoSegment] = []
         self.current_zoom: float = 1.0
         self.current_pan_x: float = 0.5
         self.current_pan_y: float = 0.5
 
-        # Undo / redo stacks — each entry is a snapshot of keyframes + click events
+        # Undo / redo stacks — each entry is a snapshot of keyframes + click events + video segments
         self._undo_stack: List[_Snapshot] = []
         self._redo_stack: List[_Snapshot] = []
 
     # ── snapshot helpers ────────────────────────────────────────────
 
     def _snapshot(self) -> _Snapshot:
-        """Return a deep copy of the current keyframes and click events."""
+        """Return a deep copy of the current keyframes, click events, and video segments."""
         return _Snapshot(
             keyframes=copy.deepcopy(self.keyframes),
             click_events=copy.deepcopy(self.click_events),
+            video_segments=copy.deepcopy(self.video_segments),
         )
 
     def push_undo(self) -> None:
@@ -101,6 +104,7 @@ class ZoomEngine:
         snap = self._undo_stack.pop()
         self.keyframes = snap.keyframes
         self.click_events = snap.click_events
+        self.video_segments = snap.video_segments
         return True
 
     def redo(self) -> bool:
@@ -111,6 +115,7 @@ class ZoomEngine:
         snap = self._redo_stack.pop()
         self.keyframes = snap.keyframes
         self.click_events = snap.click_events
+        self.video_segments = snap.video_segments
         return True
 
     @property

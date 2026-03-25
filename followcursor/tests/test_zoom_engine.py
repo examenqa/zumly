@@ -396,3 +396,50 @@ class TestPanPointInterpolation:
         assert z1 == pytest.approx(1.8)
         assert z2 == pytest.approx(1.8)
         assert z3 == pytest.approx(1.8)
+
+
+# ── Video segment undo/redo ────────────────────────────────────────
+
+
+class TestVideoSegmentUndoRedo:
+    """Verify that video segments are included in undo/redo snapshots."""
+
+    def test_undo_restores_video_segments(self) -> None:
+        from app.models import VideoSegment
+        engine = ZoomEngine()
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        engine.video_segments = [seg]
+        engine.push_undo()
+        # Split the segment
+        engine.video_segments = [
+            VideoSegment.create(start_ms=0, end_ms=2500),
+            VideoSegment.create(start_ms=2500, end_ms=5000),
+        ]
+        assert len(engine.video_segments) == 2
+        assert engine.undo()
+        assert len(engine.video_segments) == 1
+        assert engine.video_segments[0].end_ms == 5000
+
+    def test_redo_restores_video_segments(self) -> None:
+        from app.models import VideoSegment
+        engine = ZoomEngine()
+        engine.video_segments = [VideoSegment.create(start_ms=0, end_ms=5000)]
+        engine.push_undo()
+        engine.video_segments = [
+            VideoSegment.create(start_ms=0, end_ms=2500),
+            VideoSegment.create(start_ms=2500, end_ms=5000),
+        ]
+        engine.undo()
+        assert len(engine.video_segments) == 1
+        assert engine.redo()
+        assert len(engine.video_segments) == 2
+
+    def test_video_segments_deep_copied(self) -> None:
+        from app.models import VideoSegment
+        engine = ZoomEngine()
+        engine.video_segments = [VideoSegment.create(start_ms=0, end_ms=5000)]
+        engine.push_undo()
+        engine.video_segments[0] = VideoSegment.create(start_ms=999, end_ms=9999)
+        engine.undo()
+        assert engine.video_segments[0].start_ms == 0
+        assert engine.video_segments[0].end_ms == 5000

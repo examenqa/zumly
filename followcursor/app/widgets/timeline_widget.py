@@ -15,7 +15,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu
 
-from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
+from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment, VideoSegment
 from ..utils import fmt_time as _fmt
 
 
@@ -47,6 +47,7 @@ class _TimelineTrack(QWidget):
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
+    split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()             # emitted when any drag completes
 
@@ -71,6 +72,7 @@ class _TimelineTrack(QWidget):
         self.key_events: List[KeyEvent] = []
         self.click_events: List[ClickEvent] = []
         self.voiceover_segments: List[VoiceoverSegment] = []
+        self.video_segments: List[VideoSegment] = []
         self.trim_start_ms: float = 0.0
         self.trim_end_ms: float = 0.0  # 0 = no trim
 
@@ -98,6 +100,8 @@ class _TimelineTrack(QWidget):
 
         # Zoom segment selection
         self._selected_segment_id: str = ""     # start kf id of selected segment
+        # Video segment selection
+        self._selected_video_seg_id: str = ""   # video segment id of selected segment
         # Voiceover selection
         self._selected_vo_id: str = ""          # voiceover segment id
         # Track mouse press position to distinguish click from drag
@@ -156,12 +160,17 @@ class _TimelineTrack(QWidget):
             del_act.triggered.connect(lambda: self._delete_selected_voiceover())
             menu.exec(self.mapToGlobal(pos))
             return
-        # Empty space — offer to add a zoom section or voiceover
+        # Empty space — offer to add a zoom section, voiceover, or split
         if self.duration > 0 and self.width() > 0:
             ratio = max(0.0, min(1.0, mx / self.width()))
             time_ms = ratio * self.duration
             menu = QMenu(self)
             menu.setStyleSheet(self._MENU_STYLE)
+            act_split = menu.addAction("✂  Split here")
+            act_split.triggered.connect(
+                lambda: self.split_requested.emit(time_ms)
+            )
+            menu.addSeparator()
             act_zoom = menu.addAction("🔍  Add Zoom here")
             act_zoom.triggered.connect(
                 lambda: self.add_zoom_requested.emit(time_ms)
@@ -216,6 +225,11 @@ class _TimelineTrack(QWidget):
         self._vo_top = self._seg_top + self._seg_h + 2
         self._vo_h = 18
         self._draw_voiceover_segments(painter, w, self._vo_top, self._vo_h)
+
+        # video segments (below voiceover segments)
+        self._vseg_top = self._vo_top + self._vo_h + 2
+        self._vseg_h = 14
+        self._draw_video_segments(painter, w, self._vseg_top, self._vseg_h)
 
         # playhead
         px = (self.current_time / self.duration) * w
@@ -629,6 +643,62 @@ class _TimelineTrack(QWidget):
                 return seg_id
         return ""
 
+    # ── video segments ────────────────────────────────────────────
+
+    def _draw_video_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
+        """Draw video segments as coloured blocks with divider lines at split boundaries."""
+        dur = self.duration
+        self._vseg_rects: list[tuple] = []  # [(x, seg_w, seg_id)] for hit testing
+
+        label_font = QFont()
+        label_font.setFamily("Segoe UI Variable")
+        label_font.setPixelSize(10)
+        painter.setFont(label_font)
+        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.drawText(4, top + h - 2, "Clips")
+
+        if dur <= 0 or not self.video_segments:
+            return
+
+        # Alternating segment colours
+        colors_normal = [QColor("#2e2b50"), QColor("#33304f")]
+        colors_selected = [QColor("#4a3f80"), QColor("#4f4580")]
+        border_normal = QColor("#3d3a58")
+        border_selected = QColor("#8b5cf6")
+
+        for i, seg in enumerate(self.video_segments):
+            sx = (seg.start_ms / dur) * w
+            ex = (seg.end_ms / dur) * w
+            seg_w = max(2, ex - sx)
+
+            is_selected = (seg.id == self._selected_video_seg_id)
+            fill = colors_selected[i % 2] if is_selected else colors_normal[i % 2]
+            border = border_selected if is_selected else border_normal
+
+            painter.setBrush(QBrush(fill))
+            painter.setPen(QPen(border, 2 if is_selected else 1))
+            painter.drawRoundedRect(QRectF(sx, top, seg_w, h), 3, 3)
+
+            self._vseg_rects.append((sx, seg_w, seg.id))
+
+        # Draw divider lines at internal boundaries
+        if len(self.video_segments) > 1:
+            painter.setPen(QPen(QColor("#f59e0b"), 2))
+            for seg in self.video_segments[1:]:
+                bx = int((seg.start_ms / dur) * w)
+                painter.drawLine(bx, top - 1, bx, top + h + 1)
+
+    def _video_seg_hit_test(self, mx: float, my: float) -> str:
+        """Return the video segment id at (mx, my), or empty string."""
+        if not hasattr(self, "_vseg_rects") or not hasattr(self, "_vseg_top"):
+            return ""
+        if my < self._vseg_top or my > self._vseg_top + self._vseg_h:
+            return ""
+        for sx, sw, seg_id in self._vseg_rects:
+            if sx <= mx <= sx + sw:
+                return seg_id
+        return ""
+
     # ── trim handles ──────────────────────────────────────────────
 
     def _draw_trim_handles(self, painter: QPainter, w: int, h: int) -> None:
@@ -806,10 +876,20 @@ class _TimelineTrack(QWidget):
                 self._drag_actually_moved = False
                 self.update()
                 return
+            # Check video segment selection (left-click)
+            vseg_id = self._video_seg_hit_test(mx, my)
+            if vseg_id:
+                self._selected_video_seg_id = vseg_id
+                self._selected_click_idx = -1
+                self._selected_segment_id = ""
+                self._selected_vo_id = ""
+                self.update()
+                return
             # Regular click — seek (and deselect any click/segment/voiceover)
             self._selected_click_idx = -1
             self._selected_segment_id = ""
             self._selected_vo_id = ""
+            self._selected_video_seg_id = ""
             ratio = max(0.0, min(1.0, mx / self.width()))
             self.clicked.emit(ratio)
             self.update()
@@ -972,6 +1052,10 @@ class _TimelineTrack(QWidget):
             self.update()
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_S and not event.modifiers():
+            if self.duration > 0:
+                self.split_requested.emit(self.current_time)
+                return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self._selected_segment_id:
                 sid = self._selected_segment_id
@@ -1006,6 +1090,7 @@ class TimelineWidget(QWidget):
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
+    split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     drag_finished = Signal()            # emitted when any drag completes
 
@@ -1077,6 +1162,7 @@ class TimelineWidget(QWidget):
         self._track.voiceover_clicked.connect(self.voiceover_clicked)
         self._track.voiceover_deleted.connect(self.voiceover_deleted)
         self._track.voiceover_moved.connect(self.voiceover_moved)
+        self._track.split_requested.connect(self.split_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
         layout.addWidget(self._track)
@@ -1104,6 +1190,7 @@ class TimelineWidget(QWidget):
         trim_start_ms: float = 0.0,
         trim_end_ms: float = 0.0,
         voiceover_segments: List[VoiceoverSegment] | None = None,
+        video_segments: List[VideoSegment] | None = None,
     ) -> None:
         """Push new session data into the timeline and repaint."""
         self._track.duration = duration
@@ -1118,6 +1205,8 @@ class TimelineWidget(QWidget):
         self._track.trim_end_ms = trim_end_ms
         if voiceover_segments is not None:
             self._track.voiceover_segments = voiceover_segments
+        if video_segments is not None:
+            self._track.video_segments = video_segments
         self._time_current.setText(_fmt_precise(current_time))
         self._time_total.setText(_fmt_precise(duration))
         self._track.update()

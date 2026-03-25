@@ -137,6 +137,54 @@ class ZoomKeyframe:
 
 
 @dataclass
+class VideoSegment:
+    """A contiguous section of the recording timeline.
+
+    A recording starts as one segment spanning the full duration.
+    Splitting at the playhead subdivides it into two adjacent segments.
+    Each segment can later be independently deleted or speed-adjusted.
+    """
+
+    id: str
+    start_ms: float  # inclusive start time (ms since recording start)
+    end_ms: float    # exclusive end time (ms)
+    speed: float = 1.0  # playback speed multiplier (1.0 = normal)
+
+    @staticmethod
+    def create(
+        start_ms: float,
+        end_ms: float,
+        speed: float = 1.0,
+    ) -> "VideoSegment":
+        """Factory that auto-generates a UUID."""
+        return VideoSegment(
+            id=str(uuid.uuid4()),
+            start_ms=start_ms,
+            end_ms=end_ms,
+            speed=speed,
+        )
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "id": self.id,
+            "startMs": self.start_ms,
+            "endMs": self.end_ms,
+        }
+        if self.speed != 1.0:
+            d["speed"] = self.speed
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "VideoSegment":
+        return VideoSegment(
+            id=d["id"],
+            start_ms=d["startMs"],
+            end_ms=d["endMs"],
+            speed=d.get("speed", 1.0),
+        )
+
+
+@dataclass
 class RecordingSession:
     """Top-level container for everything captured in one recording.
 
@@ -156,6 +204,7 @@ class RecordingSession:
     trim_start_ms: float = 0.0
     trim_end_ms: float = 0.0  # 0 = no trim (use full duration)
     voiceover_segments: List["VoiceoverSegment"] | None = None
+    video_segments: List["VideoSegment"] | None = None
 
     def to_json(self) -> str:
         """Serialize the entire session to a JSON string."""
@@ -178,6 +227,8 @@ class RecordingSession:
             data["trimEndMs"] = self.trim_end_ms
         if self.voiceover_segments:
             data["voiceoverSegments"] = [v.to_dict() for v in self.voiceover_segments]
+        if self.video_segments:
+            data["videoSegments"] = [vs.to_dict() for vs in self.video_segments]
         return json.dumps(data, indent=2)
 
     @staticmethod
@@ -194,6 +245,9 @@ class RecordingSession:
         voiceover_segments = None
         if "voiceoverSegments" in d:
             voiceover_segments = [VoiceoverSegment.from_dict(v) for v in d["voiceoverSegments"]]
+        video_segments = None
+        if "videoSegments" in d:
+            video_segments = [VideoSegment.from_dict(vs) for vs in d["videoSegments"]]
         return RecordingSession(
             id=d["id"],
             start_time=d["startTime"],
@@ -206,6 +260,7 @@ class RecordingSession:
             trim_start_ms=d.get("trimStartMs", 0.0),
             trim_end_ms=d.get("trimEndMs", 0.0),
             voiceover_segments=voiceover_segments,
+            video_segments=video_segments,
         )
 
 
