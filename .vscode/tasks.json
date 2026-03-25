@@ -19,6 +19,24 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "Start Dev",
+			"type": "process",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/followcursor/scripts/Start-Dev.ps1"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/followcursor"
+			},
+			"group": "none",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
 			"label": "Build",
 			"type": "process",
 			"command": "powershell",
@@ -33,6 +51,27 @@
 				"kind": "build",
 				"isDefault": true
 			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Build MSIX",
+			"type": "process",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
+				"-Version", "${input:msixVersion}",
+				"-SkipSign"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/followcursor"
+			},
+			"group": "build",
+			"dependsOn": "Build",
 			"presentation": {
 				"reveal": "always",
 				"panel": "shared"
@@ -79,6 +118,14 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
+		}
+	],
+	"inputs": [
+		{
+			"id": "msixVersion",
+			"type": "promptString",
+			"description": "MSIX version (e.g. 0.5.0)",
+			"default": "0.5.0"
 		}
 	]
 }

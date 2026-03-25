@@ -37,11 +37,20 @@
 #>
 
 param(
-    [string]$Location = "eastus",
-    [string]$ResourceGroupName = "rg-followcursor-signing",
-    [string]$AccountName = "followcursor-signing",
-    [string]$CertificateProfileName = "followcursor-cert",
-    [string]$GitHubRepo = "sabbour/followcursor"
+    [Parameter(Mandatory)]
+    [string]$Location,
+
+    [Parameter(Mandatory)]
+    [string]$ResourceGroupName,
+
+    [Parameter(Mandatory)]
+    [string]$AccountName,
+
+    [Parameter(Mandatory)]
+    [string]$CertificateProfileName,
+
+    [Parameter(Mandatory)]
+    [string]$GitHubRepo
 )
 
 $ErrorActionPreference = "Stop"
