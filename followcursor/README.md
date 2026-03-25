@@ -69,7 +69,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 ### Quick Start
 
 ```powershell
-.\dev.ps1
+.\scripts\dev.ps1
 ```
 
 Creates a virtual environment, installs dependencies, and launches the app.
@@ -88,7 +88,7 @@ python main.py
 Build a standalone `.exe` with PyInstaller:
 
 ```powershell
-.\build.ps1
+.\scripts\build.ps1
 ```
 
 Output: `dist\FollowCursor\FollowCursor.exe`
@@ -97,7 +97,8 @@ The build script automatically creates a virtual environment and installs all de
 
 ### MSIX Package
 
-Package the build into a signed MSIX installer:
+To produce a single-file installer (`.msix`), first run `build.ps1` to create the
+PyInstaller output, then run `Build-Msix.ps1` to package and optionally sign it:
 
 ```powershell
 # Unsigned (local testing / sideloading)
@@ -160,8 +161,6 @@ You can also trigger a build manually from the Actions tab.
 followcursor/
 ├── main.py                          # Entry point, QApplication setup
 ├── requirements.txt                 # Python dependencies
-├── build.ps1                        # PyInstaller build script
-├── dev.ps1                          # Dev setup & launch script
 ├── generate_msix_assets.py           # Generate MSIX tile PNGs from app icon
 ├── followcursor.ico                 # App icon
 ├── pytest.ini                       # Pytest configuration
@@ -169,6 +168,8 @@ followcursor/
 │   ├── AppxManifest.xml              # Package manifest template
 │   └── Assets/                       # Generated tile PNGs (gitignored)
 ├── scripts/                         # Build & infra PowerShell scripts
+│   ├── build.ps1                    # PyInstaller build script
+│   ├── dev.ps1                      # Dev setup & launch script
 │   ├── Build-Msix.ps1               # MSIX packaging + signing (local PFX or Azure)
 │   └── Setup-AzureSigning.ps1        # Provision Azure Trusted Signing resources
 ├── tests/                           # Unit test suite (pytest)
