@@ -37,7 +37,7 @@ try {
         Write-Host '  1. Install "Windows installer (64-bit)" from https://www.python.org/downloads/'
         Write-Host "  2. Delete .venv:  Remove-Item -Recurse -Force .venv"
         Write-Host '  3. Recreate:      & "C:\path\to\python-x64\python.exe" -m venv .venv'
-        Write-Host "  4. Run dev.ps1 again."
+        Write-Host "  4. Run Start-Dev.ps1 again."
         exit 1
     }
 
