@@ -227,9 +227,12 @@ class _FinalizeWorker(QThread):
             "-c:v", "copy",
             temp_output,
         ]
+        # Scale timeout with recording length; -c:v copy is fast but large
+        # files on slow storage can exceed the old 60 s default.
+        remux_timeout = max(120, int(self._rec_duration_ms / 1000) + 30)
         try:
             result = subprocess.run(
-                cmd, capture_output=True, timeout=60,
+                cmd, capture_output=True, timeout=remux_timeout,
                 **subprocess_kwargs(),
             )
             if result.returncode == 0 and os.path.isfile(temp_output):
@@ -1384,9 +1387,12 @@ class MainWindow(QMainWindow):
             "-c:v", "copy",
             temp_output,
         ]
+        # Scale timeout with recording length; -c:v copy is fast but large
+        # files on slow storage can exceed the old 60 s default.
+        remux_timeout = max(120, int(self._rec_duration_ms / 1000) + 30)
         try:
             result = subprocess.run(
-                cmd, capture_output=True, timeout=60,
+                cmd, capture_output=True, timeout=remux_timeout,
                 **subprocess_kwargs(),
             )
             if result.returncode == 0 and os.path.isfile(temp_output):
