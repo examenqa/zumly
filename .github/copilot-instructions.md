@@ -44,8 +44,8 @@ followcursor/                    ← repo root
 │   │   ├── AppxManifest.xml     ← Package manifest template
 │   │   └── Assets/              ← Generated tile PNGs (gitignored)
 │   ├── scripts/                 ← Build & infra PowerShell scripts
-│   │   ├── build.ps1            ← PyInstaller build script
-│   │   ├── dev.ps1              ← Dev setup & launch script
+│   │   ├── Build-App.ps1        ← PyInstaller build script
+│   │   ├── Start-Dev.ps1        ← Dev setup & launch script
 │   │   ├── Build-Msix.ps1      ← MSIX packaging + signing (local PFX or Azure)
 │   │   └── Setup-AzureSigning.ps1 ← Provision Azure Trusted Signing resources
 │   └── app/                     ← Application package
@@ -81,8 +81,8 @@ followcursor/                    ← repo root
 
 ## Development Workflow
 
-- **Run**: `scripts\dev.ps1` or press `F5` in VS Code
-- **Build**: `scripts\build.ps1` or press `Ctrl+Shift+B`
+- **Run**: `scripts\Start-Dev.ps1` or press `F5` in VS Code
+- **Build**: `scripts\Build-App.ps1` or press `Ctrl+Shift+B`
 - **Test**: Execute the **Run Tests** VS Code task (do not run pytest manually in a terminal)
 - **Debug**: F5 launches with debugpy attached
 - VS Code automation terminals use `cmd.exe` (not WSL)

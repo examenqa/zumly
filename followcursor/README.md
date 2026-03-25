@@ -69,7 +69,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 ### Quick Start
 
 ```powershell
-.\scripts\dev.ps1
+.\scripts\Start-Dev.ps1
 ```
 
 Creates a virtual environment, installs dependencies, and launches the app.
@@ -88,7 +88,7 @@ python main.py
 Build a standalone `.exe` with PyInstaller:
 
 ```powershell
-.\scripts\build.ps1
+.\scripts\Build-App.ps1
 ```
 
 Output: `dist\FollowCursor\FollowCursor.exe`
@@ -97,7 +97,7 @@ The build script automatically creates a virtual environment and installs all de
 
 ### MSIX Package
 
-To produce a single-file installer (`.msix`), first run `build.ps1` to create the
+To produce a single-file installer (`.msix`), first run `Build-App.ps1` to create the
 PyInstaller output, then run `Build-Msix.ps1` to package and optionally sign it:
 
 ```powershell
@@ -168,8 +168,8 @@ followcursor/
 │   ├── AppxManifest.xml              # Package manifest template
 │   └── Assets/                       # Generated tile PNGs (gitignored)
 ├── scripts/                         # Build & infra PowerShell scripts
-│   ├── build.ps1                    # PyInstaller build script
-│   ├── dev.ps1                      # Dev setup & launch script
+│   ├── Build-App.ps1                # PyInstaller build script
+│   ├── Start-Dev.ps1                # Dev setup & launch script
 │   ├── Build-Msix.ps1               # MSIX packaging + signing (local PFX or Azure)
 │   └── Setup-AzureSigning.ps1        # Provision Azure Trusted Signing resources
 ├── tests/                           # Unit test suite (pytest)

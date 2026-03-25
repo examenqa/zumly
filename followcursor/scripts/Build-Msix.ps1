@@ -77,7 +77,7 @@ $OutputMsix = Join-Path $FollowCursorRoot "dist\FollowCursor-$Version.msix"
 
 # ── Validate prerequisites ──────────────────────────────────────
 if (-not (Test-Path $DistDir)) {
-    Write-Error "PyInstaller output not found at $DistDir. Run build.ps1 first."
+    Write-Error "PyInstaller output not found at $DistDir. Run Build-App.ps1 first."
 }
 if (-not (Test-Path (Join-Path $MsixDir "AppxManifest.xml"))) {
     Write-Error "AppxManifest.xml not found in $MsixDir."
