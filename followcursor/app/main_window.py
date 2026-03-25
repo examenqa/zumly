@@ -2660,6 +2660,9 @@ class MainWindow(QMainWindow):
             if self._unsaved_changes:
                 return  # user cancelled save dialog
 
+        # Release video handle before deleting (preview holds a cv2.VideoCapture)
+        self._preview.stop_playback()
+
         # Delete the temporary video file
         try:
             if os.path.isfile(self._video_path):
