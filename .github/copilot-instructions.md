@@ -38,14 +38,16 @@ followcursor/                    ← repo root
 ├── followcursor/                ← Python project root
 │   ├── main.py                  ← Entry point
 │   ├── requirements.txt         ← Python dependencies
-│   ├── build.bat                ← PyInstaller build script
-│   ├── Build-Msix.ps1           ← MSIX packaging + signing script
+│   ├── build.ps1                ← PyInstaller build script
+│   ├── dev.ps1                  ← Dev setup & launch script
 │   ├── generate_msix_assets.py  ← Generate MSIX tile PNGs from app icon
-│   ├── dev.bat                  ← Dev setup & launch script
 │   ├── followcursor.ico         ← App icon
 │   ├── msix/                    ← MSIX packaging files
 │   │   ├── AppxManifest.xml     ← Package manifest template
 │   │   └── Assets/              ← Generated tile PNGs (gitignored)
+│   ├── scripts/                 ← Build & infra PowerShell scripts
+│   │   ├── Build-Msix.ps1      ← MSIX packaging + signing (local PFX or Azure)
+│   │   └── Setup-AzureSigning.ps1 ← Provision Azure Trusted Signing resources
 │   └── app/                     ← Application package
 │       ├── main_window.py       ← Central coordinator
 │       ├── models.py            ← Data classes
@@ -79,8 +81,8 @@ followcursor/                    ← repo root
 
 ## Development Workflow
 
-- **Run**: `dev.bat` or press `F5` in VS Code
-- **Build**: `build.bat` or press `Ctrl+Shift+B`
+- **Run**: `dev.ps1` or press `F5` in VS Code
+- **Build**: `build.ps1` or press `Ctrl+Shift+B`
 - **Test**: Execute the **Run Tests** VS Code task (do not run pytest manually in a terminal)
 - **Debug**: F5 launches with debugpy attached
 - VS Code automation terminals use `cmd.exe` (not WSL)

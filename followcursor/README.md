@@ -68,17 +68,17 @@ Record your screen or any individual window, then export a polished MP4 video wh
 
 ### Quick Start
 
-```bat
-dev.bat
+```powershell
+.\dev.ps1
 ```
 
 Creates a virtual environment, installs dependencies, and launches the app.
 
 ### Manual Setup
 
-```bat
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python main.py
 ```
@@ -87,13 +87,33 @@ python main.py
 
 Build a standalone `.exe` with PyInstaller:
 
-```bat
-build.bat
+```powershell
+.\build.ps1
 ```
 
 Output: `dist\FollowCursor\FollowCursor.exe`
 
 The build script automatically creates a virtual environment and installs all dependencies if needed.
+
+### MSIX Package
+
+Package the build into a signed MSIX installer:
+
+```powershell
+# Unsigned (local testing / sideloading)
+.\scripts\Build-Msix.ps1 -Version "0.5.0" -SkipSign
+
+# Sign with a local PFX certificate
+.\scripts\Build-Msix.ps1 -Version "0.5.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
+
+# Sign with Azure Trusted Signing (CI)
+.\scripts\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." `
+  -AzureEndpoint "https://eus.codesigning.azure.net/" `
+  -AzureCodeSigningAccountName "myacct" `
+  -AzureCertificateProfileName "myprofile"
+```
+
+Requires the Windows SDK (`MakeAppx.exe`, `SignTool.exe`).
 
 ## CI/CD
 
@@ -140,10 +160,17 @@ You can also trigger a build manually from the Actions tab.
 followcursor/
 ├── main.py                          # Entry point, QApplication setup
 ├── requirements.txt                 # Python dependencies
-├── build.bat                        # PyInstaller build script
-├── dev.bat                          # Dev setup & launch script
+├── build.ps1                        # PyInstaller build script
+├── dev.ps1                          # Dev setup & launch script
+├── generate_msix_assets.py           # Generate MSIX tile PNGs from app icon
 ├── followcursor.ico                 # App icon
 ├── pytest.ini                       # Pytest configuration
+├── msix/                            # MSIX packaging files
+│   ├── AppxManifest.xml              # Package manifest template
+│   └── Assets/                       # Generated tile PNGs (gitignored)
+├── scripts/                         # Build & infra PowerShell scripts
+│   ├── Build-Msix.ps1               # MSIX packaging + signing (local PFX or Azure)
+│   └── Setup-AzureSigning.ps1        # Provision Azure Trusted Signing resources
 ├── tests/                           # Unit test suite (pytest)
 │   ├── conftest.py                  # Shared fixtures
 │   ├── test_models.py               # Dataclass serialization roundtrips

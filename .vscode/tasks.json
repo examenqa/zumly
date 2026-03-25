@@ -21,7 +21,11 @@
 		{
 			"label": "Build",
 			"type": "process",
-			"command": "${workspaceFolder}/followcursor/build.bat",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/followcursor/build.ps1"
+			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
 			},
