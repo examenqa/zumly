@@ -44,8 +44,11 @@ ENCODER_PROFILES: Dict[str, Tuple[str, str, List[str]]] = {
     "libx264":     ("Software (x264)",  "libx264",     ["-preset", "medium", "-crf", "18"]),
 }
 
-# Order of preference for auto-detection
-_HW_ENCODER_ORDER = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf"]
+# Order of preference for auto-detection.
+# h264_mf (Media Foundation) is excluded: its quality is far below libx264
+# and it cannot match CRF-18-equivalent output.  libx264 is the preferred
+# software fallback and is always appended last by detect_available_encoders().
+_HW_ENCODER_ORDER = ["h264_nvenc", "h264_qsv", "h264_amf"]
 
 # Cached result so we only probe once per process
 _available_encoders: List[str] | None = None
