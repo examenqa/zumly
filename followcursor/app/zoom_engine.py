@@ -5,8 +5,9 @@ computes the current ``(zoom, pan_x, pan_y)`` at any point in time
 using quintic ease-out interpolation.  It also maintains an undo/redo
 stack (deep-copy snapshots, max 50 entries).
 
-Snapshots capture both zoom keyframes and click events so that
-undo/redo covers click deletions as well as keyframe edits.
+Snapshots capture zoom keyframes, click events, and trim state
+(trim_start_ms, trim_end_ms) so that undo/redo covers keyframe
+edits, click deletions, and trim handle changes.
 """
 
 import copy

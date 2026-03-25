@@ -990,7 +990,6 @@ class _TimelineTrack(QWidget):
         self.trim_start_ms = 0.0
         self.trim_end_ms = 0.0
         self.trim_reset.emit()
-        self.trim_changed.emit(0.0, 0.0)
         self.update()
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
