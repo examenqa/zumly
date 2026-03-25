@@ -12,8 +12,9 @@ from PySide6.QtGui import (
     QLinearGradient,
     QFont,
     QMouseEvent,
+    QWheelEvent,
 )
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu, QScrollBar
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
 from ..utils import fmt_time as _fmt
@@ -105,6 +106,12 @@ class _TimelineTrack(QWidget):
         self._drag_actually_moved: bool = False
         self._pending_select_id: str = ""       # segment to select on release if no drag
 
+        # ── View zoom / pan state ─────────────────────────────
+        self._view_scale: float = 1.0   # 1.0 = fit-all
+        self._view_offset: float = 0.0  # ms offset of the left edge of the viewport
+        self.MIN_VIEW_SCALE: float = 1.0
+        # MAX_VIEW_SCALE is computed dynamically: 1 px = 10 ms → scale = duration / (10 * widget_width)
+
     _MENU_STYLE = (
         "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
         "        border-radius: 6px; padding: 4px 0; }"
@@ -112,6 +119,82 @@ class _TimelineTrack(QWidget):
         "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
         "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
     )
+
+    # ── coordinate mapping helpers ────────────────────────────────
+
+    def _ms_to_x(self, ms: float) -> float:
+        """Map a time in milliseconds to a widget x-coordinate, accounting for view zoom/pan."""
+        if self.duration <= 0:
+            return 0.0
+        w = self.width()
+        visible_duration = self.duration / self._view_scale
+        return ((ms - self._view_offset) / visible_duration) * w
+
+    def _x_to_ms(self, x: float) -> float:
+        """Map a widget x-coordinate to a time in milliseconds, accounting for view zoom/pan."""
+        if self.duration <= 0:
+            return 0.0
+        w = self.width()
+        if w <= 0:
+            return 0.0
+        visible_duration = self.duration / self._view_scale
+        return self._view_offset + (x / w) * visible_duration
+
+    def _max_view_scale(self) -> float:
+        """Maximum view scale: 1 pixel = 10 ms."""
+        w = self.width()
+        if w <= 0 or self.duration <= 0:
+            return 1.0
+        return max(1.0, self.duration / (10.0 * w))
+
+    def _clamp_offset(self) -> None:
+        """Clamp _view_offset so the viewport stays within [0, duration]."""
+        if self.duration <= 0:
+            self._view_offset = 0.0
+            return
+        visible_duration = self.duration / self._view_scale
+        max_offset = self.duration - visible_duration
+        self._view_offset = max(0.0, min(self._view_offset, max_offset))
+
+    # ── scroll-wheel zoom ─────────────────────────────────────────
+
+    view_changed = Signal()  # emitted when view_scale or view_offset changes
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # type: ignore[override]
+        """Scroll-wheel zooms the time axis, centered on the cursor position."""
+        if self.duration <= 0:
+            event.ignore()
+            return
+
+        degrees = event.angleDelta().y() / 8.0
+        steps = degrees / 15.0  # standard mouse wheel: 1 step = 15°
+
+        if steps == 0:
+            event.ignore()
+            return
+
+        zoom_factor = 1.15 ** steps  # ~15% per wheel step
+        old_scale = self._view_scale
+        new_scale = old_scale * zoom_factor
+        new_scale = max(self.MIN_VIEW_SCALE, min(new_scale, self._max_view_scale()))
+
+        if new_scale == old_scale:
+            event.accept()
+            return
+
+        # Keep the time under the cursor fixed
+        cursor_ms = self._x_to_ms(event.position().x())
+        self._view_scale = new_scale
+        # Recompute offset so cursor_ms stays at the same x position
+        visible_duration = self.duration / self._view_scale
+        w = self.width()
+        if w > 0:
+            ratio = event.position().x() / w
+            self._view_offset = cursor_ms - ratio * visible_duration
+        self._clamp_offset()
+        self.view_changed.emit()
+        self.update()
+        event.accept()
 
     def _on_right_click(self, pos) -> None:
         """Right-click on a pan point, zoom segment, click event, or empty space."""
@@ -126,10 +209,7 @@ class _TimelineTrack(QWidget):
         if seg_info:
             start_id, end_id, sx, ex = seg_info
             # Compute the click timestamp from x position
-            click_time_ms = 0.0
-            if self.duration > 0 and self.width() > 0:
-                ratio = max(0.0, min(1.0, mx / self.width()))
-                click_time_ms = ratio * self.duration
+            click_time_ms = self._x_to_ms(mx)
             self.segment_clicked.emit(start_id, click_time_ms)
             return
         # Check click event marker
@@ -158,8 +238,7 @@ class _TimelineTrack(QWidget):
             return
         # Empty space — offer to add a zoom section or voiceover
         if self.duration > 0 and self.width() > 0:
-            ratio = max(0.0, min(1.0, mx / self.width()))
-            time_ms = ratio * self.duration
+            time_ms = self._x_to_ms(mx)
             menu = QMenu(self)
             menu.setStyleSheet(self._MENU_STYLE)
             act_zoom = menu.addAction("🔍  Add Zoom here")
@@ -218,7 +297,7 @@ class _TimelineTrack(QWidget):
         self._draw_voiceover_segments(painter, w, self._vo_top, self._vo_h)
 
         # playhead
-        px = (self.current_time / self.duration) * w
+        px = self._ms_to_x(self.current_time)
         painter.setPen(QPen(QColor("#ffffff"), 2))
         painter.drawLine(int(px), 0, int(px), h)
         # playhead handle
@@ -234,11 +313,13 @@ class _TimelineTrack(QWidget):
     def _draw_time_markers(self, painter: QPainter, w: int) -> None:
         if self.duration <= 0:
             return
-        # draw tick marks every 5 seconds
-        interval_ms = 5000
-        if self.duration < 30000:
+        # Visible duration determines tick spacing
+        visible_duration = self.duration / self._view_scale
+        if visible_duration < 5000:
+            interval_ms = 1000
+        elif visible_duration < 30000:
             interval_ms = 5000
-        elif self.duration < 120000:
+        elif visible_duration < 120000:
             interval_ms = 10000
         else:
             interval_ms = 30000
@@ -249,12 +330,17 @@ class _TimelineTrack(QWidget):
         painter.setFont(font)
         painter.setPen(QPen(QColor("#5a5873"), 1))
 
-        t = 0.0
+        # Start from the first tick at or before the visible left edge
+        first_tick = max(0.0, (self._view_offset // interval_ms) * interval_ms)
+        t = first_tick
         while t <= self.duration:
-            x = (t / self.duration) * w
-            painter.drawLine(int(x), 0, int(x), 4)
-            if t > 0 and x < w - 30:
-                painter.drawText(int(x) + 2, 12, _fmt(t))
+            x = self._ms_to_x(t)
+            if x > w + 30:
+                break
+            if x >= -30:
+                painter.drawLine(int(x), 0, int(x), 4)
+                if t > 0 and 0 <= x < w - 30:
+                    painter.drawText(int(x) + 2, 12, _fmt(t))
             t += interval_ms
 
     def _draw_mouse_track(self, painter: QPainter, w: int, top: int, h: int) -> None:
@@ -282,7 +368,10 @@ class _TimelineTrack(QWidget):
             dy = curr.y - prev.y
             dt = max(curr.timestamp - prev.timestamp, 1)
             speed = math.sqrt(dx * dx + dy * dy) / dt
-            bucket = min(buckets - 1, int((curr.timestamp / dur) * buckets))
+            bx = self._ms_to_x(curr.timestamp)
+            if bx < 0 or bx >= w:
+                continue
+            bucket = min(buckets - 1, int((bx / w) * buckets))
             speeds[bucket] = max(speeds[bucket], speed)
             max_speed = max(max_speed, speed)
 
@@ -318,7 +407,10 @@ class _TimelineTrack(QWidget):
         max_count = 0
 
         for ev in events:
-            bucket = min(buckets - 1, int((ev.timestamp / dur) * buckets))
+            bx = self._ms_to_x(ev.timestamp)
+            if bx < 0 or bx >= w:
+                continue
+            bucket = min(buckets - 1, int((bx / w) * buckets))
             counts[bucket] += 1
             max_count = max(max_count, counts[bucket])
 
@@ -354,7 +446,7 @@ class _TimelineTrack(QWidget):
 
         mid_y = top + h / 2.0
         for i, ev in enumerate(events):
-            x = (ev.timestamp / dur) * w
+            x = self._ms_to_x(ev.timestamp)
             if i == self._selected_click_idx:
                 # Selected: larger, brighter, with outline
                 painter.setPen(QPen(QColor(255, 255, 255), 1.5))
@@ -405,8 +497,8 @@ class _TimelineTrack(QWidget):
                     end_ms = self.duration
                     end_id = ""
                     i = len(sorted_kfs)
-                sx = (start_ms / self.duration) * w
-                ex = (end_ms / self.duration) * w
+                sx = self._ms_to_x(start_ms)
+                ex = self._ms_to_x(end_ms)
                 if ex - sx > 4:
                     self._segments.append((sx, ex, start_id, end_id))
             else:
@@ -441,9 +533,9 @@ class _TimelineTrack(QWidget):
             # ── Internal transition markers ──
             # Zoom-in marker: where the zoom-in transition completes
             if kf_in and self.duration > 0:
-                kf_in_x = (kf_in.timestamp / self.duration) * w
+                kf_in_x = self._ms_to_x(kf_in.timestamp)
                 # End of zoom-in transition
-                kf_in_end_x = ((kf_in.timestamp + kf_in.duration) / self.duration) * w
+                kf_in_end_x = self._ms_to_x(kf_in.timestamp + kf_in.duration)
                 # Draw zoom-in ramp (lighter fill for the transition region)
                 ramp_left = max(sx, kf_in_x)
                 ramp_right = min(ex, kf_in_end_x)
@@ -468,8 +560,8 @@ class _TimelineTrack(QWidget):
 
             # Zoom-out marker: where the zoom-out transition begins
             if kf_out and self.duration > 0:
-                kf_out_x = (kf_out.timestamp / self.duration) * w
-                kf_out_end_x = ((kf_out.timestamp + kf_out.duration) / self.duration) * w
+                kf_out_x = self._ms_to_x(kf_out.timestamp)
+                kf_out_end_x = self._ms_to_x(kf_out.timestamp + kf_out.duration)
                 # Draw zoom-out ramp (lighter fill fading out)
                 ramp_left = max(sx, kf_out_x)
                 ramp_right = min(ex, kf_out_end_x)
@@ -495,10 +587,10 @@ class _TimelineTrack(QWidget):
             # "🔍 Zoom" label — positioned in the steady-state region
             label_left = sx + 6
             if kf_in and self.duration > 0:
-                label_left = max(label_left, ((kf_in.timestamp + kf_in.duration) / self.duration) * w + 4)
+                label_left = max(label_left, self._ms_to_x(kf_in.timestamp + kf_in.duration) + 4)
             label_right = ex - 6
             if kf_out and self.duration > 0:
-                label_right = min(label_right, (kf_out.timestamp / self.duration) * w - 4)
+                label_right = min(label_right, self._ms_to_x(kf_out.timestamp) - 4)
             label_w = label_right - label_left
             if label_w > 40:
                 painter.setPen(QPen(QColor("#a78bfa")))
@@ -513,7 +605,7 @@ class _TimelineTrack(QWidget):
                         and pp_kf.zoom > 1.01
                         and pp_kf.timestamp > kf_in.timestamp
                         and (kf_out is None or pp_kf.timestamp < kf_out.timestamp)):
-                        pp_x = (pp_kf.timestamp / self.duration) * w
+                        pp_x = self._ms_to_x(pp_kf.timestamp)
                         pan_points.append((pp_x, pp_kf))
 
             if pan_points:
@@ -582,10 +674,10 @@ class _TimelineTrack(QWidget):
         self._vo_rects: list[tuple] = []  # [(x, w, seg_id)] for hit testing
 
         for seg in self.voiceover_segments:
-            sx = (seg.timestamp / dur) * w
+            sx = self._ms_to_x(seg.timestamp)
             # Use audio duration if known, otherwise show a fixed-width marker
             if seg.duration_ms > 0:
-                seg_w = max(20, (seg.duration_ms / dur) * w)
+                seg_w = max(20, self._ms_to_x(seg.timestamp + seg.duration_ms) - sx)
             else:
                 seg_w = max(20, 40)  # minimum visible width
 
@@ -642,10 +734,10 @@ class _TimelineTrack(QWidget):
         # Dimmed overlay for trimmed-out regions
         dim_color = QColor(20, 18, 40, 160)
         if trim_s > 0:
-            sx = (trim_s / self.duration) * w
+            sx = self._ms_to_x(trim_s)
             painter.fillRect(QRectF(0, 0, sx, h), dim_color)
         if trim_e < self.duration:
-            ex = (trim_e / self.duration) * w
+            ex = self._ms_to_x(trim_e)
             painter.fillRect(QRectF(ex, 0, w - ex, h), dim_color)
 
         # Handle bars — always visible at the trim positions
@@ -655,7 +747,7 @@ class _TimelineTrack(QWidget):
         painter.setBrush(QBrush(handle_color))
 
         # Left (start) trim handle
-        sx = (trim_s / self.duration) * w if trim_s > 0 else 0
+        sx = self._ms_to_x(trim_s) if trim_s > 0 else self._ms_to_x(0)
         painter.drawRoundedRect(QRectF(sx, 0, handle_w, h), 2, 2)
         painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
         # tick marks on the handle
@@ -665,7 +757,7 @@ class _TimelineTrack(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
 
         # Right (end) trim handle
-        ex = (trim_e / self.duration) * w if trim_e < self.duration else w
+        ex = self._ms_to_x(trim_e) if trim_e < self.duration else self._ms_to_x(self.duration)
         painter.setBrush(QBrush(handle_color))
         painter.drawRoundedRect(QRectF(ex - handle_w, 0, handle_w, h), 2, 2)
         painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
@@ -683,11 +775,11 @@ class _TimelineTrack(QWidget):
         trim_e = self.trim_end_ms if self.trim_end_ms > 0 else self.duration
 
         # Left handle — always at x=0 when trim_s==0, else at the trim position
-        sx = (trim_s / self.duration) * w if trim_s > 0 else 0
+        sx = self._ms_to_x(trim_s) if trim_s > 0 else self._ms_to_x(0)
         if abs(x - sx) <= grab:
             return "trim_start"
         # Right handle — always at x=w when trim_e==duration, else at the trim position
-        ex = (trim_e / self.duration) * w if trim_e < self.duration else w
+        ex = self._ms_to_x(trim_e) if trim_e < self.duration else self._ms_to_x(self.duration)
         if abs(x - ex) <= grab:
             return "trim_end"
         return ""
@@ -749,7 +841,7 @@ class _TimelineTrack(QWidget):
             seg_info = self._segment_body_hit_info(mx, my)
             if seg_info:
                 start_id, end_id, sx, ex = seg_info
-                click_ms = (mx / self.width()) * self.duration
+                click_ms = self._x_to_ms(mx)
                 # Use actual keyframe timestamps (not visual segment extent)
                 # to prevent the segment from growing on each drag cycle.
                 start_kf = next((k for k in self.keyframes if k.id == start_id), None)
@@ -758,8 +850,8 @@ class _TimelineTrack(QWidget):
                     kf_start_ms = start_kf.timestamp
                     kf_end_ms = end_kf.timestamp if end_kf else kf_start_ms
                 else:
-                    kf_start_ms = (sx / self.width()) * self.duration
-                    kf_end_ms = (ex / self.width()) * self.duration
+                    kf_start_ms = self._x_to_ms(sx)
+                    kf_end_ms = self._x_to_ms(ex)
                 self._dragging = True
                 self._drag_mode = "body"
                 self._drag_body_ids = [start_id, end_id]
@@ -799,7 +891,7 @@ class _TimelineTrack(QWidget):
                 self._dragging = True
                 self._drag_mode = "voiceover"
                 self._drag_kf_id = vo_id
-                click_ms = (mx / self.width()) * self.duration
+                click_ms = self._x_to_ms(mx)
                 seg = next((s for s in self.voiceover_segments if s.id == vo_id), None)
                 self._drag_body_offset = click_ms - seg.timestamp if seg else 0.0
                 self._press_pos = event.position()
@@ -810,7 +902,8 @@ class _TimelineTrack(QWidget):
             self._selected_click_idx = -1
             self._selected_segment_id = ""
             self._selected_vo_id = ""
-            ratio = max(0.0, min(1.0, mx / self.width()))
+            click_ms = self._x_to_ms(mx)
+            ratio = max(0.0, min(1.0, click_ms / self.duration)) if self.duration > 0 else 0.0
             self.clicked.emit(ratio)
             self.update()
 
@@ -820,8 +913,7 @@ class _TimelineTrack(QWidget):
 
         if self._dragging and self.duration > 0:
             if self._drag_mode == "trim_start":
-                ratio = max(0.0, min(1.0, mx / self.width()))
-                new_time = ratio * self.duration
+                new_time = self._x_to_ms(mx)
                 trim_e = self.trim_end_ms if self.trim_end_ms > 0 else self.duration
                 new_time = min(new_time, trim_e - 500)  # keep at least 500ms
                 self.trim_start_ms = max(0.0, new_time)
@@ -829,16 +921,14 @@ class _TimelineTrack(QWidget):
                 self.update()
                 return
             elif self._drag_mode == "trim_end":
-                ratio = max(0.0, min(1.0, mx / self.width()))
-                new_time = ratio * self.duration
+                new_time = self._x_to_ms(mx)
                 new_time = max(new_time, self.trim_start_ms + 500)
                 self.trim_end_ms = min(self.duration, new_time)
                 self.trim_changed.emit(self.trim_start_ms, self.trim_end_ms)
                 self.update()
                 return
             elif self._drag_mode == "edge" and self._drag_kf_id:
-                ratio = max(0.0, min(1.0, mx / self.width()))
-                new_time = ratio * self.duration
+                new_time = self._x_to_ms(mx)
                 # Right-edge drags: mouse is at the visual edge which is
                 # kf.timestamp + kf.duration, so subtract duration to get
                 # the actual timestamp the keyframe should move to.
@@ -855,7 +945,7 @@ class _TimelineTrack(QWidget):
                     if delta < 4:
                         return  # not a real drag yet
                     self._drag_actually_moved = True
-                click_ms = (mx / self.width()) * self.duration
+                click_ms = self._x_to_ms(mx)
                 new_start = click_ms - self._drag_body_offset
                 new_start = max(0.0, min(new_start, self.duration - self._drag_body_seg_duration))
                 new_end = new_start + self._drag_body_seg_duration
@@ -867,8 +957,7 @@ class _TimelineTrack(QWidget):
                     self.keyframe_moved.emit(end_id, new_end)
                 return
             elif self._drag_mode == "pan_point" and self._drag_kf_id:
-                ratio = max(0.0, min(1.0, mx / self.width()))
-                new_time = ratio * self.duration
+                new_time = self._x_to_ms(mx)
                 # Clamp to segment bounds: find start and end of parent segment
                 seg_start_kf = next((k for k in self.keyframes if k.id == self._drag_pan_seg_id), None)
                 if seg_start_kf:
@@ -888,8 +977,7 @@ class _TimelineTrack(QWidget):
                 self.keyframe_moved.emit(self._drag_kf_id, new_time)
                 return
             elif self._drag_mode == "voiceover" and self._drag_kf_id:
-                ratio = max(0.0, min(1.0, mx / self.width()))
-                new_time = max(0.0, ratio * self.duration - self._drag_body_offset)
+                new_time = max(0.0, self._x_to_ms(mx) - self._drag_body_offset)
                 new_time = min(new_time, self.duration)
                 if self._press_pos and (
                     abs(mx - self._press_pos.x()) > 3
@@ -951,7 +1039,7 @@ class _TimelineTrack(QWidget):
         w = self.width()
         grab = self.CLICK_HIT_PX
         for i, ev in enumerate(self.click_events):
-            ex = (ev.timestamp / self.duration) * w
+            ex = self._ms_to_x(ev.timestamp)
             if abs(x - ex) <= grab and abs(y - mid_y) <= grab:
                 return i
         return -1
@@ -1079,11 +1167,19 @@ class TimelineWidget(QWidget):
         self._track.voiceover_moved.connect(self.voiceover_moved)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
+        self._track.view_changed.connect(self._sync_scrollbar)
         layout.addWidget(self._track)
+
+        # ── Horizontal scrollbar (visible only when zoomed in) ──
+        self._hscroll = QScrollBar(Qt.Orientation.Horizontal)
+        self._hscroll.setObjectName("TimelineScrollBar")
+        self._hscroll.setVisible(False)
+        self._hscroll.valueChanged.connect(self._on_scrollbar)
+        layout.addWidget(self._hscroll)
 
         # ── Bottom hints ────────────────────────────────────────
         hints_row = QHBoxLayout()
-        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim")
+        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim · Scroll to zoom")
         hint_kf.setObjectName("Muted")
         hints_row.addWidget(hint_kf)
         hints_row.addStretch()
@@ -1092,6 +1188,36 @@ class TimelineWidget(QWidget):
     def _seek_end(self) -> None:
         if self._track.duration > 0:
             self.seek_requested.emit(self._track.duration)
+
+    def _sync_scrollbar(self) -> None:
+        """Update scrollbar range/position to match the track's view state."""
+        track = self._track
+        if track._view_scale <= 1.0:
+            self._hscroll.setVisible(False)
+            return
+        self._hscroll.setVisible(True)
+        visible_duration = track.duration / track._view_scale
+        max_offset = track.duration - visible_duration
+        # Use integer steps (1 step = 1 ms) for fine granularity
+        self._hscroll.blockSignals(True)
+        self._hscroll.setMinimum(0)
+        self._hscroll.setMaximum(int(max_offset))
+        self._hscroll.setPageStep(int(visible_duration))
+        self._hscroll.setValue(int(track._view_offset))
+        self._hscroll.blockSignals(False)
+
+    def _on_scrollbar(self, value: int) -> None:
+        """Scroll the timeline track when the user moves the scrollbar."""
+        self._track._view_offset = float(value)
+        self._track._clamp_offset()
+        self._track.update()
+
+    def reset_view(self) -> None:
+        """Reset the timeline zoom to fit-all."""
+        self._track._view_scale = 1.0
+        self._track._view_offset = 0.0
+        self._hscroll.setVisible(False)
+        self._track.update()
 
     def set_data(
         self,
