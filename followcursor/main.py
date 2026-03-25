@@ -1,7 +1,10 @@
 """FollowCursor — screen recorder with cinematic cursor-following zoom."""
 
 import logging
+import os
 import sys
+import tempfile
+from logging.handlers import RotatingFileHandler
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QPalette, QColor, QIcon
 from PySide6.QtCore import QAbstractNativeEventFilter, qInstallMessageHandler, QtMsgType
@@ -9,10 +12,35 @@ from app.main_window import MainWindow
 from app.icon import create_app_icon, get_ico_path
 from app.version import __version__
 
+# ── Log file path ───────────────────────────────────────────────────
+# Stored in %LOCALAPPDATA%/FollowCursor/error.log so it survives
+# across sessions.  Only ERROR and above are written to the file;
+# the console handler still shows INFO+.
+_LOG_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", tempfile.gettempdir()),
+    "FollowCursor",
+)
+os.makedirs(_LOG_DIR, exist_ok=True)
+ERROR_LOG_PATH = os.path.join(_LOG_DIR, "error.log")
+
+# ── Console handler (INFO+) ────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(name)s | %(levelname)s | %(message)s",
 )
+
+# ── File handler (ERROR+) ──────────────────────────────────────────
+_file_handler = RotatingFileHandler(
+    ERROR_LOG_PATH, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
+)
+_file_handler.setLevel(logging.ERROR)
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s | %(name)s | %(levelname)s | %(message)s\n"
+    "  File: %(pathname)s:%(lineno)d\n"
+    "  Function: %(funcName)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+))
+logging.getLogger().addHandler(_file_handler)
 
 _logger = logging.getLogger(__name__)
 
