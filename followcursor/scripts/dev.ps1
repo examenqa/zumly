@@ -8,7 +8,8 @@
 #>
 
 $ErrorActionPreference = "Stop"
-Push-Location $PSScriptRoot
+$FollowCursorRoot = Split-Path -Parent $PSScriptRoot
+Push-Location $FollowCursorRoot
 
 try {
     # ── Ensure virtual environment exists ────────────────────────
