@@ -124,13 +124,6 @@ jobs:
           path: followcursor/dist/FollowCursor/
           retention-days: 30
 
-      - name: Install Azure Trusted Signing client
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          dotnet tool install --global AzureSignTool 2>$null
-          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory "$env:RUNNER_TEMP\signing"
-
       - name: Azure Login (OIDC)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: azure/login@v2
@@ -139,7 +132,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build & sign MSIX
+      - name: Build MSIX (unsigned)
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: followcursor
         shell: pwsh
@@ -147,9 +140,20 @@ jobs:
           .\scripts\Build-Msix.ps1 `
             -Version "${{ steps.version.outputs.APP_VERSION }}" `
             -Publisher "${{ secrets.MSIX_PUBLISHER }}" `
-            -AzureEndpoint "${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}" `
-            -AzureCodeSigningAccountName "${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}" `
-            -AzureCertificateProfileName "${{ secrets.AZURE_CERTIFICATE_PROFILE }}"
+            -SkipSign
+
+      - name: Sign MSIX (Azure Trusted Signing)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files-folder: followcursor/dist
+          files-folder-filter: msix
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Upload MSIX artifact
         if: startsWith(github.ref, 'refs/tags/v')
