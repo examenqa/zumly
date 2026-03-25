@@ -4,6 +4,25 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-03-25
+
+### Added
+
+- **MSIX packaging** — Windows app package with .fcproj file association, automated build script, and CI integration for tagged releases
+- **Azure Trusted Signing** — CI signs MSIX packages via Azure Trusted Signing with OIDC; includes idempotent setup script for provisioning signing resources
+- **Error log file** — RotatingFileHandler writes ERROR+ entries to %LOCALAPPDATA%/FollowCursor/error.log (2 MB, 3 backups) with timestamps, module, file/line, and full tracebacks
+- **Discard recording** — discard a recording without saving, with improved error handling in AI worker
+
+### Changed
+
+- **Encoder fallback chain** — removed h264_mf (Media Foundation) from automatic fallback; chain is now NVENC → QSV → AMF → libx264 for consistently higher quality
+- **Build scripts** — converted batch scripts to PowerShell with Verb-Noun naming convention, moved into scripts/ folder
+
+### Fixed
+
+- **Remux timeout on long recordings** — dynamically scale ffmpeg remux timeout based on recording duration instead of fixed 60s limit
+- **Discard permission error** — release video handle before deleting temp file to avoid WinError 32 on Windows
+
 ## [0.5.0] — 2026-03-05
 
 ### Added
