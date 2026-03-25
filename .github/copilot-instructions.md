@@ -80,7 +80,7 @@ followcursor/                    ← repo root
 
 ### Branching
 
-For **big refactors or multi-file features**, create a feature branch first and work there. Merge back to `main` only after tests pass and the change is confirmed working. Small bug fixes and documentation updates can go directly on `main`.
+All **features, bug fixes, and significant changes** must be developed on a dedicated branch (e.g. `fix/encoder-fallback`, `feat/gif-palette`). Create the branch before making changes, run the **Run Tests** task to verify, then merge back to `main` only after tests pass. Trivial documentation-only or comment-only edits may go directly on `main`.
 
 ### Test Suite
 
