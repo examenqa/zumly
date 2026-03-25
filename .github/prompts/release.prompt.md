@@ -51,9 +51,10 @@ Using the user's confirmed bump type and changelog entries:
 4. **Run tests** using the **Run Tests** VS Code task. Report results.
 5. **Commit** with message `release: vX.Y.Z`
 
-## Step 5 — Report next steps
+## Step 5 — Merge, tag, and push
 
-Tell the user:
-- The release branch is ready to merge to `main`
-- After merging, tag with `git tag vX.Y.Z` and push: `git push origin vX.Y.Z`
-- CI will automatically build the release artifacts, sign the MSIX, and create a GitHub Release
+1. **Merge to main**: `git checkout main && git merge release/vX.Y.Z`
+2. **Tag**: `git tag vX.Y.Z`
+3. **Push**: `git push origin main && git push origin vX.Y.Z`
+
+Tell the user CI will now automatically build the release artifacts, sign the MSIX, and create a GitHub Release.
