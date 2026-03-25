@@ -97,6 +97,7 @@ class PreviewWidget(QWidget):
         # Wall-clock anchors for accurate playback speed
         self._play_start_wall: float = 0.0
         self._play_start_pos_ms: float = 0.0
+        self._last_playback_wall: float = 0.0  # incremental wall-clock for speed-aware playback
         self._last_displayed_frame: int = -1
         self._frame_timestamps: Optional[List[float]] = None  # per-frame ms offsets
 
@@ -359,6 +360,7 @@ class PreviewWidget(QWidget):
             # Anchor wall-clock time for accurate playback speed
             self._play_start_wall = _time.perf_counter()
             self._play_start_pos_ms = self._playback_pos_ms
+            self._last_playback_wall = self._play_start_wall
             self._playing = True
             # Use a fast timer (8ms) and select frames by wall-clock
             self._playback_timer.start(8)
@@ -1019,12 +1021,14 @@ class PreviewWidget(QWidget):
             self.pause()
             return
 
-        # Compute target playback position from wall-clock elapsed time.
-        # This avoids drift caused by QTimer interval rounding and the
-        # off-by-one in CAP_PROP_POS_FRAMES (which returns the *next*
-        # frame index, not the one just displayed).
-        elapsed_s = _time.perf_counter() - self._play_start_wall
-        target_ms = self._play_start_pos_ms + elapsed_s * 1000.0
+        # Compute target playback position using incremental wall-clock
+        # delta scaled by the segment playback speed at the current pos.
+        now = _time.perf_counter()
+        delta_s = now - self._last_playback_wall
+        self._last_playback_wall = now
+
+        speed = self._get_segment_speed(self._playback_pos_ms)
+        target_ms = self._playback_pos_ms + delta_s * 1000.0 * speed
 
         if target_ms >= self._video_duration_ms:
             self.pause()
@@ -1065,6 +1069,38 @@ class PreviewWidget(QWidget):
         self._current_time_ms = target_ms
         self._frame = self._numpy_to_qimage(frame)
         self.update()
+
+    def _get_segment_speed(self, time_ms: float) -> float:
+        """Return the playback speed at *time_ms* based on zoom keyframes.
+
+        The speed is stored on the zoom-in keyframe that starts each
+        segment.  Returns 1.0 outside zoom segments or when no keyframes
+        are available.
+        """
+        kfs = self._debug_keyframes
+        if not kfs:
+            return 1.0
+        sorted_kfs = sorted(kfs, key=lambda k: k.timestamp)
+        i = 0
+        while i < len(sorted_kfs):
+            kf = sorted_kfs[i]
+            if kf.zoom > 1.01:
+                start_ms = kf.timestamp
+                speed = kf.speed
+                j = i + 1
+                while j < len(sorted_kfs) and sorted_kfs[j].zoom > 1.01:
+                    j += 1
+                if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
+                    end_ms = sorted_kfs[j].timestamp + sorted_kfs[j].duration
+                    i = j + 1
+                else:
+                    end_ms = float('inf')
+                    i = len(sorted_kfs)
+                if start_ms <= time_ms <= end_ms:
+                    return speed
+            else:
+                i += 1
+        return 1.0
 
     @staticmethod
     def _numpy_to_qimage(frame: np.ndarray) -> QImage:

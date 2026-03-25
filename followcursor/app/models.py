@@ -92,6 +92,7 @@ class ZoomKeyframe:
     y: float
     duration: float  # ms for transition
     reason: str = ""  # human-readable reason (e.g. "Mouse activity burst")
+    speed: float = 1.0  # playback speed multiplier (0.5–10.0, stored on zoom-in kf)
 
     @staticmethod
     def create(
@@ -101,6 +102,7 @@ class ZoomKeyframe:
         y: float = 0.5,
         duration: float = 600.0,
         reason: str = "",
+        speed: float = 1.0,
     ) -> "ZoomKeyframe":
         """Factory that auto-generates a UUID for the keyframe."""
         return ZoomKeyframe(
@@ -111,6 +113,7 @@ class ZoomKeyframe:
             y=y,
             duration=duration,
             reason=reason,
+            speed=speed,
         )
 
     def to_dict(self) -> dict:
@@ -125,13 +128,15 @@ class ZoomKeyframe:
         }
         if self.reason:
             d["reason"] = self.reason
+        if self.speed != 1.0:
+            d["speed"] = self.speed
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "ZoomKeyframe":
         """Reconstruct from a dict, ignoring unknown keys for forward compat."""
         # Filter to only known fields to avoid TypeError from extra keys
-        known = {"id", "timestamp", "zoom", "x", "y", "duration", "reason"}
+        known = {"id", "timestamp", "zoom", "x", "y", "duration", "reason", "speed"}
         filtered = {k: v for k, v in d.items() if k in known}
         return ZoomKeyframe(**filtered)
 

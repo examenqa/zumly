@@ -866,11 +866,13 @@ class VideoExporter(QObject):
                     src_idx += 1
                     last_f = frame.copy()
 
-                t_total = max(1, int((eff_te - eff_ts) / 1000.0 * fps) + 1)
+                t_total = max(1, int(engine.compute_output_duration(
+                    duration_ms or eff_te, eff_ts, eff_te,
+                ) / 1000.0 * fps) + 1)
                 out_idx = 0
+                t_ms = eff_ts  # recording-time cursor
 
                 while True:
-                    t_ms = eff_ts + (out_idx / fps) * 1000.0
                     if t_ms > eff_te + 0.0001:
                         break
 
@@ -916,6 +918,9 @@ class VideoExporter(QObject):
                         break
                     exported += 1
                     out_idx += 1
+                    # Advance recording-time cursor by speed-adjusted interval
+                    seg_speed = engine.get_speed_at(t_ms, duration_ms or eff_te)
+                    t_ms += (1.0 / fps) * 1000.0 * seg_speed
 
                     if exported % 10 == 0:
                         self.progress.emit(min(1.0, exported / t_total))

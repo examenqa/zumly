@@ -179,6 +179,85 @@ class ZoomEngine:
 
         return zoom, pan_x, pan_y
 
+    # ── per-segment speed helpers ───────────────────────────────────
+
+    def _build_speed_segments(self, duration_ms: float) -> List[Tuple[float, float, float]]:
+        """Return a list of (start_ms, end_ms, speed) covering the full timeline.
+
+        Zoom segments with a non-default speed on their start keyframe
+        define speed regions; everything else is 1.0×.
+        """
+        segments: List[Tuple[float, float, float]] = []
+        sorted_kfs = sorted(self.keyframes, key=lambda k: k.timestamp)
+        i = 0
+        while i < len(sorted_kfs):
+            kf = sorted_kfs[i]
+            if kf.zoom > 1.01:
+                start_ms = kf.timestamp
+                speed = kf.speed
+                j = i + 1
+                while j < len(sorted_kfs) and sorted_kfs[j].zoom > 1.01:
+                    j += 1
+                if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
+                    end_ms = min(sorted_kfs[j].timestamp + sorted_kfs[j].duration, duration_ms)
+                    i = j + 1
+                else:
+                    end_ms = duration_ms
+                    i = len(sorted_kfs)
+                segments.append((start_ms, end_ms, speed))
+            else:
+                i += 1
+        return segments
+
+    def get_speed_at(self, time_ms: float, duration_ms: float = 0.0) -> float:
+        """Return the playback speed at the given recording time.
+
+        Speed comes from the zoom-in keyframe that starts the segment
+        containing *time_ms*.  Returns 1.0 outside zoom segments.
+        """
+        for start, end, speed in self._build_speed_segments(duration_ms):
+            if start <= time_ms <= end:
+                return speed
+        return 1.0
+
+    def compute_output_duration(
+        self, duration_ms: float, trim_start_ms: float = 0.0, trim_end_ms: float = 0.0,
+    ) -> float:
+        """Compute the total output duration accounting for per-segment speeds.
+
+        Regions inside zoom segments play at their assigned speed;
+        regions outside play at 1.0×.  The returned value is in ms.
+        """
+        eff_start = trim_start_ms if trim_start_ms > 0 else 0.0
+        eff_end = trim_end_ms if trim_end_ms > 0 else duration_ms
+        if eff_end <= eff_start:
+            return 0.0
+
+        speed_segs = self._build_speed_segments(duration_ms)
+        output_ms = 0.0
+        cursor = eff_start
+
+        for seg_start, seg_end, speed in speed_segs:
+            if seg_end <= cursor or seg_start >= eff_end:
+                continue
+            # Gap before this segment (speed 1.0)
+            gap_end = min(seg_start, eff_end)
+            if gap_end > cursor:
+                output_ms += gap_end - cursor
+                cursor = gap_end
+            # Overlap of this segment with [cursor, eff_end]
+            overlap_start = max(cursor, seg_start)
+            overlap_end = min(seg_end, eff_end)
+            if overlap_end > overlap_start:
+                output_ms += (overlap_end - overlap_start) / speed
+                cursor = overlap_end
+
+        # Remaining gap after last segment
+        if cursor < eff_end:
+            output_ms += eff_end - cursor
+
+        return output_ms
+
     def update(self, time_ms: float) -> None:
         """Evaluate zoom state at *time_ms* and cache the result.
 

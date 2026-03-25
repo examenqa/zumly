@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent
 from ..activity_analyzer import analyze_activity
+from ..zoom_engine import ZoomEngine
 from ..backgrounds import (
     PRESETS, DEFAULT_PRESET, BackgroundPreset,
     SOLID_PRESETS, GRADIENT_PRESETS, PATTERN_PRESETS,
@@ -787,9 +788,23 @@ class EditorPanel(QWidget):
 
         self._info_label.setToolTip(
             f"Duration: {_fmt(duration)}\n"
+            f"Output duration: {_fmt(self._compute_output_duration(keyframes, duration, trim_start_ms, trim_end_ms))}\n"
             f"Mouse samples: {len(mouse_track):,}\n"
             f"Keyframes: {len(keyframes)}"
         )
+
+    @staticmethod
+    def _compute_output_duration(
+        keyframes: List[ZoomKeyframe],
+        duration: float,
+        trim_start_ms: float,
+        trim_end_ms: float,
+    ) -> float:
+        """Compute speed-adjusted output duration using ZoomEngine helper."""
+        engine = ZoomEngine()
+        for kf in keyframes:
+            engine.add_keyframe(kf)
+        return engine.compute_output_duration(duration, trim_start_ms, trim_end_ms)
 
     def _auto_keyframe(self) -> None:
         track = self._mouse_track

@@ -396,3 +396,122 @@ class TestPanPointInterpolation:
         assert z1 == pytest.approx(1.8)
         assert z2 == pytest.approx(1.8)
         assert z3 == pytest.approx(1.8)
+
+
+# ── Segment Speed ───────────────────────────────────────────────────
+
+
+class TestSegmentSpeed:
+    """Tests for per-segment playback speed helpers."""
+
+    def test_speed_default_outside_segments(self) -> None:
+        engine = ZoomEngine()
+        assert engine.get_speed_at(500, 10000) == 1.0
+
+    def test_speed_inside_segment(self) -> None:
+        engine = ZoomEngine()
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=2.0)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=600)
+        )
+        # Inside the segment
+        assert engine.get_speed_at(2000, 10000) == 2.0
+        # Outside the segment (before)
+        assert engine.get_speed_at(500, 10000) == 1.0
+        # Outside the segment (after zoom-out completes)
+        assert engine.get_speed_at(4000, 10000) == 1.0
+
+    def test_speed_at_segment_boundary(self) -> None:
+        engine = ZoomEngine()
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=0.5)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=600)
+        )
+        # Exactly at start
+        assert engine.get_speed_at(1000, 10000) == 0.5
+        # Exactly at end (zoom-out + duration)
+        assert engine.get_speed_at(3600, 10000) == 0.5
+
+    def test_multiple_segments_different_speeds(self) -> None:
+        engine = ZoomEngine()
+        # Segment 1: 1000-2600 at 2x
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=2.0)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=2000, zoom=1.0, duration=600)
+        )
+        # Segment 2: 4000-5600 at 0.5x
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=4000, zoom=1.5, duration=400, speed=0.5)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=5000, zoom=1.0, duration=600)
+        )
+        assert engine.get_speed_at(1500, 10000) == 2.0
+        assert engine.get_speed_at(3000, 10000) == 1.0
+        assert engine.get_speed_at(4500, 10000) == 0.5
+
+    def test_output_duration_no_speed_changes(self) -> None:
+        engine = ZoomEngine()
+        assert engine.compute_output_duration(10000) == pytest.approx(10000)
+
+    def test_output_duration_with_speed(self) -> None:
+        engine = ZoomEngine()
+        # Segment from 2000-4000ms (zoom-out at 3000 + 1000ms duration) at 2x
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=2000, zoom=2.0, duration=0, speed=2.0)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=1000)
+        )
+        # Segment is 2000ms long (2000 to 4000), at 2x → output = 1000ms
+        # Rest of 10000ms recording: 0-2000 (2000ms) + 4000-10000 (6000ms) = 8000ms
+        # Total output: 8000 + 1000 = 9000ms
+        result = engine.compute_output_duration(10000)
+        assert result == pytest.approx(9000)
+
+    def test_output_duration_with_trim(self) -> None:
+        engine = ZoomEngine()
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=2000, zoom=2.0, duration=0, speed=2.0)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=1000)
+        )
+        # Trim to 1000-5000: includes segment 2000-4000 at 2x
+        # 1000-2000 = 1000ms at 1x → 1000ms
+        # 2000-4000 = 2000ms at 2x → 1000ms
+        # 4000-5000 = 1000ms at 1x → 1000ms
+        # Total: 3000ms
+        result = engine.compute_output_duration(10000, 1000, 5000)
+        assert result == pytest.approx(3000)
+
+    def test_output_duration_slow_motion(self) -> None:
+        engine = ZoomEngine()
+        # Segment at 0.5x (slow motion)
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=0, zoom=2.0, duration=0, speed=0.5)
+        )
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=5000, zoom=1.0, duration=0)
+        )
+        # 5000ms at 0.5x → 10000ms output for the segment
+        # 5000-10000ms at 1x → 5000ms
+        # Total: 15000ms
+        result = engine.compute_output_duration(10000)
+        assert result == pytest.approx(15000)
+
+    def test_speed_preserved_in_undo(self) -> None:
+        engine = ZoomEngine()
+        engine.add_keyframe(
+            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=3.0)
+        )
+        engine.push_undo()
+        engine.keyframes[0].speed = 1.0
+        engine.undo()
+        assert engine.keyframes[0].speed == 3.0
