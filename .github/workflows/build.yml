@@ -1,6 +1,7 @@
 name: Build
 permissions:
   contents: write
+  id-token: write  # Required for Azure Trusted Signing OIDC
 on:
   push:
     branches: [main]
@@ -123,6 +124,41 @@ jobs:
           path: followcursor/dist/FollowCursor/
           retention-days: 30
 
+      - name: Install Azure Trusted Signing client
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          dotnet tool install --global AzureSignTool 2>$null
+          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory "$env:RUNNER_TEMP\signing"
+
+      - name: Azure Login (OIDC)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build & sign MSIX
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: followcursor
+        shell: pwsh
+        run: |
+          .\Build-Msix.ps1 `
+            -Version "${{ steps.version.outputs.APP_VERSION }}" `
+            -Publisher "${{ secrets.MSIX_PUBLISHER }}" `
+            -AzureEndpoint "${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}" `
+            -AzureCodeSigningAccountName "${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}" `
+            -AzureCertificateProfileName "${{ secrets.AZURE_CERTIFICATE_PROFILE }}"
+
+      - name: Upload MSIX artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: FollowCursor-${{ steps.version.outputs.APP_VERSION }}-msix
+          path: followcursor/dist/FollowCursor-${{ steps.version.outputs.APP_VERSION }}.msix
+          retention-days: 30
+
       - name: Zip release artifact
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -135,4 +171,6 @@ jobs:
         with:
           name: FollowCursor ${{ steps.version.outputs.APP_VERSION }}
           generate_release_notes: true
-          files: FollowCursor-${{ steps.version.outputs.APP_VERSION }}-windows.zip
+          files: |
+            FollowCursor-${{ steps.version.outputs.APP_VERSION }}-windows.zip
+            followcursor/dist/FollowCursor-${{ steps.version.outputs.APP_VERSION }}.msix

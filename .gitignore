@@ -17,6 +17,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# MSIX generated assets (rebuilt by generate_msix_assets.py)
+followcursor/msix/Assets/
+
 # Logs
 *.log
 
