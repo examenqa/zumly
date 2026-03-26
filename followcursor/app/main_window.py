@@ -831,6 +831,7 @@ class MainWindow(QMainWindow):
         self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
         self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
         self._timeline.trim_changed.connect(self._on_trim_changed)
+        self._timeline.trim_reset.connect(self._on_trim_reset)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
 
@@ -1191,6 +1192,7 @@ class MainWindow(QMainWindow):
         self._vo_played_ids = set()
         self._trim_start_ms = 0.0
         self._trim_end_ms = 0.0
+        self._preview.set_playback_end(0.0)
         self._project_path = ""
         self._unsaved_changes = False
         self._output_dim = "auto"
@@ -1527,6 +1529,9 @@ class MainWindow(QMainWindow):
             self._start_recording()
 
     def _refresh_editor(self) -> None:
+        out_dur = self._zoom_engine.compute_output_duration(
+            self._rec_duration_ms, self._trim_start_ms, self._trim_end_ms,
+        )
         self._editor.refresh(
             self._zoom_engine.keyframes,
             self._mouse_track,
@@ -1536,6 +1541,7 @@ class MainWindow(QMainWindow):
             self._click_events,
             self._trim_start_ms,
             self._trim_end_ms,
+            output_duration=out_dur,
         )
         self._timeline.set_data(
             self._rec_duration_ms,
@@ -1883,9 +1889,11 @@ class MainWindow(QMainWindow):
     # ── undo / redo ─────────────────────────────────────────────────
 
     def _undo(self) -> None:
-        """Undo the last zoom/click change."""
+        """Undo the last zoom/click/trim change."""
         if self._zoom_engine.undo():
             self._click_events = self._zoom_engine.click_events
+            self._trim_start_ms = self._zoom_engine.trim_start_ms
+            self._trim_end_ms = self._zoom_engine.trim_end_ms
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
@@ -1898,9 +1906,11 @@ class MainWindow(QMainWindow):
             self._refresh_editor()
 
     def _redo(self) -> None:
-        """Redo the last undone zoom/click change."""
+        """Redo the last undone zoom/click/trim change."""
         if self._zoom_engine.redo():
             self._click_events = self._zoom_engine.click_events
+            self._trim_start_ms = self._zoom_engine.trim_start_ms
+            self._trim_end_ms = self._zoom_engine.trim_end_ms
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
@@ -1916,9 +1926,25 @@ class MainWindow(QMainWindow):
 
     def _on_trim_changed(self, start_ms: float, end_ms: float) -> None:
         """Handle trim handle changes from the timeline."""
+        # Debounced undo push — one snapshot per drag operation
+        if not self._drag_undo_pushed:
+            self._zoom_engine.push_undo()
+            self._drag_undo_pushed = True
         self._trim_start_ms = start_ms
         self._trim_end_ms = end_ms
+        self._zoom_engine.trim_start_ms = start_ms
+        self._zoom_engine.trim_end_ms = end_ms
         self._mark_dirty()
+
+    def _on_trim_reset(self) -> None:
+        """Handle trim reset from the timeline (right-click → Reset trim)."""
+        self._zoom_engine.push_undo()
+        self._trim_start_ms = 0.0
+        self._trim_end_ms = 0.0
+        self._zoom_engine.trim_start_ms = 0.0
+        self._zoom_engine.trim_end_ms = 0.0
+        self._mark_dirty()
+        self._refresh_editor()
 
     def _on_drag_finished(self) -> None:
         """Reset undo debounce flag when a timeline drag completes."""
@@ -2163,6 +2189,25 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
+        # ── Speed submenu ───────────────────────────────────────────
+        speed_menu = menu.addMenu("⏩  Speed")
+        speed_menu.setStyleSheet(menu.styleSheet())
+        current_speed = target_kf.speed
+        # 0.5, 0.75, 1.0, 1.25, 1.5, ... 10.0 in 0.25 steps
+        speed_val = 0.5
+        while speed_val <= 10.0 + 0.001:
+            check = "  ✓" if abs(current_speed - speed_val) < 0.01 else ""
+            disp = round(speed_val, 2)
+            speed_text = str(int(disp)) if disp == int(disp) else f"{disp:.2f}".rstrip("0").rstrip(".")
+            label = f"{speed_text}×{check}"
+            act = speed_menu.addAction(label)
+            act.triggered.connect(
+                lambda checked, s=speed_val: self._set_segment_speed(start_kf_id, s)
+            )
+            speed_val += 0.25
+
+        menu.addSeparator()
+
         # Centroid repositioning
         centroid_act = menu.addAction("📍  Pick zoom center on preview\u2026")
         centroid_act.triggered.connect(
@@ -2189,6 +2234,16 @@ class MainWindow(QMainWindow):
             self._zoom_engine.current_pan_x,
             self._zoom_engine.current_pan_y,
         )
+        self._refresh_editor()
+
+    def _set_segment_speed(self, kf_id: str, new_speed: float) -> None:
+        """Update the playback speed of a segment's start keyframe."""
+        self._zoom_engine.push_undo()
+        self._mark_dirty()
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == kf_id:
+                kf.speed = new_speed
+                break
         self._refresh_editor()
 
     def _add_pan_point(self, segment_start_id: str, time_ms: float) -> None:
@@ -2475,6 +2530,11 @@ class MainWindow(QMainWindow):
     # ── playback / timeline ─────────────────────────────────────────
 
     def _on_seek(self, time_ms: float) -> None:
+        # Clamp to the effective (trimmed) playback range
+        eff_start = self._trim_start_ms
+        eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+        time_ms = max(eff_start, min(time_ms, eff_end))
+
         self._playback_time = time_ms
         # Mark voiceovers whose audio has fully passed as already played.
         # Segments the playhead is currently inside remain unplayed so
@@ -2510,11 +2570,15 @@ class MainWindow(QMainWindow):
             return
         if self._preview.is_playing:
             t = self._preview.playback_pos_ms
-            # Soft-clamp: keep the displayed time within the recording
-            # duration so the timer label never exceeds the total, but
-            # do NOT force-pause — let the video stop naturally when it
-            # runs out of frames.
-            if self._rec_duration_ms > 0:
+            # Clamp to the effective (trimmed) playback range
+            eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+            if t >= eff_end:
+                # Reached the end of the trimmed range — pause playback
+                self._preview.pause()
+                t = eff_end
+                self._timeline.set_playing(False)
+                self._stop_voiceover_audio()
+            elif self._rec_duration_ms > 0:
                 t = min(t, self._rec_duration_ms)
             self._playback_time = t
             self._zoom_engine.update(t)
@@ -2688,6 +2752,13 @@ class MainWindow(QMainWindow):
             self._timeline.set_playing(False)
             self._stop_voiceover_audio()
         else:
+            # Wrap to trim start if playhead is at/past the effective end
+            eff_start = self._trim_start_ms
+            eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+            if self._playback_time >= eff_end - 100:
+                self._playback_time = eff_start
+                self._preview.seek_to(eff_start)
+                self._preview.set_current_time(eff_start)
             # Only mark voiceovers as played if their audio has fully passed
             self._vo_played_ids = {
                 seg.id for seg in self._voiceover_segments
@@ -3009,6 +3080,8 @@ class MainWindow(QMainWindow):
             self._frame_timestamps = session.frame_timestamps or []
             self._trim_start_ms = session.trim_start_ms
             self._trim_end_ms = session.trim_end_ms
+            self._zoom_engine.trim_start_ms = session.trim_start_ms
+            self._zoom_engine.trim_end_ms = session.trim_end_ms
 
             # Restore voiceover segments
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []

@@ -774,6 +774,7 @@ class EditorPanel(QWidget):
         click_events: List[ClickEvent] | None = None,
         trim_start_ms: float = 0.0,
         trim_end_ms: float = 0.0,
+        output_duration: float | None = None,
     ) -> None:
         """Update cached session data used by auto-zoom and the info tooltip."""
         self._mouse_track = mouse_track
@@ -785,11 +786,14 @@ class EditorPanel(QWidget):
         if monitor_rect is not None:
             self._monitor_rect = monitor_rect
 
-        self._info_label.setToolTip(
+        out_dur = output_duration if output_duration is not None else duration
+        tooltip = (
             f"Duration: {_fmt(duration)}\n"
+            f"Output duration: {_fmt(out_dur)}\n"
             f"Mouse samples: {len(mouse_track):,}\n"
             f"Keyframes: {len(keyframes)}"
         )
+        self._info_label.setToolTip(tooltip)
 
     def _auto_keyframe(self) -> None:
         track = self._mouse_track
