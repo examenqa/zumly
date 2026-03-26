@@ -893,7 +893,24 @@ class VideoExporter(QObject):
                     # segments; the last segment's end is inclusive to
                     # avoid clipping the final frame.
                     if _seg_ranges:
-                        in_seg = any(s <= t_ms <= e for s, e in _seg_ranges)
+                        # Implement the documented semantics:
+                        # - All interior segments use [start, end)
+                        # - The final segment uses [start, end]
+                        if len(_seg_ranges) == 1:
+                            s, e = _seg_ranges[0]
+                            in_seg = (s <= t_ms <= e)
+                        else:
+                            in_seg = False
+                            # Check the final segment with inclusive end.
+                            last_s, last_e = _seg_ranges[-1]
+                            if last_s <= t_ms <= last_e:
+                                in_seg = True
+                            else:
+                                # Check all interior segments as half-open.
+                                for s, e in _seg_ranges[:-1]:
+                                    if s <= t_ms < e:
+                                        in_seg = True
+                                        break
                         if not in_seg:
                             out_idx += 1
                             continue
