@@ -48,3 +48,10 @@ Create a branch from `main` before making changes. The branch prefix matches the
 - Do not refactor unrelated code
 - Do not add comments or docstrings to code you didn't change
 - Do not skip tests
+
+## Avoiding merge conflicts
+
+When working on multiple issues in parallel, follow the **Parallel Work & Merge Conflicts** section in [copilot-instructions.md](../copilot-instructions.md):
+- Check which files the issue will touch and avoid overlapping with other in-progress PRs
+- Prefer issues that target different file-area groups (UI, capture, export, zoom, data, docs)
+- A GitHub Actions workflow automatically rebases open PRs when `main` changes

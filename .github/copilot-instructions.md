@@ -34,6 +34,7 @@ followcursor/                    ← repo root
 │   ├── instructions/            ← Domain-specific Copilot instructions
 │   ├── prompts/                 ← Copilot prompt files (e.g. fix-errors)
 │   └── workflows/build.yml     ← GitHub Actions CI
+│                  auto-rebase.yml ← Auto-rebase open PRs on push to main
 ├── .vscode/                     ← VS Code config (launch, tasks, settings)
 ├── followcursor/                ← Python project root
 │   ├── main.py                  ← Entry point
@@ -90,6 +91,21 @@ followcursor/                    ← repo root
 ### Branching
 
 All **features, bug fixes, and significant changes** must be developed on a dedicated branch (e.g. `fix/encoder-fallback`, `feat/gif-palette`). Create the branch before making changes, run the **Run Tests** task to verify, then merge back to `main` only after tests pass. Trivial documentation-only or comment-only edits may go directly on `main`.
+
+### Parallel Work & Merge Conflicts
+
+When multiple issues are being worked on simultaneously (e.g. by Copilot coding agent), **batch related issues** to avoid merge conflicts:
+
+1. **Identify file overlap** — before starting a batch of issues, check which source files each issue will likely touch. Issues that modify the same files should be sequenced, not parallelized.
+2. **Work in waves of 2–3** — start with 2–3 issues that target different areas of the codebase (e.g. one UI widget + one export change + one zoom engine fix). Merge those PRs, then start the next wave.
+3. **File-area grouping** (as a guide):
+   - **UI / widgets**: `main_window.py`, `widgets/`, `theme.py`, `compositor.py`, `backgrounds.py`, `frames.py`
+   - **Capture / input**: `screen_recorder.py`, `window_utils.py`, `mouse_tracker.py`, `keyboard_tracker.py`, `click_tracker.py`
+   - **Export**: `video_exporter.py`, `cursor_renderer.py`, `utils.py`
+   - **Zoom / timeline**: `zoom_engine.py`, `activity_analyzer.py`, `ai_service.py`, `timeline_widget.py`, `editor_panel.py`
+   - **Data / project**: `models.py`, `project_file.py`
+   - **Docs / CI**: `docs/`, `.github/`, `README.md`
+4. **Auto-rebase** — a GitHub Actions workflow (`.github/workflows/auto-rebase.yml`) automatically rebases all open PRs whenever `main` is updated. PRs labeled `no-rebase` are excluded.
 
 ### Test Suite
 
