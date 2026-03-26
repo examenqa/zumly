@@ -62,3 +62,13 @@ After all subagents finish, present results:
 |---|-------|--------|--------|-------|
 
 For any failed implementations, report what went wrong and suggest next steps.
+
+## Step 6 — Resolve merge conflicts
+
+After all implementations are complete, check for conflicted open PRs:
+
+```
+gh pr list --state open --json number,title,headRefName,mergeable --limit 50
+```
+
+If any PRs have `mergeable` set to `"CONFLICTING"`, offer to resolve them by following the [resolve-conflicts](./resolve-conflicts.prompt.md) prompt workflow. Process each conflicted PR sequentially: rebase onto `main`, resolve conflicts, run tests, and force-push.
