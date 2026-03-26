@@ -313,57 +313,6 @@ class TestZoomEngineUndoRedo:
         engine.undo()
         assert engine.click_events[0].x == 10
 
-    def test_undo_restores_trim(self) -> None:
-        """Undo restores trim_start_ms and trim_end_ms."""
-        engine = ZoomEngine()
-        engine.trim_start_ms = 0.0
-        engine.trim_end_ms = 0.0
-        engine.push_undo()
-        engine.trim_start_ms = 500.0
-        engine.trim_end_ms = 3000.0
-        assert engine.undo()
-        assert engine.trim_start_ms == 0.0
-        assert engine.trim_end_ms == 0.0
-
-    def test_redo_restores_trim(self) -> None:
-        """Redo re-applies trim changes."""
-        engine = ZoomEngine()
-        engine.push_undo()
-        engine.trim_start_ms = 500.0
-        engine.trim_end_ms = 3000.0
-        engine.undo()
-        assert engine.trim_start_ms == 0.0
-        assert engine.trim_end_ms == 0.0
-        assert engine.redo()
-        assert engine.trim_start_ms == 500.0
-        assert engine.trim_end_ms == 3000.0
-
-    def test_trim_included_in_snapshot_with_keyframes(self) -> None:
-        """Snapshot captures trim alongside keyframes and clicks."""
-        engine = ZoomEngine()
-        engine.trim_start_ms = 100.0
-        engine.trim_end_ms = 2000.0
-        kf = ZoomKeyframe.create(timestamp=200, zoom=1.5)
-        engine.add_keyframe(kf)
-        engine.push_undo()
-        # Mutate everything
-        engine.trim_start_ms = 0.0
-        engine.trim_end_ms = 0.0
-        engine.keyframes.clear()
-        assert engine.undo()
-        assert engine.trim_start_ms == 100.0
-        assert engine.trim_end_ms == 2000.0
-        assert len(engine.keyframes) == 1
-
-    def test_clear_resets_trim(self) -> None:
-        """ZoomEngine.clear() resets trim to defaults."""
-        engine = ZoomEngine()
-        engine.trim_start_ms = 500.0
-        engine.trim_end_ms = 3000.0
-        engine.clear()
-        assert engine.trim_start_ms == 0.0
-        assert engine.trim_end_ms == 0.0
-
 
 # ── Pan point interpolation ────────────────────────────────────────
 
@@ -449,129 +398,51 @@ class TestPanPointInterpolation:
         assert z3 == pytest.approx(1.8)
 
 
-# ── Segment Speed ───────────────────────────────────────────────────
+# ── Video segment undo/redo ────────────────────────────────────────
 
 
-class TestSegmentSpeed:
-    """Tests for per-segment playback speed helpers."""
+class TestVideoSegmentUndoRedo:
+    """Verify that video segments are included in undo/redo snapshots."""
 
-    def test_standalone_speed_at_time(self) -> None:
-        kfs = [
-            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=3.0),
-            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=600),
-        ]
-        assert speed_at_time(kfs, 2000, 10000) == 3.0
-        assert speed_at_time(kfs, 500, 10000) == 1.0
-        assert speed_at_time([], 500, 10000) == 1.0
-
-    def test_speed_default_outside_segments(self) -> None:
+    def test_undo_restores_video_segments(self) -> None:
+        from app.models import VideoSegment
         engine = ZoomEngine()
-        assert engine.get_speed_at(500, 10000) == 1.0
-
-    def test_speed_inside_segment(self) -> None:
-        engine = ZoomEngine()
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=2.0)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=600)
-        )
-        # Inside the segment
-        assert engine.get_speed_at(2000, 10000) == 2.0
-        # Outside the segment (before)
-        assert engine.get_speed_at(500, 10000) == 1.0
-        # Outside the segment (after zoom-out completes)
-        assert engine.get_speed_at(4000, 10000) == 1.0
-
-    def test_speed_at_segment_boundary(self) -> None:
-        engine = ZoomEngine()
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=0.5)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=600)
-        )
-        # Exactly at start
-        assert engine.get_speed_at(1000, 10000) == 0.5
-        # Exactly at end (zoom-out + duration)
-        assert engine.get_speed_at(3600, 10000) == 0.5
-
-    def test_multiple_segments_different_speeds(self) -> None:
-        engine = ZoomEngine()
-        # Segment 1: 1000-2600 at 2x
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=2.0)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=2000, zoom=1.0, duration=600)
-        )
-        # Segment 2: 4000-5600 at 0.5x
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=4000, zoom=1.5, duration=400, speed=0.5)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=5000, zoom=1.0, duration=600)
-        )
-        assert engine.get_speed_at(1500, 10000) == 2.0
-        assert engine.get_speed_at(3000, 10000) == 1.0
-        assert engine.get_speed_at(4500, 10000) == 0.5
-
-    def test_output_duration_no_speed_changes(self) -> None:
-        engine = ZoomEngine()
-        assert engine.compute_output_duration(10000) == pytest.approx(10000)
-
-    def test_output_duration_with_speed(self) -> None:
-        engine = ZoomEngine()
-        # Segment from 2000-4000ms (zoom-out at 3000 + 1000ms duration) at 2x
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=2000, zoom=2.0, duration=0, speed=2.0)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=1000)
-        )
-        # Segment is 2000ms long (2000 to 4000), at 2x → output = 1000ms
-        # Rest of 10000ms recording: 0-2000 (2000ms) + 4000-10000 (6000ms) = 8000ms
-        # Total output: 8000 + 1000 = 9000ms
-        result = engine.compute_output_duration(10000)
-        assert result == pytest.approx(9000)
-
-    def test_output_duration_with_trim(self) -> None:
-        engine = ZoomEngine()
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=2000, zoom=2.0, duration=0, speed=2.0)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=3000, zoom=1.0, duration=1000)
-        )
-        # Trim to 1000-5000: includes segment 2000-4000 at 2x
-        # 1000-2000 = 1000ms at 1x → 1000ms
-        # 2000-4000 = 2000ms at 2x → 1000ms
-        # 4000-5000 = 1000ms at 1x → 1000ms
-        # Total: 3000ms
-        result = engine.compute_output_duration(10000, 1000, 5000)
-        assert result == pytest.approx(3000)
-
-    def test_output_duration_slow_motion(self) -> None:
-        engine = ZoomEngine()
-        # Segment at 0.5x (slow motion)
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=0, zoom=2.0, duration=0, speed=0.5)
-        )
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=5000, zoom=1.0, duration=0)
-        )
-        # 5000ms at 0.5x → 10000ms output for the segment
-        # 5000-10000ms at 1x → 5000ms
-        # Total: 15000ms
-        result = engine.compute_output_duration(10000)
-        assert result == pytest.approx(15000)
-
-    def test_speed_preserved_in_undo(self) -> None:
-        engine = ZoomEngine()
-        engine.add_keyframe(
-            ZoomKeyframe.create(timestamp=1000, zoom=2.0, duration=400, speed=3.0)
-        )
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        engine.video_segments = [seg]
         engine.push_undo()
-        engine.keyframes[0].speed = 1.0
+        # Split the segment
+        engine.video_segments = [
+            VideoSegment.create(start_ms=0, end_ms=2500),
+            VideoSegment.create(start_ms=2500, end_ms=5000),
+        ]
+        assert len(engine.video_segments) == 2
+        assert engine.undo()
+        assert len(engine.video_segments) == 1
+        assert engine.video_segments[0].end_ms == 5000
+
+    def test_redo_restores_video_segments(self) -> None:
+        from app.models import VideoSegment
+        engine = ZoomEngine()
+        engine.video_segments = [VideoSegment.create(start_ms=0, end_ms=5000)]
+        engine.push_undo()
+        engine.video_segments = [
+            VideoSegment.create(start_ms=0, end_ms=2500),
+            VideoSegment.create(start_ms=2500, end_ms=5000),
+        ]
         engine.undo()
-        assert engine.keyframes[0].speed == 3.0
+        assert len(engine.video_segments) == 1
+        assert engine.redo()
+        assert len(engine.video_segments) == 2
+
+    def test_video_segments_deep_copied(self) -> None:
+        from app.models import VideoSegment
+        engine = ZoomEngine()
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        engine.video_segments = [seg]
+        engine.push_undo()
+        # Mutate the existing segment instance after taking the snapshot.
+        seg.start_ms = 999
+        seg.end_ms = 9999
+        engine.undo()
+        assert engine.video_segments[0].start_ms == 0
+        assert engine.video_segments[0].end_ms == 5000

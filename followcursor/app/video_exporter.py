@@ -36,7 +36,7 @@ import numpy as np
 
 from PySide6.QtCore import QObject, Signal
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent, VoiceoverSegment
+from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment
 from .zoom_engine import ZoomEngine
 from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
@@ -416,6 +416,7 @@ class VideoExporter(QObject):
         trim_end_ms: float = 0.0,
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
+        video_segments: Optional[List[VideoSegment]] = None,
     ) -> None:
         """Start export in a background thread.
 
@@ -433,6 +434,10 @@ class VideoExporter(QObject):
         ``"h264_qsv"``, ``"h264_amf"``, ``"libx264"``).
         *voiceover_segments* — optional list of ``VoiceoverSegment``
         objects; each with an audio file to mux at a specific time.
+        *video_segments* — optional list of ``VideoSegment`` objects
+        representing contiguous recording-time segments (split points).
+        Currently plumbed through for future segment-aware export
+        (e.g. per-segment speed or deletion).
         """
         self._thread = threading.Thread(
             target=self._run,
@@ -447,7 +452,8 @@ class VideoExporter(QObject):
                   trim_start_ms,
                   trim_end_ms,
                   encoder_id,
-                  voiceover_segments or []),
+                  voiceover_segments or [],
+                  video_segments or []),
             daemon=True,
         )
         self._thread.start()
@@ -472,6 +478,7 @@ class VideoExporter(QObject):
         trim_end_ms: float = 0.0,
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
+        video_segments: Optional[List[VideoSegment]] = None,
     ) -> None:
         """Execute the full export algorithm on a worker thread.
 

@@ -13,16 +13,15 @@ edits, click deletions, and trim handle changes.
 import copy
 from dataclasses import dataclass, field
 from typing import List, Tuple
-from .models import ClickEvent, ZoomKeyframe
+from .models import ClickEvent, VideoSegment, ZoomKeyframe
 
 
 @dataclass
 class _Snapshot:
-    """Internal snapshot for undo/redo — keyframes + click events + trim."""
+    """Internal snapshot for undo/redo — keyframes + click events + video segments."""
     keyframes: List[ZoomKeyframe] = field(default_factory=list)
     click_events: List[ClickEvent] = field(default_factory=list)
-    trim_start_ms: float = 0.0
-    trim_end_ms: float = 0.0
+    video_segments: List[VideoSegment] = field(default_factory=list)
 
 
 def ease_out(t: float) -> float:
@@ -102,27 +101,23 @@ class ZoomEngine:
     def __init__(self) -> None:
         self.keyframes: List[ZoomKeyframe] = []
         self.click_events: List[ClickEvent] = []
+        self.video_segments: List[VideoSegment] = []
         self.current_zoom: float = 1.0
         self.current_pan_x: float = 0.5
         self.current_pan_y: float = 0.5
 
-        # Trim state — included in undo/redo snapshots
-        self.trim_start_ms: float = 0.0
-        self.trim_end_ms: float = 0.0  # 0 = no trim (use full duration)
-
-        # Undo / redo stacks — each entry is a snapshot of keyframes + click events + trim
+        # Undo / redo stacks — each entry is a snapshot of keyframes + click events + video segments
         self._undo_stack: List[_Snapshot] = []
         self._redo_stack: List[_Snapshot] = []
 
     # ── snapshot helpers ────────────────────────────────────────────
 
     def _snapshot(self) -> _Snapshot:
-        """Return a deep copy of the current keyframes, click events, and trim."""
+        """Return a deep copy of the current keyframes, click events, and video segments."""
         return _Snapshot(
             keyframes=copy.deepcopy(self.keyframes),
             click_events=copy.deepcopy(self.click_events),
-            trim_start_ms=self.trim_start_ms,
-            trim_end_ms=self.trim_end_ms,
+            video_segments=copy.deepcopy(self.video_segments),
         )
 
     def push_undo(self) -> None:
@@ -144,8 +139,7 @@ class ZoomEngine:
         snap = self._undo_stack.pop()
         self.keyframes = snap.keyframes
         self.click_events = snap.click_events
-        self.trim_start_ms = snap.trim_start_ms
-        self.trim_end_ms = snap.trim_end_ms
+        self.video_segments = snap.video_segments
         return True
 
     def redo(self) -> bool:
@@ -156,8 +150,7 @@ class ZoomEngine:
         snap = self._redo_stack.pop()
         self.keyframes = snap.keyframes
         self.click_events = snap.click_events
-        self.trim_start_ms = snap.trim_start_ms
-        self.trim_end_ms = snap.trim_end_ms
+        self.video_segments = snap.video_segments
         return True
 
     @property
@@ -183,13 +176,11 @@ class ZoomEngine:
         self.keyframes = [kf for kf in self.keyframes if kf.id != kf_id]
 
     def clear(self) -> None:
-        """Remove all keyframes and reset zoom/pan/trim to defaults."""
+        """Remove all keyframes and reset zoom/pan to defaults."""
         self.keyframes.clear()
         self.current_zoom = 1.0
         self.current_pan_x = 0.5
         self.current_pan_y = 0.5
-        self.trim_start_ms = 0.0
-        self.trim_end_ms = 0.0
 
     def compute_at(self, time_ms: float) -> Tuple[float, float, float]:
         """Returns (zoom, pan_x, pan_y) at given time."""
