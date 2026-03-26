@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.zoom_engine import ease_out, smooth_step, ZoomEngine, MAX_UNDO
+from app.zoom_engine import ease_out, smooth_step, speed_at_time, ZoomEngine, MAX_UNDO
 from app.models import ClickEvent, ZoomKeyframe
 
 
