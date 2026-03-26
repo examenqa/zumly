@@ -437,9 +437,12 @@ class TestVideoSegmentUndoRedo:
     def test_video_segments_deep_copied(self) -> None:
         from app.models import VideoSegment
         engine = ZoomEngine()
-        engine.video_segments = [VideoSegment.create(start_ms=0, end_ms=5000)]
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        engine.video_segments = [seg]
         engine.push_undo()
-        engine.video_segments[0] = VideoSegment.create(start_ms=999, end_ms=9999)
+        # Mutate the existing segment instance after taking the snapshot.
+        seg.start_ms = 999
+        seg.end_ms = 9999
         engine.undo()
         assert engine.video_segments[0].start_ms == 0
         assert engine.video_segments[0].end_ms == 5000

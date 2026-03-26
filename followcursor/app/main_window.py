@@ -832,7 +832,7 @@ class MainWindow(QMainWindow):
         self._timeline.voiceover_clicked.connect(self._on_voiceover_clicked)
         self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
         self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
-        self._timeline.split_requested.connect(self._split_at_playhead)
+        self._timeline.split_requested.connect(self._split_at_time)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
@@ -1192,6 +1192,8 @@ class MainWindow(QMainWindow):
         # Voiceover / trim / project
         self._voiceover_segments = []
         self._video_segments = []
+        # Keep zoom engine segments in sync with session segments
+        self._zoom_engine.video_segments = []
         self._vo_played_ids = set()
         self._trim_start_ms = 0.0
         self._trim_end_ms = 0.0
@@ -1933,10 +1935,10 @@ class MainWindow(QMainWindow):
 
     # ── segment splitting ───────────────────────────────────────────
 
-    def _split_at_playhead(self, time_ms: float) -> None:
+    def _split_at_time(self, time_ms: float) -> None:
         """Split the recording at *time_ms*, creating two adjacent segments.
 
-        The split is rejected when the playhead is within 500 ms of an
+        The split is rejected when *time_ms* is within 500 ms of an
         existing segment boundary or a trim handle.
         """
         MIN_GAP_MS = 500.0

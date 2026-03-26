@@ -914,6 +914,7 @@ class _TimelineTrack(QWidget):
                     self._drag_pan_seg_id = seg_start_id
                     self._selected_click_idx = -1
                     self._selected_segment_id = ""
+                    self._selected_video_seg_id = ""
                     return
             # Check zoom segment edge drag first — takes priority over trim handles so
             # that blocks touching the video boundaries (x=0 or x=width) remain resizable.
@@ -926,6 +927,7 @@ class _TimelineTrack(QWidget):
                 self._drag_edge_is_right = is_right
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
+                self._selected_video_seg_id = ""
                 return
             # Check segment body drag (move entire segment)
             seg_info = self._segment_body_hit_info(mx, my)
@@ -962,6 +964,7 @@ class _TimelineTrack(QWidget):
                 self._drag_mode = trim_hit
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
+                self._selected_video_seg_id = ""
                 return
             # Check click event selection
             click_idx = self._click_hit_test(mx, my)
@@ -969,6 +972,7 @@ class _TimelineTrack(QWidget):
                 self._selected_click_idx = click_idx
                 self._selected_segment_id = ""
                 self._selected_vo_id = ""
+                self._selected_video_seg_id = ""
                 self.update()
                 return
             # Check voiceover segment selection (left-click) — start drag
@@ -977,6 +981,7 @@ class _TimelineTrack(QWidget):
                 self._selected_vo_id = vo_id
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
+                self._selected_video_seg_id = ""
                 # Start voiceover drag
                 self._dragging = True
                 self._drag_mode = "voiceover"
@@ -1123,6 +1128,7 @@ class _TimelineTrack(QWidget):
             if was_body_drag and not self._drag_actually_moved and self._pending_select_id:
                 self._selected_segment_id = self._pending_select_id
                 self._selected_click_idx = -1
+                self._selected_video_seg_id = ""
                 self.update()
             self._pending_select_id = ""
             self._press_pos = None

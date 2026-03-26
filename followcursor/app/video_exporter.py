@@ -434,6 +434,10 @@ class VideoExporter(QObject):
         ``"h264_qsv"``, ``"h264_amf"``, ``"libx264"``).
         *voiceover_segments* — optional list of ``VoiceoverSegment``
         objects; each with an audio file to mux at a specific time.
+        *video_segments* — optional list of ``VideoSegment`` objects
+        representing contiguous recording-time segments (split points).
+        Currently plumbed through for future segment-aware export
+        (e.g. per-segment speed or deletion).
         """
         self._thread = threading.Thread(
             target=self._run,
