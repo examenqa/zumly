@@ -449,6 +449,17 @@ After trimming, the timeline viewport shows **only the content between the trim 
 
 Zoom segments, voiceover segments, activity heatmaps (mouse, keyboard, clicks), and click event markers that fall outside the trimmed range are hidden from the timeline.
 
+### Untrimming
+
+Drag the trim handles back outward to restore previously hidden content:
+
+- **Left handle** — drag leftward to reveal content before the current trim start, down to the beginning of the recording
+- **Right handle** — drag rightward to reveal content after the current trim end, up to the full recording duration
+
+### Reset Trim
+
+Right-click on either trim handle and select **↩ Reset trim** to reset both handles to the full recording range in one step.
+
 ### Constraints
 
 - The trimmed region must be at least **500 ms** long
@@ -463,11 +474,11 @@ When trim handles are set, the export only renders frames within the trimmed ran
 
 ## Undo & Redo
 
-All zoom keyframe and click event changes can be undone and redone. The undo history supports up to **50 snapshots**.
+All zoom keyframe, click event, and trim handle changes can be undone and redone. The undo history supports up to **50 snapshots**.
 
 ### Supported Actions
 
-Every zoom keyframe and click event mutation is tracked:
+Every zoom keyframe, click event, and trim mutation is tracked:
 
 - Adding a keyframe (manual or auto-generated)
 - Removing a keyframe
@@ -477,6 +488,8 @@ Every zoom keyframe and click event mutation is tracked:
 - Deleting a zoom section
 - Auto-generating keyframes (the entire batch)
 - Deleting a click event
+- Dragging trim handles (start or end)
+- Resetting trim to full range
 
 ### How to Undo/Redo
 

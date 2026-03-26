@@ -831,6 +831,7 @@ class MainWindow(QMainWindow):
         self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
         self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
         self._timeline.trim_changed.connect(self._on_trim_changed)
+        self._timeline.trim_reset.connect(self._on_trim_reset)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
 
@@ -1888,9 +1889,11 @@ class MainWindow(QMainWindow):
     # ── undo / redo ─────────────────────────────────────────────────
 
     def _undo(self) -> None:
-        """Undo the last zoom/click change."""
+        """Undo the last zoom/click/trim change."""
         if self._zoom_engine.undo():
             self._click_events = self._zoom_engine.click_events
+            self._trim_start_ms = self._zoom_engine.trim_start_ms
+            self._trim_end_ms = self._zoom_engine.trim_end_ms
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
@@ -1903,9 +1906,11 @@ class MainWindow(QMainWindow):
             self._refresh_editor()
 
     def _redo(self) -> None:
-        """Redo the last undone zoom/click change."""
+        """Redo the last undone zoom/click/trim change."""
         if self._zoom_engine.redo():
             self._click_events = self._zoom_engine.click_events
+            self._trim_start_ms = self._zoom_engine.trim_start_ms
+            self._trim_end_ms = self._zoom_engine.trim_end_ms
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
@@ -1921,18 +1926,25 @@ class MainWindow(QMainWindow):
 
     def _on_trim_changed(self, start_ms: float, end_ms: float) -> None:
         """Handle trim handle changes from the timeline."""
+        # Debounced undo push — one snapshot per drag operation
+        if not self._drag_undo_pushed:
+            self._zoom_engine.push_undo()
+            self._drag_undo_pushed = True
         self._trim_start_ms = start_ms
         self._trim_end_ms = end_ms
-        self._preview.set_playback_end(end_ms)
+        self._zoom_engine.trim_start_ms = start_ms
+        self._zoom_engine.trim_end_ms = end_ms
         self._mark_dirty()
 
-        # Clamp the current playhead into the new trim range so it cannot sit
-        # outside [trim_start, trim_end] after a trim change.
-        eff_end = end_ms if end_ms > 0 else self._rec_duration_ms
-        if self._playback_time < start_ms:
-            self._on_seek(start_ms)
-        elif self._playback_time > eff_end:
-            self._on_seek(eff_end)
+    def _on_trim_reset(self) -> None:
+        """Handle trim reset from the timeline (right-click → Reset trim)."""
+        self._zoom_engine.push_undo()
+        self._trim_start_ms = 0.0
+        self._trim_end_ms = 0.0
+        self._zoom_engine.trim_start_ms = 0.0
+        self._zoom_engine.trim_end_ms = 0.0
+        self._mark_dirty()
+        self._refresh_editor()
 
     def _on_drag_finished(self) -> None:
         """Reset undo debounce flag when a timeline drag completes."""
@@ -3068,7 +3080,8 @@ class MainWindow(QMainWindow):
             self._frame_timestamps = session.frame_timestamps or []
             self._trim_start_ms = session.trim_start_ms
             self._trim_end_ms = session.trim_end_ms
-            self._preview.set_playback_end(session.trim_end_ms)
+            self._zoom_engine.trim_start_ms = session.trim_start_ms
+            self._zoom_engine.trim_end_ms = session.trim_end_ms
 
             # Restore voiceover segments
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []
