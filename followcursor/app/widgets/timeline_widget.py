@@ -52,6 +52,7 @@ class _TimelineTrack(QWidget):
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
+    video_segment_deleted = Signal(str)  # video segment id — delete
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()                # reset both trim handles to full range
@@ -113,6 +114,11 @@ class _TimelineTrack(QWidget):
         self._selected_segment_id: str = ""     # start kf id of selected segment
         # Video segment selection
         self._selected_video_seg_id: str = ""   # video segment id of selected segment
+        # Video segment rendering cache — populated during paintEvent for hit-testing
+        # Each entry: (x, width, segment_id)
+        self._video_seg_rects: List[tuple] = []
+        self._video_seg_top: int = 0
+        self._video_seg_h: int = 0
         # Voiceover selection
         self._selected_vo_id: str = ""          # voiceover segment id
         # Track mouse press position to distinguish click from drag
@@ -302,9 +308,26 @@ class _TimelineTrack(QWidget):
             del_act.triggered.connect(lambda: self._delete_selected_voiceover())
             menu.exec(self.mapToGlobal(pos))
             return
+        # Check video segment
+        vs_id = self._video_seg_hit_test(mx, my)
+        if vs_id:
+            # Selecting a video segment should clear all other selection state
+            self._selected_segment_id = ""
+            self._selected_click_idx = -1
+            self._selected_vo_id = ""
+            self._selected_video_seg_id = vs_id
+            self.update()
+            # Only show delete if more than 1 segment remains
+            if len(self.video_segments) > 1:
+                menu = QMenu(self)
+                menu.setStyleSheet(self._MENU_STYLE)
+                del_act = menu.addAction("🗑  Delete segment")
+                del_act.triggered.connect(lambda: self._delete_selected_video_segment())
+                menu.exec(self.mapToGlobal(pos))
+            return
         # Empty space — offer to add a zoom section, voiceover, or split
-        if self.duration > 0 and self.width() > 0:
-            time_ms = self._x_to_ms(mx)
+        if self._eff_dur > 0 and self.width() > 0:
+            time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
             menu = QMenu(self)
             menu.setStyleSheet(self._MENU_STYLE)
             act_split = menu.addAction("✂  Split here")
@@ -367,10 +390,13 @@ class _TimelineTrack(QWidget):
         self._vo_h = 18
         self._draw_voiceover_segments(painter, w, self._vo_top, self._vo_h)
 
-        # video segments (below voiceover segments)
-        self._vseg_top = self._vo_top + self._vo_h + 2
-        self._vseg_h = 14
-        self._draw_video_segments(painter, w, self._vseg_top, self._vseg_h)
+        # video segments (below voiceover, only when multiple segments exist)
+        if len(self.video_segments) > 1:
+            self._video_seg_top = self._vo_top + self._vo_h + 2
+            self._video_seg_h = 18
+            self._draw_video_segments(painter, w, self._video_seg_top, self._video_seg_h)
+        else:
+            self._video_seg_rects = []
 
         # playhead
         px = self._ms_to_x(self.current_time, w)
@@ -817,58 +843,45 @@ class _TimelineTrack(QWidget):
                 return seg_id
         return ""
 
-    # ── video segments ────────────────────────────────────────────
+    # ── video segments ─────────────────────────────────────────────
 
     def _draw_video_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
-        """Draw video segments as coloured blocks with divider lines at split boundaries."""
-        dur = self.duration
-        self._vseg_rects: list[tuple] = []  # [(x, seg_w, seg_id)] for hit testing
+        """Draw video segment blocks — teal rounded rects when multiple segments exist."""
+        self._video_seg_rects = []
+        if self.duration <= 0 or len(self.video_segments) <= 1:
+            return
 
+        # Track label
         label_font = QFont()
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
         painter.setPen(QPen(QColor("#6c6890"), 1))
-        painter.drawText(4, top + h - 2, "Clips")
+        painter.drawText(4, top + h - 3, "Clips")
 
-        if dur <= 0 or not self.video_segments:
-            return
-
-        # Alternating segment colours
-        colors_normal = [QColor("#2e2b50"), QColor("#33304f")]
-        colors_selected = [QColor("#4a3f80"), QColor("#4f4580")]
-        border_normal = QColor("#3d3a58")
-        border_selected = QColor("#8b5cf6")
-
-        for i, seg in enumerate(self.video_segments):
-            sx = (seg.start_ms / dur) * w
-            ex = (seg.end_ms / dur) * w
-            seg_w = max(2, ex - sx)
+        for seg in self.video_segments:
+            sx = self._ms_to_x(seg.start_ms)
+            ex = self._ms_to_x(seg.end_ms)
+            seg_w = max(ex - sx, 4)
+            rect = QRectF(sx, top, seg_w, h)
 
             is_selected = (seg.id == self._selected_video_seg_id)
-            fill = colors_selected[i % 2] if is_selected else colors_normal[i % 2]
-            border = border_selected if is_selected else border_normal
-
-            painter.setBrush(QBrush(fill))
-            painter.setPen(QPen(border, 2 if is_selected else 1))
-            painter.drawRoundedRect(QRectF(sx, top, seg_w, h), 3, 3)
-
-            self._vseg_rects.append((sx, seg_w, seg.id))
-
-        # Draw divider lines at internal boundaries
-        if len(self.video_segments) > 1:
-            painter.setPen(QPen(QColor("#f59e0b"), 2))
-            for seg in self.video_segments[1:]:
-                bx = int((seg.start_ms / dur) * w)
-                painter.drawLine(bx, top - 1, bx, top + h + 1)
+            if is_selected:
+                painter.setBrush(QBrush(QColor(34, 197, 168, 90)))
+                painter.setPen(QPen(QColor("#2dd4bf"), 2.0))
+            else:
+                painter.setBrush(QBrush(QColor(34, 197, 168, 45)))
+                painter.setPen(QPen(QColor("#14b8a6"), 1.0))
+            painter.drawRoundedRect(rect, 3, 3)
+            self._video_seg_rects.append((sx, seg_w, seg.id))
 
     def _video_seg_hit_test(self, mx: float, my: float) -> str:
         """Return the video segment id at (mx, my), or empty string."""
-        if not hasattr(self, "_vseg_rects") or not hasattr(self, "_vseg_top"):
+        if not self._video_seg_rects:
             return ""
-        if my < self._vseg_top or my > self._vseg_top + self._vseg_h:
+        if my < self._video_seg_top or my > self._video_seg_top + self._video_seg_h:
             return ""
-        for sx, sw, seg_id in self._vseg_rects:
+        for sx, sw, seg_id in self._video_seg_rects:
             if sx <= mx <= sx + sw:
                 return seg_id
         return ""
@@ -964,7 +977,6 @@ class _TimelineTrack(QWidget):
                     self._drag_pan_seg_id = seg_start_id
                     self._selected_click_idx = -1
                     self._selected_segment_id = ""
-                    self._selected_video_seg_id = ""
                     return
             # Check zoom segment edge drag first — takes priority over trim handles so
             # that blocks touching the video boundaries (x=0 or x=width) remain resizable.
@@ -1049,9 +1061,9 @@ class _TimelineTrack(QWidget):
                 self.update()
                 return
             # Check video segment selection (left-click)
-            vseg_id = self._video_seg_hit_test(mx, my)
-            if vseg_id:
-                self._selected_video_seg_id = vseg_id
+            vs_id = self._video_seg_hit_test(mx, my)
+            if vs_id:
+                self._selected_video_seg_id = vs_id
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
                 self._selected_vo_id = ""
@@ -1062,7 +1074,11 @@ class _TimelineTrack(QWidget):
             self._selected_segment_id = ""
             self._selected_vo_id = ""
             self._selected_video_seg_id = ""
-            ratio = max(0.0, min(1.0, mx / self.width()))
+            if self.duration > 0:
+                click_time_ms = self._x_to_ms(mx)
+                ratio = max(0.0, min(1.0, click_time_ms / self.duration))
+            else:
+                ratio = 0.0
             self.clicked.emit(ratio)
             self.update()
 
@@ -1178,6 +1194,8 @@ class _TimelineTrack(QWidget):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         elif self._voiceover_hit_test(mx, my):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif self._video_seg_hit_test(mx, my):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
             self.setCursor(Qt.CursorShape.CrossCursor)
 
@@ -1195,7 +1213,6 @@ class _TimelineTrack(QWidget):
             if was_body_drag and not self._drag_actually_moved and self._pending_select_id:
                 self._selected_segment_id = self._pending_select_id
                 self._selected_click_idx = -1
-                self._selected_video_seg_id = ""
                 self.update()
             self._pending_select_id = ""
             self._press_pos = None
@@ -1235,12 +1252,13 @@ class _TimelineTrack(QWidget):
             self.voiceover_clicked.emit(vid)  # main_window handles via edit dialog
             self.update()
 
-    def _reset_trim(self) -> None:
-        """Reset both trim handles to the full recording range."""
-        self.trim_start_ms = 0.0
-        self.trim_end_ms = 0.0
-        self.trim_reset.emit()
-        self.update()
+    def _delete_selected_video_segment(self) -> None:
+        """Delete the currently selected video segment (if more than one remains)."""
+        if self._selected_video_seg_id and len(self.video_segments) > 1:
+            vid = self._selected_video_seg_id
+            self._selected_video_seg_id = ""
+            self.video_segment_deleted.emit(vid)
+            self.update()
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         if event.key() == Qt.Key.Key_S and not event.modifiers():
@@ -1248,6 +1266,10 @@ class _TimelineTrack(QWidget):
                 self.split_requested.emit(self.current_time)
                 return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            # Video segment deletion takes priority when selected
+            if self._selected_video_seg_id:
+                self._delete_selected_video_segment()
+                return
             if self._selected_segment_id:
                 sid = self._selected_segment_id
                 self._selected_segment_id = ""
@@ -1281,6 +1303,7 @@ class TimelineWidget(QWidget):
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
+    video_segment_deleted = Signal(str)   # video segment id — delete
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()               # reset both trim handles to full range
@@ -1354,6 +1377,7 @@ class TimelineWidget(QWidget):
         self._track.voiceover_clicked.connect(self.voiceover_clicked)
         self._track.voiceover_deleted.connect(self.voiceover_deleted)
         self._track.voiceover_moved.connect(self.voiceover_moved)
+        self._track.video_segment_deleted.connect(self.video_segment_deleted)
         self._track.split_requested.connect(self.split_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.trim_reset.connect(self.trim_reset)
@@ -1437,7 +1461,7 @@ class TimelineWidget(QWidget):
         self._track.trim_end_ms = trim_end_ms
         if voiceover_segments is not None:
             self._track.voiceover_segments = voiceover_segments
-        if video_segments is not None:
+    if video_segments is not None:
             self._track.video_segments = video_segments
         self._time_current.setText(_fmt_precise(current_time))
         self._time_total.setText(_fmt_precise(duration))

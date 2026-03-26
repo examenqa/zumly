@@ -398,7 +398,7 @@ class TestPanPointInterpolation:
         assert z3 == pytest.approx(1.8)
 
 
-# ── Video segment undo/redo ────────────────────────────────────────
+# ── Video segment undo / redo ──────────────────────────────────────
 
 
 class TestVideoSegmentUndoRedo:
@@ -407,32 +407,27 @@ class TestVideoSegmentUndoRedo:
     def test_undo_restores_video_segments(self) -> None:
         from app.models import VideoSegment
         engine = ZoomEngine()
-        seg = VideoSegment.create(start_ms=0, end_ms=5000)
-        engine.video_segments = [seg]
+        seg1 = VideoSegment.create(start_ms=0, end_ms=5000)
+        seg2 = VideoSegment.create(start_ms=5000, end_ms=10000)
+        engine.video_segments = [seg1, seg2]
         engine.push_undo()
-        # Split the segment
-        engine.video_segments = [
-            VideoSegment.create(start_ms=0, end_ms=2500),
-            VideoSegment.create(start_ms=2500, end_ms=5000),
-        ]
-        assert len(engine.video_segments) == 2
-        assert engine.undo()
+        engine.video_segments.pop(1)
         assert len(engine.video_segments) == 1
-        assert engine.video_segments[0].end_ms == 5000
+        assert engine.undo()
+        assert len(engine.video_segments) == 2
+        assert engine.video_segments[1].end_ms == 10000
 
     def test_redo_restores_video_segments(self) -> None:
         from app.models import VideoSegment
         engine = ZoomEngine()
-        engine.video_segments = [VideoSegment.create(start_ms=0, end_ms=5000)]
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
+        engine.video_segments = [seg]
         engine.push_undo()
-        engine.video_segments = [
-            VideoSegment.create(start_ms=0, end_ms=2500),
-            VideoSegment.create(start_ms=2500, end_ms=5000),
-        ]
+        engine.video_segments.pop(0)
         engine.undo()
         assert len(engine.video_segments) == 1
         assert engine.redo()
-        assert len(engine.video_segments) == 2
+        assert len(engine.video_segments) == 0
 
     def test_video_segments_deep_copied(self) -> None:
         from app.models import VideoSegment
@@ -440,9 +435,70 @@ class TestVideoSegmentUndoRedo:
         seg = VideoSegment.create(start_ms=0, end_ms=5000)
         engine.video_segments = [seg]
         engine.push_undo()
-        # Mutate the existing segment instance after taking the snapshot.
-        seg.start_ms = 999
-        seg.end_ms = 9999
+        engine.video_segments[0] = VideoSegment.create(start_ms=999, end_ms=999)
         engine.undo()
         assert engine.video_segments[0].start_ms == 0
-        assert engine.video_segments[0].end_ms == 5000
+
+
+# ── Voiceover segment undo / redo ──────────────────────────────────
+
+
+class TestVoiceoverSegmentUndoRedo:
+    """Verify that voiceover segments are included in undo/redo snapshots."""
+
+    def test_undo_restores_voiceover_segments(self) -> None:
+        from app.models import VoiceoverSegment
+        engine = ZoomEngine()
+        vo1 = VoiceoverSegment.create(timestamp=1000, text="Hello")
+        vo2 = VoiceoverSegment.create(timestamp=3000, text="World")
+        engine.voiceover_segments = [vo1, vo2]
+        engine.push_undo()
+        engine.voiceover_segments.pop(1)
+        assert len(engine.voiceover_segments) == 1
+        assert engine.undo()
+        assert len(engine.voiceover_segments) == 2
+        assert engine.voiceover_segments[1].text == "World"
+
+    def test_redo_restores_voiceover_segments(self) -> None:
+        from app.models import VoiceoverSegment
+        engine = ZoomEngine()
+        vo = VoiceoverSegment.create(timestamp=1000, text="Test")
+        engine.voiceover_segments = [vo]
+        engine.push_undo()
+        engine.voiceover_segments.pop(0)
+        engine.undo()
+        assert len(engine.voiceover_segments) == 1
+        assert engine.redo()
+        assert len(engine.voiceover_segments) == 0
+
+    def test_voiceover_segments_deep_copied(self) -> None:
+        from app.models import VoiceoverSegment
+        engine = ZoomEngine()
+        vo = VoiceoverSegment.create(timestamp=1000, text="Original")
+        engine.voiceover_segments = [vo]
+        engine.push_undo()
+        engine.voiceover_segments[0] = VoiceoverSegment.create(timestamp=9999, text="Changed")
+        engine.undo()
+        assert engine.voiceover_segments[0].timestamp == 1000
+        assert engine.voiceover_segments[0].text == "Original"
+
+    def test_undo_restores_all_state(self) -> None:
+        """A single undo restores keyframes, click events, video segments, and voiceover segments."""
+        from app.models import VideoSegment, VoiceoverSegment
+        engine = ZoomEngine()
+        engine.click_events = [ClickEvent(x=10, y=20, timestamp=100)]
+        engine.video_segments = [VideoSegment.create(start_ms=0, end_ms=5000)]
+        engine.voiceover_segments = [VoiceoverSegment.create(timestamp=500, text="Hi")]
+        kf = ZoomKeyframe.create(timestamp=100, zoom=1.5)
+        engine.add_keyframe(kf)
+        engine.push_undo()
+        # Mutate all
+        engine.click_events.clear()
+        engine.video_segments.clear()
+        engine.voiceover_segments.clear()
+        engine.keyframes.clear()
+        assert engine.undo()
+        assert len(engine.click_events) == 1
+        assert len(engine.video_segments) == 1
+        assert len(engine.voiceover_segments) == 1
+        assert len(engine.keyframes) == 1

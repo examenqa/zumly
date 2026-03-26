@@ -32,8 +32,8 @@ from .models import (
     MousePosition,
     KeyEvent,
     ClickEvent,
-    RecordingSession,
     VideoSegment,
+    RecordingSession,
     DEFAULT_FPS,
     DEFAULT_MOUSE_INTERVAL,
 )
@@ -700,7 +700,7 @@ class MainWindow(QMainWindow):
         self._border_overlay = RecordingBorderOverlay()
         self._ai_worker = None   # AIWorker, created lazily
         self._voiceover_segments: list = []  # List[VoiceoverSegment]
-        self._video_segments: list = []  # List[VideoSegment]
+        self._video_segments: List[VideoSegment] = []  # timeline video segments
         self._vo_played_ids: set = set()  # track which voiceovers have played this playback
 
         self._recording = False
@@ -832,6 +832,7 @@ class MainWindow(QMainWindow):
         self._timeline.voiceover_clicked.connect(self._on_voiceover_clicked)
         self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
         self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
+        self._timeline.video_segment_deleted.connect(self._on_video_segment_deleted)
         self._timeline.split_requested.connect(self._split_at_time)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.trim_reset.connect(self._on_trim_reset)
@@ -1190,7 +1191,7 @@ class MainWindow(QMainWindow):
         self._playback_time = 0
         self._actual_fps_override = 0.0
 
-        # Voiceover / trim / project
+        # Voiceover / trim / project / video segments
         self._voiceover_segments = []
         self._video_segments = []
         # Keep zoom engine segments in sync with session segments
@@ -1319,6 +1320,8 @@ class MainWindow(QMainWindow):
             self._key_events = key_events
             self._click_events = click_events
             self._zoom_engine.click_events = self._click_events
+            self._zoom_engine.video_segments = self._video_segments
+            self._zoom_engine.voiceover_segments = self._voiceover_segments
             self._frame_timestamps = frame_timestamps
             self._actual_fps_override = actual_fps
 
@@ -1563,7 +1566,7 @@ class MainWindow(QMainWindow):
             self._trim_start_ms,
             self._trim_end_ms,
             self._voiceover_segments,
-            self._zoom_engine.video_segments,
+            self._video_segments,
         )
         # Keep debug overlay in sync with keyframes
         self._preview.set_debug_keyframes(self._zoom_engine.keyframes)
@@ -1904,6 +1907,7 @@ class MainWindow(QMainWindow):
         if self._zoom_engine.undo():
             self._click_events = self._zoom_engine.click_events
             self._video_segments = self._zoom_engine.video_segments
+            self._voiceover_segments = self._zoom_engine.voiceover_segments
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
@@ -1920,6 +1924,7 @@ class MainWindow(QMainWindow):
         if self._zoom_engine.redo():
             self._click_events = self._zoom_engine.click_events
             self._video_segments = self._zoom_engine.video_segments
+            self._voiceover_segments = self._zoom_engine.voiceover_segments
             self._zoom_engine.update(self._playback_time)
             self._preview.set_zoom(
                 self._zoom_engine.current_zoom,
@@ -1944,6 +1949,16 @@ class MainWindow(QMainWindow):
         self._zoom_engine.trim_start_ms = start_ms
         self._zoom_engine.trim_end_ms = end_ms
         self._mark_dirty()
+
+    def _on_trim_reset(self) -> None:
+        """Handle trim reset from the timeline (right-click → Reset trim)."""
+        self._zoom_engine.push_undo()
+        self._trim_start_ms = 0.0
+        self._trim_end_ms = 0.0
+        self._zoom_engine.trim_start_ms = 0.0
+        self._zoom_engine.trim_end_ms = 0.0
+        self._mark_dirty()
+        self._refresh_editor()
 
     # ── segment splitting ───────────────────────────────────────────
 
@@ -2645,7 +2660,6 @@ class MainWindow(QMainWindow):
                 self._trim_start_ms,
                 self._trim_end_ms,
                 self._voiceover_segments,
-                self._zoom_engine.video_segments,
             )
             # Play voiceover audio at the right time
             self._check_voiceover_playback(t)
@@ -2706,7 +2720,7 @@ class MainWindow(QMainWindow):
                     trim_end_ms=self._trim_end_ms,
                     encoder_id=self._editor.encoder_id,
                     voiceover_segments=self._voiceover_segments or None,
-                    video_segments=self._zoom_engine.video_segments or None,
+                    video_segments=self._video_segments or None,
                 )
             except Exception:
                 logger.exception("Failed to start export")
@@ -2934,6 +2948,107 @@ class MainWindow(QMainWindow):
             self._mark_dirty()
             self._refresh_editor()
 
+    def _on_video_segment_deleted(self, seg_id: str) -> None:
+        """Delete a video segment by id (ripple delete).
+
+        At least one segment must remain.  Zoom keyframes within the
+        deleted segment's half-open interval [start_ms, end_ms) are
+        removed.  Voiceover segments are removed if their time range
+        [timestamp, timestamp + duration_ms) overlaps the deleted
+        segment at all (partial overlap means the audio would be
+        clipped, so the entire voiceover is removed).  All timestamped
+        data after the deleted segment is retimed so the remaining
+        segments close the gap.
+        """
+        if len(self._video_segments) <= 1:
+            return
+        seg = next((s for s in self._video_segments if s.id == seg_id), None)
+        if seg is None:
+            return
+        self._zoom_engine.push_undo()
+
+        gap = seg.end_ms - seg.start_ms  # duration of the removed segment
+
+        # Remove zoom keyframes inside the deleted segment.
+        # Use a half-open interval [start_ms, end_ms) so that keyframes exactly
+        # at seg.end_ms are preserved and can belong to the following segment.
+        self._zoom_engine.keyframes = [
+            kf for kf in self._zoom_engine.keyframes
+            if not (seg.start_ms <= kf.timestamp < seg.end_ms)
+        ]
+        # Remove voiceover segments that overlap the deleted segment.
+        # A voiceover occupies [v.timestamp, v.timestamp + v.duration_ms).
+        # Any overlap with [seg.start_ms, seg.end_ms) means the audio would
+        # be partially clipped, so remove the entire voiceover.
+        self._voiceover_segments = [
+            v for v in self._voiceover_segments
+            if not (v.timestamp < seg.end_ms
+                    and v.timestamp + v.duration_ms > seg.start_ms)
+        ]
+        self._zoom_engine.voiceover_segments = self._voiceover_segments
+
+        # Remove the video segment itself
+        self._video_segments = [s for s in self._video_segments if s.id != seg_id]
+
+        # ── Ripple: shift everything after the deleted region back by `gap` ──
+        # Retime remaining video segments (segments are non-overlapping by design)
+        for s in self._video_segments:
+            if s.start_ms >= seg.end_ms:
+                s.start_ms -= gap
+                s.end_ms -= gap
+
+        # Retime zoom keyframes after the deleted region
+        for kf in self._zoom_engine.keyframes:
+            if kf.timestamp >= seg.end_ms:
+                kf.timestamp -= gap
+
+        # Retime voiceover segments after the deleted region
+        for v in self._voiceover_segments:
+            if v.timestamp >= seg.end_ms:
+                v.timestamp -= gap
+
+        # Retime click events after the deleted region
+        for ce in self._click_events:
+            if ce.timestamp >= seg.end_ms:
+                ce.timestamp -= gap
+
+        # Retime key events after the deleted region
+        if self._key_events:
+            for ke in self._key_events:
+                if ke.timestamp >= seg.end_ms:
+                    ke.timestamp -= gap
+
+        # Retime mouse track positions after the deleted region
+        for mp in self._mouse_track:
+            if mp.timestamp >= seg.end_ms:
+                mp.timestamp -= gap
+
+        # Retime frame timestamps after the deleted region
+        if self._frame_timestamps:
+            self._frame_timestamps = [
+                t - gap if t >= seg.end_ms else t
+                for t in self._frame_timestamps
+                if not (seg.start_ms <= t < seg.end_ms)
+            ]
+
+        # Adjust recording duration
+        self._rec_duration_ms -= gap
+
+        # Adjust trim points
+        if self._trim_start_ms >= seg.end_ms:
+            self._trim_start_ms -= gap
+        elif self._trim_start_ms > seg.start_ms:
+            self._trim_start_ms = seg.start_ms
+        if self._trim_end_ms > 0:
+            if self._trim_end_ms >= seg.end_ms:
+                self._trim_end_ms -= gap
+            elif self._trim_end_ms > seg.start_ms:
+                self._trim_end_ms = seg.start_ms
+
+        self._zoom_engine.video_segments = self._video_segments
+        self._mark_dirty()
+        self._refresh_editor()
+
     # ── lazy exporter ───────────────────────────────────────────────
 
     def _ensure_exporter(self):
@@ -3013,9 +3128,8 @@ class MainWindow(QMainWindow):
             trim_start_ms=self._trim_start_ms,
             trim_end_ms=self._trim_end_ms,
             voiceover_segments=list(self._voiceover_segments) if self._voiceover_segments else None,
-            video_segments=list(self._zoom_engine.video_segments) if self._zoom_engine.video_segments else None,
+            video_segments=list(self._video_segments) if self._video_segments else None,
         )
-        # Re-use existing path unless Save As or no path yet
         path = self._project_path if self._project_path and not save_as else ""
         if not path:
             default_name = f"followcursor-project{PROJ_EXT}"
@@ -3119,6 +3233,10 @@ class MainWindow(QMainWindow):
             self._key_events = session.key_events or []
             self._click_events = session.click_events or []
             self._zoom_engine.click_events = self._click_events
+            self._video_segments = list(session.video_segments) if session.video_segments else []
+            if not self._video_segments:
+                self._video_segments = [VideoSegment.create(start_ms=0.0, end_ms=session.duration)]
+            self._zoom_engine.video_segments = self._video_segments
             self._rec_duration_ms = session.duration
             self._zoom_engine.clear()
             for kf in session.keyframes:
@@ -3136,13 +3254,7 @@ class MainWindow(QMainWindow):
 
             # Restore voiceover segments
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []
-
-            # Restore video segments (or create a default spanning full duration)
-            if session.video_segments:
-                self._video_segments = list(session.video_segments)
-            else:
-                self._video_segments = [VideoSegment.create(start_ms=0.0, end_ms=session.duration)]
-            self._zoom_engine.video_segments = self._video_segments
+            self._zoom_engine.voiceover_segments = self._voiceover_segments
 
             # Restore background preset if saved
             loaded_bg = proj.get("bg_preset")

@@ -434,10 +434,8 @@ class VideoExporter(QObject):
         ``"h264_qsv"``, ``"h264_amf"``, ``"libx264"``).
         *voiceover_segments* — optional list of ``VoiceoverSegment``
         objects; each with an audio file to mux at a specific time.
-        *video_segments* — optional list of ``VideoSegment`` objects
-        representing contiguous recording-time segments (split points).
-        Currently plumbed through for future segment-aware export
-        (e.g. per-segment speed or deletion).
+        *video_segments* — optional list of ``VideoSegment`` objects;
+        when present, only frames within these time ranges are exported.
         """
         self._thread = threading.Thread(
             target=self._run,
@@ -863,6 +861,17 @@ class VideoExporter(QObject):
                 if eff_te < eff_ts:
                     eff_te = eff_ts
 
+                # Build a sorted list of (start, end) time ranges from video
+                # segments.  Only frames whose source timestamp falls inside
+                # one of these ranges will be exported (ripple delete).
+                _seg_ranges: list[tuple[float, float]] = []
+                _seg_starts: list[float] = []  # pre-extracted for bisect
+                if video_segments:
+                    _seg_ranges = sorted(
+                        (s.start_ms, s.end_ms) for s in video_segments
+                    )
+                    _seg_starts = [s for s, _ in _seg_ranges]
+
                 # Move decoder to the source frame active at trim start.
                 start_src_idx = max(0, bisect.bisect_right(source_timestamps, eff_ts) - 1)
                 start_src_idx = min(start_src_idx, len(source_timestamps) - 1)
@@ -882,6 +891,26 @@ class VideoExporter(QObject):
                 while True:
                     if t_ms > eff_te + 0.0001:
                         break
+
+                    # Skip frames outside any video segment (ripple delete).
+                    # Uses half-open intervals [start, end) for interior
+                    # segments; the last segment's end is inclusive to
+                    # avoid clipping the final frame.
+                    # Uses bisect for O(log n) membership check.
+                    if _seg_ranges:
+                        in_seg = False
+                        # Binary search: find the last segment whose start <= t_ms
+                        idx = bisect.bisect_right(_seg_starts, t_ms) - 1
+                        if idx >= 0:
+                            s, e = _seg_ranges[idx]
+                            # Last segment uses inclusive end [s, e]; others use [s, e)
+                            if idx == len(_seg_ranges) - 1:
+                                in_seg = (s <= t_ms <= e)
+                            else:
+                                in_seg = (s <= t_ms < e)
+                        if not in_seg:
+                            out_idx += 1
+                            continue
 
                     # Pick the source frame for this output timestamp
                     target_src_idx = max(0, bisect.bisect_right(source_timestamps, t_ms) - 1)
