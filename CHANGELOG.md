@@ -4,6 +4,33 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-03-25
+
+### Added
+
+- **Video segments** — new VideoSegment model with timeline selection, deletion (ripple delete), undo/redo, and export support
+- **Split at playhead** — split any timeline segment at the playhead position via context menu "Split here" or keyboard shortcut
+- **Per-segment playback speed** — set independent playback speed for each video segment from the editor panel
+- **Scroll-wheel zoom on timeline** — zoom in/out on the editor timeline with the mouse scroll wheel; coordinate mapping keeps the pointer position stable
+- **Untrim by dragging handles** — drag trim handles back outward to restore previously trimmed regions
+- **Hide trimmed regions** — trimmed areas are hidden from the timeline and playback is blocked outside the trim range
+- **Auto-rebase workflow** — GitHub Actions workflow automatically rebases all open PRs when main is updated; PRs labeled `no-rebase` are excluded
+- **Merge conflict resolution prompt** — `/resolve-conflicts` prompt to rebase conflicted PR branches onto main, resolve conflicts, run tests, and force-push
+- **PR artifact comments** — CI posts a comment with a link to the build artifact on each PR; previous comments are cleaned up automatically
+
+### Changed
+
+- **MSIX signing** — migrated from deprecated NuGet-based signing to `azure/artifact-signing-action` for Azure Trusted Signing
+- **Azure Trusted Signing labels** — renamed parameter labels from "(CI)" to "(local Azure signing)" for clarity
+- **PR artifact naming** — shortened commit SHA in artifact names and set retention days dynamically
+
+### Fixed
+
+- **Split position** — context menu "Split here" now splits at the playhead position instead of the mouse click position
+- **Voiceover deletion** — overlap check now uses `duration_ms` instead of timestamp-only filter to avoid deleting the wrong voiceover
+- **Duplicate zoom reset** — removed duplicate `video_segments` reset in `_reset_session()` that could cause data loss
+- **Segment retime logic** — simplified by removing dead overlap handling code for non-overlapping segments
+
 ## [0.6.0] — 2026-03-25
 
 ### Added
