@@ -1013,7 +1013,11 @@ class _TimelineTrack(QWidget):
             self._selected_segment_id = ""
             self._selected_vo_id = ""
             self._selected_video_seg_id = ""
-            ratio = max(0.0, min(1.0, mx / self.width()))
+            if self.duration > 0:
+                click_time_ms = self._x_to_ms(mx)
+                ratio = max(0.0, min(1.0, click_time_ms / self.duration))
+            else:
+                ratio = 0.0
             self.clicked.emit(ratio)
             self.update()
 
