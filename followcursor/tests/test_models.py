@@ -11,8 +11,8 @@ from app.models import (
     ClickEvent,
     ZoomKeyframe,
     RecordingSession,
-    VideoSegment,
     VoiceoverSegment,
+    VideoSegment,
     DEFAULT_FPS,
     DEFAULT_MOUSE_INTERVAL,
 )
@@ -352,30 +352,49 @@ class TestVideoSegment:
         assert seg.id
         uuid.UUID(seg.id)  # validates format
 
-    def test_create_fields(self) -> None:
+    def test_create_defaults(self) -> None:
         seg = VideoSegment.create(start_ms=1000, end_ms=3000)
         assert seg.start_ms == 1000
         assert seg.end_ms == 3000
+        assert seg.speed == 1.0
+
+    def test_create_custom_speed(self) -> None:
+        seg = VideoSegment.create(start_ms=0, end_ms=5000, speed=2.0)
+        assert seg.speed == 2.0
 
     def test_roundtrip(self) -> None:
-        seg = VideoSegment.create(start_ms=500, end_ms=2500)
+        seg = VideoSegment.create(start_ms=100, end_ms=4000, speed=0.5)
         d = seg.to_dict()
         seg2 = VideoSegment.from_dict(d)
         assert seg2.id == seg.id
         assert seg2.start_ms == seg.start_ms
         assert seg2.end_ms == seg.end_ms
+        assert seg2.speed == seg.speed
 
-    def test_dict_keys(self) -> None:
-        seg = VideoSegment.create(start_ms=0, end_ms=1000)
+    def test_dict_omits_default_speed(self) -> None:
+        seg = VideoSegment.create(start_ms=0, end_ms=5000)
         d = seg.to_dict()
-        assert set(d.keys()) == {"id", "startMs", "endMs"}
+        assert "speed" not in d
+
+    def test_dict_includes_nondefault_speed(self) -> None:
+        seg = VideoSegment.create(start_ms=0, end_ms=5000, speed=1.5)
+        d = seg.to_dict()
+        assert d["speed"] == 1.5
+
+    def test_from_dict_backward_compat(self) -> None:
+        d = {"id": "abc", "startMs": 0, "endMs": 5000}
+        seg = VideoSegment.from_dict(d)
+        assert seg.speed == 1.0
+
+
+# ── RecordingSession + VideoSegments ─────────────────────────────────
 
 
 class TestRecordingSessionVideoSegments:
     def test_json_includes_video_segments(self) -> None:
         seg = VideoSegment.create(start_ms=0, end_ms=5000)
         session = RecordingSession(
-            id="vs", start_time=0, duration=5000,
+            id="vs1", start_time=0, duration=5000,
             mouse_track=[MousePosition(0, 0, 0)],
             keyframes=[],
             video_segments=[seg],
@@ -387,10 +406,10 @@ class TestRecordingSessionVideoSegments:
         assert d["videoSegments"][0]["endMs"] == 5000
 
     def test_json_roundtrip_video_segments(self) -> None:
-        seg1 = VideoSegment.create(start_ms=0, end_ms=3000)
-        seg2 = VideoSegment.create(start_ms=5000, end_ms=8000)
+        seg1 = VideoSegment.create(start_ms=0, end_ms=2500)
+        seg2 = VideoSegment.create(start_ms=2500, end_ms=5000, speed=2.0)
         session = RecordingSession(
-            id="vs2", start_time=0, duration=8000,
+            id="vs2", start_time=0, duration=5000,
             mouse_track=[MousePosition(0, 0, 0)],
             keyframes=[],
             video_segments=[seg1, seg2],
@@ -398,23 +417,23 @@ class TestRecordingSessionVideoSegments:
         s2 = RecordingSession.from_json(session.to_json())
         assert s2.video_segments is not None
         assert len(s2.video_segments) == 2
-        assert s2.video_segments[0].start_ms == 0
-        assert s2.video_segments[0].end_ms == 3000
-        assert s2.video_segments[1].start_ms == 5000
+        assert s2.video_segments[0].end_ms == 2500
+        assert s2.video_segments[1].start_ms == 2500
+        assert s2.video_segments[1].speed == 2.0
 
     def test_json_omits_video_segments_when_empty(self) -> None:
         session = RecordingSession(
-            id="bare3", start_time=0, duration=100,
+            id="vs3", start_time=0, duration=100,
             mouse_track=[MousePosition(0, 0, 0)],
             keyframes=[],
         )
         d = json.loads(session.to_json())
         assert "videoSegments" not in d
 
-    def test_json_backward_compat_no_video_segments(self) -> None:
+    def test_backward_compat_no_video_segments(self) -> None:
         """Old projects without videoSegments should load fine."""
         session = RecordingSession(
-            id="old", start_time=0, duration=1000,
+            id="old", start_time=0, duration=100,
             mouse_track=[MousePosition(0, 0, 0)],
             keyframes=[],
         )

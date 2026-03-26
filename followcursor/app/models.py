@@ -154,6 +154,54 @@ class ZoomKeyframe:
 
 
 @dataclass
+class VideoSegment:
+    """A contiguous section of the recording timeline.
+
+    A recording starts as one segment spanning the full duration.
+    Splitting at the playhead subdivides it into two adjacent segments.
+    Each segment can later be independently deleted or speed-adjusted.
+    """
+
+    id: str
+    start_ms: float  # inclusive start time (ms since recording start)
+    end_ms: float    # exclusive end time (ms)
+    speed: float = 1.0  # playback speed multiplier (1.0 = normal)
+
+    @staticmethod
+    def create(
+        start_ms: float,
+        end_ms: float,
+        speed: float = 1.0,
+    ) -> "VideoSegment":
+        """Factory that auto-generates a UUID."""
+        return VideoSegment(
+            id=str(uuid.uuid4()),
+            start_ms=start_ms,
+            end_ms=end_ms,
+            speed=speed,
+        )
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "id": self.id,
+            "startMs": self.start_ms,
+            "endMs": self.end_ms,
+        }
+        if self.speed != 1.0:
+            d["speed"] = self.speed
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "VideoSegment":
+        return VideoSegment(
+            id=d["id"],
+            start_ms=d["startMs"],
+            end_ms=d["endMs"],
+            speed=d.get("speed", 1.0),
+        )
+
+
+@dataclass
 class RecordingSession:
     """Top-level container for everything captured in one recording.
 
@@ -197,7 +245,7 @@ class RecordingSession:
         if self.voiceover_segments:
             data["voiceoverSegments"] = [v.to_dict() for v in self.voiceover_segments]
         if self.video_segments:
-            data["videoSegments"] = [s.to_dict() for s in self.video_segments]
+            data["videoSegments"] = [vs.to_dict() for vs in self.video_segments]
         return json.dumps(data, indent=2)
 
     @staticmethod
@@ -216,7 +264,7 @@ class RecordingSession:
             voiceover_segments = [VoiceoverSegment.from_dict(v) for v in d["voiceoverSegments"]]
         video_segments = None
         if "videoSegments" in d:
-            video_segments = [VideoSegment.from_dict(s) for s in d["videoSegments"]]
+            video_segments = [VideoSegment.from_dict(vs) for vs in d["videoSegments"]]
         return RecordingSession(
             id=d["id"],
             start_time=d["startTime"],
@@ -230,37 +278,6 @@ class RecordingSession:
             trim_end_ms=d.get("trimEndMs", 0.0),
             voiceover_segments=voiceover_segments,
             video_segments=video_segments,
-        )
-
-
-@dataclass
-class VideoSegment:
-    """A contiguous section of the recording timeline.
-
-    Created when a recording is split — each segment represents a time
-    range in the original recording.  Segments can be deleted to
-    remove portions from the exported output (ripple delete: remaining
-    segments close the gap).
-    """
-
-    id: str
-    start_ms: float  # start time in the original recording
-    end_ms: float    # end time in the original recording
-
-    @staticmethod
-    def create(start_ms: float, end_ms: float) -> "VideoSegment":
-        """Factory that auto-generates a UUID."""
-        return VideoSegment(id=str(uuid.uuid4()), start_ms=start_ms, end_ms=end_ms)
-
-    def to_dict(self) -> dict:
-        return {"id": self.id, "startMs": self.start_ms, "endMs": self.end_ms}
-
-    @staticmethod
-    def from_dict(d: dict) -> "VideoSegment":
-        return VideoSegment(
-            id=d["id"],
-            start_ms=d["startMs"],
-            end_ms=d["endMs"],
         )
 
 

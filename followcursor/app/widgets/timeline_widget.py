@@ -53,6 +53,7 @@ class _TimelineTrack(QWidget):
     voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     video_segment_deleted = Signal(str)  # video segment id — delete
+    split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()                # reset both trim handles to full range
     drag_finished = Signal()             # emitted when any drag completes
@@ -324,11 +325,16 @@ class _TimelineTrack(QWidget):
                 del_act.triggered.connect(lambda: self._delete_selected_video_segment())
                 menu.exec(self.mapToGlobal(pos))
             return
-        # Empty space — offer to add a zoom section or voiceover
+        # Empty space — offer to add a zoom section, voiceover, or split
         if self._eff_dur > 0 and self.width() > 0:
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
             menu = QMenu(self)
             menu.setStyleSheet(self._MENU_STYLE)
+            act_split = menu.addAction("✂  Split here")
+            act_split.triggered.connect(
+                lambda: self.split_requested.emit(self.current_time)
+            )
+            menu.addSeparator()
             act_zoom = menu.addAction("🔍  Add Zoom here")
             act_zoom.triggered.connect(
                 lambda: self.add_zoom_requested.emit(time_ms)
@@ -1255,6 +1261,10 @@ class _TimelineTrack(QWidget):
             self.update()
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_S and not event.modifiers():
+            if self.duration > 0:
+                self.split_requested.emit(self.current_time)
+                return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             # Video segment deletion takes priority when selected
             if self._selected_video_seg_id:
@@ -1294,6 +1304,7 @@ class TimelineWidget(QWidget):
     voiceover_deleted = Signal(str)       # voiceover segment id — delete
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     video_segment_deleted = Signal(str)   # video segment id — delete
+    split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()               # reset both trim handles to full range
     drag_finished = Signal()            # emitted when any drag completes
@@ -1367,6 +1378,7 @@ class TimelineWidget(QWidget):
         self._track.voiceover_deleted.connect(self.voiceover_deleted)
         self._track.voiceover_moved.connect(self.voiceover_moved)
         self._track.video_segment_deleted.connect(self.video_segment_deleted)
+        self._track.split_requested.connect(self.split_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.trim_reset.connect(self.trim_reset)
         self._track.drag_finished.connect(self.drag_finished)
@@ -1382,7 +1394,7 @@ class TimelineWidget(QWidget):
 
         # ── Bottom hints ────────────────────────────────────────
         hints_row = QHBoxLayout()
-        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim · Scroll to zoom")
+        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim · S to split")
         hint_kf.setObjectName("Muted")
         hints_row.addWidget(hint_kf)
         hints_row.addStretch()

@@ -833,6 +833,7 @@ class MainWindow(QMainWindow):
         self._timeline.voiceover_deleted.connect(self._on_voiceover_deleted)
         self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
         self._timeline.video_segment_deleted.connect(self._on_video_segment_deleted)
+        self._timeline.split_requested.connect(self._split_at_time)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.trim_reset.connect(self._on_trim_reset)
         self._timeline.drag_finished.connect(self._on_drag_finished)
@@ -1193,6 +1194,8 @@ class MainWindow(QMainWindow):
         # Voiceover / trim / project / video segments
         self._voiceover_segments = []
         self._video_segments = []
+        # Keep zoom engine segments in sync with session segments
+        self._zoom_engine.video_segments = []
         self._vo_played_ids = set()
         self._trim_start_ms = 0.0
         self._trim_end_ms = 0.0
@@ -1321,6 +1324,10 @@ class MainWindow(QMainWindow):
             self._zoom_engine.voiceover_segments = self._voiceover_segments
             self._frame_timestamps = frame_timestamps
             self._actual_fps_override = actual_fps
+
+            # Initialize a single video segment spanning the full recording
+            self._video_segments = [VideoSegment.create(start_ms=0.0, end_ms=self._rec_duration_ms)]
+            self._zoom_engine.video_segments = self._video_segments
 
             self._processing_overlay.hide_overlay()
             self._status_text.setText("Ready")
@@ -1950,6 +1957,55 @@ class MainWindow(QMainWindow):
         self._trim_end_ms = 0.0
         self._zoom_engine.trim_start_ms = 0.0
         self._zoom_engine.trim_end_ms = 0.0
+        self._mark_dirty()
+        self._refresh_editor()
+
+    # ── segment splitting ───────────────────────────────────────────
+
+    def _split_at_time(self, time_ms: float) -> None:
+        """Split the recording at *time_ms*, creating two adjacent segments.
+
+        The split is rejected when *time_ms* is within 500 ms of an
+        existing segment boundary or a trim handle.
+        """
+        MIN_GAP_MS = 500.0
+        segments = self._zoom_engine.video_segments
+
+        # Effective trim bounds
+        eff_start = self._trim_start_ms if self._trim_start_ms > 0 else 0.0
+        eff_end = self._trim_end_ms if self._trim_end_ms > 0 else self._rec_duration_ms
+
+        # Reject if too close to a trim handle
+        if abs(time_ms - eff_start) < MIN_GAP_MS or abs(time_ms - eff_end) < MIN_GAP_MS:
+            return
+
+        # Reject if too close to any existing segment boundary
+        for seg in segments:
+            if abs(time_ms - seg.start_ms) < MIN_GAP_MS:
+                return
+            if abs(time_ms - seg.end_ms) < MIN_GAP_MS:
+                return
+
+        # Find the segment that contains time_ms
+        target = None
+        for seg in segments:
+            if seg.start_ms < time_ms < seg.end_ms:
+                target = seg
+                break
+        if target is None:
+            return
+
+        # Push undo before mutation
+        self._zoom_engine.push_undo()
+
+        # Create two new segments replacing the target
+        seg_left = VideoSegment.create(start_ms=target.start_ms, end_ms=time_ms, speed=target.speed)
+        seg_right = VideoSegment.create(start_ms=time_ms, end_ms=target.end_ms, speed=target.speed)
+
+        idx = segments.index(target)
+        segments[idx:idx + 1] = [seg_left, seg_right]
+
+        self._video_segments = segments
         self._mark_dirty()
         self._refresh_editor()
 
@@ -3178,6 +3234,8 @@ class MainWindow(QMainWindow):
             self._click_events = session.click_events or []
             self._zoom_engine.click_events = self._click_events
             self._video_segments = list(session.video_segments) if session.video_segments else []
+            if not self._video_segments:
+                self._video_segments = [VideoSegment.create(start_ms=0.0, end_ms=session.duration)]
             self._zoom_engine.video_segments = self._video_segments
             self._rec_duration_ms = session.duration
             self._zoom_engine.clear()
