@@ -2835,15 +2835,18 @@ class MainWindow(QMainWindow):
         if seg is None:
             return
         self._zoom_engine.push_undo()
-        # Remove zoom keyframes inside the deleted segment
+        # Remove zoom keyframes inside the deleted segment.
+        # Use a half-open interval [start_ms, end_ms) so that keyframes exactly
+        # at seg.end_ms are preserved and can belong to the following segment.
         self._zoom_engine.keyframes = [
             kf for kf in self._zoom_engine.keyframes
-            if not (seg.start_ms <= kf.timestamp <= seg.end_ms)
+            if not (seg.start_ms <= kf.timestamp < seg.end_ms)
         ]
-        # Remove voiceover segments inside the deleted segment
+        # Remove voiceover segments inside the deleted segment, using the same
+        # half-open interval convention as for zoom keyframes.
         self._voiceover_segments = [
             v for v in self._voiceover_segments
-            if not (seg.start_ms <= v.timestamp <= seg.end_ms)
+            if not (seg.start_ms <= v.timestamp < seg.end_ms)
         ]
         # Remove the video segment
         self._video_segments = [s for s in self._video_segments if s.id != seg_id]
