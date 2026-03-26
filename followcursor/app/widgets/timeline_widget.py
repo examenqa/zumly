@@ -61,6 +61,7 @@ class _TimelineTrack(QWidget):
     EDGE_GRAB_PX = 6  # pixel tolerance for grabbing a segment edge
     CLICK_HIT_PX = 8  # pixel tolerance for clicking on a click marker
     TRIM_GRAB_PX = 8  # pixel tolerance for grabbing a trim handle
+    TRIM_SNAP_PX = 8  # pixel threshold for snapping trim handle to playhead
     MIN_VIEW_SCALE = 1.0  # 1.0 = fit-all (minimum zoom level)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -125,6 +126,8 @@ class _TimelineTrack(QWidget):
         self._press_pos: QPointF | None = None
         self._drag_actually_moved: bool = False
         self._pending_select_id: str = ""       # segment to select on release if no drag
+        # Trim-handle snap-to-playhead state
+        self._trim_snapped: bool = False
 
     # ── trim-aware coordinate helpers ─────────────────────────────────
 
@@ -400,10 +403,11 @@ class _TimelineTrack(QWidget):
 
         # playhead
         px = self._ms_to_x(self.current_time, w)
-        painter.setPen(QPen(QColor("#ffffff"), 2))
+        playhead_color = QColor("#facc15") if self._trim_snapped else QColor("#ffffff")
+        painter.setPen(QPen(playhead_color, 2))
         painter.drawLine(int(px), 0, int(px), h)
         # playhead handle
-        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.setBrush(QBrush(playhead_color))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(px, 0), 5, 5)
 
@@ -901,11 +905,14 @@ class _TimelineTrack(QWidget):
         # Handle bars — always at the edges of the visible viewport
         handle_w = 4
         handle_color = QColor("#facc15")  # yellow accent
+        snap_color = QColor("#ffffff")    # white highlight when snapped to playhead
+        snapped_start = self._trim_snapped and self._drag_mode == "trim_start"
+        snapped_end = self._trim_snapped and self._drag_mode == "trim_end"
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(handle_color))
 
         # Left (start) trim handle — always at x=0
         sx = 0
+        painter.setBrush(QBrush(snap_color if snapped_start else handle_color))
         painter.drawRoundedRect(QRectF(sx, 0, handle_w, h), 2, 2)
         painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
         mid_y = h / 2
@@ -915,7 +922,7 @@ class _TimelineTrack(QWidget):
 
         # Right (end) trim handle — always at x=w
         ex = w
-        painter.setBrush(QBrush(handle_color))
+        painter.setBrush(QBrush(snap_color if snapped_end else handle_color))
         painter.drawRoundedRect(QRectF(ex - handle_w, 0, handle_w, h), 2, 2)
         painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
         painter.drawLine(int(ex) - 3, int(mid_y) - 6, int(ex) - 3, int(mid_y) + 6)
@@ -1087,13 +1094,29 @@ class _TimelineTrack(QWidget):
         my = event.position().y()
 
         if self._dragging and self.duration > 0:
+            # Snap-to-playhead helper (only for trim handle drags): check
+            # whether mx is close enough to the playhead and Alt is not held.
+            snap_active = False
+            if self._drag_mode in ("trim_start", "trim_end"):
+                alt_held = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+                playhead_px = (self.current_time / self.duration) * self.width()
+                snap_active = (
+                    not alt_held
+                    and abs(mx - playhead_px) <= self.TRIM_SNAP_PX
+                )
+
             if self._drag_mode == "trim_start":
                 if self.width() <= 0:
                     return
-                # Relative drag: map pixel delta to time delta using full duration
-                delta_px = mx - self._drag_trim_start_x
-                delta_ms = (delta_px / self.width()) * self.duration
-                new_time = self._drag_trim_initial_val + delta_ms
+                if snap_active:
+                    new_time = self.current_time
+                    self._trim_snapped = True
+                else:
+                    # Relative drag: map pixel delta to time delta using full duration
+                    delta_px = mx - self._drag_trim_start_x
+                    delta_ms = (delta_px / self.width()) * self.duration
+                    new_time = self._drag_trim_initial_val + delta_ms
+                    self._trim_snapped = False
                 trim_e = self.trim_end_ms if self.trim_end_ms > 0 else self.duration
                 new_time = min(new_time, trim_e - 500)  # keep at least 500ms
                 self.trim_start_ms = max(0.0, new_time)
@@ -1103,9 +1126,14 @@ class _TimelineTrack(QWidget):
             elif self._drag_mode == "trim_end":
                 if self.width() <= 0:
                     return
-                delta_px = mx - self._drag_trim_start_x
-                delta_ms = (delta_px / self.width()) * self.duration
-                new_time = self._drag_trim_initial_val + delta_ms
+                if snap_active:
+                    new_time = self.current_time
+                    self._trim_snapped = True
+                else:
+                    delta_px = mx - self._drag_trim_start_x
+                    delta_ms = (delta_px / self.width()) * self.duration
+                    new_time = self._drag_trim_initial_val + delta_ms
+                    self._trim_snapped = False
                 new_time = max(new_time, self.trim_start_ms + 500)
                 self.trim_end_ms = min(self.duration, new_time)
                 self.trim_changed.emit(self.trim_start_ms, self.trim_end_ms)
@@ -1208,6 +1236,7 @@ class _TimelineTrack(QWidget):
             self._drag_kf_id = None
             self._drag_mode = ""
             self._drag_body_ids = []
+            self._trim_snapped = False
             # If user clicked a segment body without dragging, select it
             # so Delete key can remove it.
             if was_body_drag and not self._drag_actually_moved and self._pending_select_id:
