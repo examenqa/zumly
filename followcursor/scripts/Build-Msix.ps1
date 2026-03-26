@@ -205,10 +205,13 @@ if (-not $AzureEndpoint -or -not $AzureCodeSigningAccountName -or -not $AzureCer
 Write-Host "Signing with Azure Trusted Signing..." -ForegroundColor Cyan
 
 if ($DlibPath) {
-    if (-not (Test-Path $DlibPath)) {
-        Write-Error "Specified DLib not found: $DlibPath"
+    if (-not (Test-Path -Path $DlibPath -PathType Leaf)) {
+        Write-Error "Specified DLib file not found (or is not a file): $DlibPath"
     }
     $dlibFile = Get-Item $DlibPath
+    if ($dlibFile.Name -ne "Azure.CodeSigning.Dlib.dll") {
+        Write-Error "Invalid DLib file name '$($dlibFile.Name)'. Expected 'Azure.CodeSigning.Dlib.dll'."
+    }
 } else {
     # Auto-detect from NuGet package cache
     $searchPaths = @(
