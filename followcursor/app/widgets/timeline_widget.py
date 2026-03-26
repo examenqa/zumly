@@ -295,7 +295,7 @@ class _TimelineTrack(QWidget):
             menu.setStyleSheet(self._MENU_STYLE)
             act_split = menu.addAction("✂  Split here")
             act_split.triggered.connect(
-                lambda: self.split_requested.emit(time_ms)
+                lambda: self.split_requested.emit(self.current_time)
             )
             menu.addSeparator()
             act_zoom = menu.addAction("🔍  Add Zoom here")
