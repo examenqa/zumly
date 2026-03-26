@@ -865,10 +865,12 @@ class VideoExporter(QObject):
                 # segments.  Only frames whose source timestamp falls inside
                 # one of these ranges will be exported (ripple delete).
                 _seg_ranges: list[tuple[float, float]] = []
+                _seg_starts: list[float] = []  # pre-extracted for bisect
                 if video_segments:
                     _seg_ranges = sorted(
                         (s.start_ms, s.end_ms) for s in video_segments
                     )
+                    _seg_starts = [s for s, _ in _seg_ranges]
 
                 # Move decoder to the source frame active at trim start.
                 start_src_idx = max(0, bisect.bisect_right(source_timestamps, eff_ts) - 1)
@@ -892,25 +894,18 @@ class VideoExporter(QObject):
                     # Uses half-open intervals [start, end) for interior
                     # segments; the last segment's end is inclusive to
                     # avoid clipping the final frame.
+                    # Uses bisect for O(log n) membership check.
                     if _seg_ranges:
-                        # Implement the documented semantics:
-                        # - All interior segments use [start, end)
-                        # - The final segment uses [start, end]
-                        if len(_seg_ranges) == 1:
-                            s, e = _seg_ranges[0]
-                            in_seg = (s <= t_ms <= e)
-                        else:
-                            in_seg = False
-                            # Check the final segment with inclusive end.
-                            last_s, last_e = _seg_ranges[-1]
-                            if last_s <= t_ms <= last_e:
-                                in_seg = True
+                        in_seg = False
+                        # Binary search: find the last segment whose start <= t_ms
+                        idx = bisect.bisect_right(_seg_starts, t_ms) - 1
+                        if idx >= 0:
+                            s, e = _seg_ranges[idx]
+                            # Last segment uses inclusive end [s, e]; others use [s, e)
+                            if idx == len(_seg_ranges) - 1:
+                                in_seg = (s <= t_ms <= e)
                             else:
-                                # Check all interior segments as half-open.
-                                for s, e in _seg_ranges[:-1]:
-                                    if s <= t_ms < e:
-                                        in_seg = True
-                                        break
+                                in_seg = (s <= t_ms < e)
                         if not in_seg:
                             out_idx += 1
                             continue

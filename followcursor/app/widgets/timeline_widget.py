@@ -268,9 +268,9 @@ class _TimelineTrack(QWidget):
         vs_id = self._video_seg_hit_test(mx, my)
         if vs_id:
             # Selecting a video segment should clear all other selection state
-            self._selected_segment_id = None
+            self._selected_segment_id = ""
             self._selected_click_idx = -1
-            self._selected_vo_id = None
+            self._selected_vo_id = ""
             self._selected_video_seg_id = vs_id
             self.update()
             # Only show delete if more than 1 segment remains
@@ -792,8 +792,8 @@ class _TimelineTrack(QWidget):
         painter.drawText(4, top + h - 3, "Clips")
 
         for seg in self.video_segments:
-            sx = (seg.start_ms / self.duration) * w
-            ex = (seg.end_ms / self.duration) * w
+            sx = self._ms_to_x(seg.start_ms)
+            ex = self._ms_to_x(seg.end_ms)
             seg_w = max(ex - sx, 4)
             rect = QRectF(sx, top, seg_w, h)
 
