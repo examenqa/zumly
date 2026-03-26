@@ -31,13 +31,13 @@
     Password for the local .pfx certificate (optional).
 
 .PARAMETER AzureEndpoint
-    Azure Trusted Signing endpoint URL (CI).
+    Azure Trusted Signing endpoint URL (local Azure signing).
 
 .PARAMETER AzureCodeSigningAccountName
-    Azure Trusted Signing account name (CI).
+    Azure Trusted Signing account name (local Azure signing).
 
 .PARAMETER AzureCertificateProfileName
-    Azure Trusted Signing certificate profile name (CI).
+    Azure Trusted Signing certificate profile name (local Azure signing).
 
 .PARAMETER DlibPath
     Path to Azure.CodeSigning.Dlib.dll.  When omitted, the script
@@ -52,7 +52,7 @@
     .\Build-Msix.ps1 -Version "0.5.0" -LocalPfx ".\cert.pfx" -PfxPassword "secret" -Publisher "CN=MyName"
 
 .EXAMPLE
-    # Sign with Azure Trusted Signing (CI)
+    # Sign with Azure Trusted Signing (local)
     .\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." -AzureEndpoint "https://eus.codesigning.azure.net/" -AzureCodeSigningAccountName "myacct" -AzureCertificateProfileName "myprofile"
 #>
 

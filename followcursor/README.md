@@ -123,7 +123,7 @@ PyInstaller output, then run `Build-Msix.ps1` to package and optionally sign it:
 # Sign with a local PFX certificate
 .\scripts\Build-Msix.ps1 -Version "0.5.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
 
-# Sign with Azure Trusted Signing (CI)
+# Sign with Azure Trusted Signing (local)
 .\scripts\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." `
   -AzureEndpoint "https://eus.codesigning.azure.net/" `
   -AzureCodeSigningAccountName "myacct" `
