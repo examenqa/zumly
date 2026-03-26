@@ -123,11 +123,18 @@ PyInstaller output, then run `Build-Msix.ps1` to package and optionally sign it:
 # Sign with a local PFX certificate
 .\scripts\Build-Msix.ps1 -Version "0.5.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
 
-# Sign with Azure Trusted Signing (CI)
+# Sign with Azure Trusted Signing (local)
 .\scripts\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." `
   -AzureEndpoint "https://eus.codesigning.azure.net/" `
   -AzureCodeSigningAccountName "myacct" `
   -AzureCertificateProfileName "myprofile"
+
+# Sign with Azure Trusted Signing using a custom DLib path
+.\scripts\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." `
+  -AzureEndpoint "https://eus.codesigning.azure.net/" `
+  -AzureCodeSigningAccountName "myacct" `
+  -AzureCertificateProfileName "myprofile" `
+  -DlibPath "C:\signing\Azure.CodeSigning.Dlib.dll"
 ```
 
 Requires the Windows SDK (`MakeAppx.exe`, `SignTool.exe`).
@@ -142,7 +149,7 @@ A GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push/PR 
 4. Runs the pytest test suite
 5. Builds with PyInstaller
 6. Uploads the versioned build artifact (retained 30 days)
-7. Creates a GitHub Release when a version tag (`v*`) is pushed
+7. On tag pushes (`v*`): builds an unsigned MSIX, signs it with `azure/artifact-signing-action`, and creates a GitHub Release
 
 You can also trigger a build manually from the Actions tab.
 

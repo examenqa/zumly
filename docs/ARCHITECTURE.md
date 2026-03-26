@@ -198,7 +198,7 @@ Since the zoom engine already interpolates between consecutive keyframes, no eng
 
 ### Undo / Redo
 
-`ZoomEngine` maintains snapshot-based undo/redo stacks (max depth 50). Each snapshot captures both the zoom keyframe list and the click event list so that click deletions are fully undoable. Before any mutation (keyframe edit or click deletion), the caller invokes `push_undo()` which stores a `copy.deepcopy()` of both lists. `undo()` swaps the current state with the top of the undo stack (pushing the current state onto redo), and `redo()` does the reverse.
+`ZoomEngine` maintains snapshot-based undo/redo stacks (max depth 50). Each snapshot captures the zoom keyframe list, the click event list, and trim handle positions (`trim_start_ms`, `trim_end_ms`) so that all editing operations — including trim changes — are fully undoable. Before any mutation (keyframe edit, click deletion, or trim change), the caller invokes `push_undo()` which stores a `copy.deepcopy()` of both lists plus the trim values. `undo()` swaps the current state with the top of the undo stack (pushing the current state onto redo), and `redo()` does the reverse.
 
 Drag operations use a debounce flag (`_drag_undo_pushed`) so that a continuous drag only creates a single undo snapshot. The flag resets when the mouse is released (`drag_finished` signal).
 

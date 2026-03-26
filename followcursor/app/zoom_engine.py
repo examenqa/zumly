@@ -5,8 +5,9 @@ computes the current ``(zoom, pan_x, pan_y)`` at any point in time
 using quintic ease-out interpolation.  It also maintains an undo/redo
 stack (deep-copy snapshots, max 50 entries).
 
-Snapshots capture both zoom keyframes and click events so that
-undo/redo covers click deletions as well as keyframe edits.
+Snapshots capture zoom keyframes, click events, and trim state
+(trim_start_ms, trim_end_ms) so that undo/redo covers keyframe
+edits, click deletions, and trim handle changes.
 """
 
 import copy
@@ -175,11 +176,13 @@ class ZoomEngine:
         self.keyframes = [kf for kf in self.keyframes if kf.id != kf_id]
 
     def clear(self) -> None:
-        """Remove all keyframes and reset zoom/pan to defaults."""
+        """Remove all keyframes and reset zoom/pan/trim to defaults."""
         self.keyframes.clear()
         self.current_zoom = 1.0
         self.current_pan_x = 0.5
         self.current_pan_y = 0.5
+        self.trim_start_ms = 0.0
+        self.trim_end_ms = 0.0
 
     def compute_at(self, time_ms: float) -> Tuple[float, float, float]:
         """Returns (zoom, pan_x, pan_y) at given time."""

@@ -834,6 +834,7 @@ class MainWindow(QMainWindow):
         self._timeline.voiceover_moved.connect(self._on_voiceover_moved)
         self._timeline.split_requested.connect(self._split_at_time)
         self._timeline.trim_changed.connect(self._on_trim_changed)
+        self._timeline.trim_reset.connect(self._on_trim_reset)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
 
@@ -1934,9 +1935,14 @@ class MainWindow(QMainWindow):
 
     def _on_trim_changed(self, start_ms: float, end_ms: float) -> None:
         """Handle trim handle changes from the timeline."""
+        # Debounced undo push — one snapshot per drag operation
+        if not self._drag_undo_pushed:
+            self._zoom_engine.push_undo()
+            self._drag_undo_pushed = True
         self._trim_start_ms = start_ms
         self._trim_end_ms = end_ms
-        self._preview.set_playback_end(end_ms)
+        self._zoom_engine.trim_start_ms = start_ms
+        self._zoom_engine.trim_end_ms = end_ms
         self._mark_dirty()
 
     # ── segment splitting ───────────────────────────────────────────
@@ -3125,7 +3131,8 @@ class MainWindow(QMainWindow):
             self._frame_timestamps = session.frame_timestamps or []
             self._trim_start_ms = session.trim_start_ms
             self._trim_end_ms = session.trim_end_ms
-            self._preview.set_playback_end(session.trim_end_ms)
+            self._zoom_engine.trim_start_ms = session.trim_start_ms
+            self._zoom_engine.trim_end_ms = session.trim_end_ms
 
             # Restore voiceover segments
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []

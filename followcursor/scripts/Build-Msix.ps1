@@ -7,7 +7,9 @@
     2. Patches AppxManifest.xml with the correct version and publisher.
     3. Copies PyInstaller dist + manifest + assets into a staging folder.
     4. Runs MakeAppx.exe to create the .msix.
-    5. Signs the .msix via Azure Trusted Signing (CI) or a local PFX certificate.
+    5. Signs the .msix with a local PFX certificate or Azure Trusted
+       Signing DLib.  In CI the script is invoked with -SkipSign and
+       signing is handled by azure/artifact-signing-action.
 
 .PARAMETER Version
     Semantic version (e.g. "0.5.0"). A ".0" build number is appended
@@ -29,13 +31,17 @@
     Password for the local .pfx certificate (optional).
 
 .PARAMETER AzureEndpoint
-    Azure Trusted Signing endpoint URL (CI).
+    Azure Trusted Signing endpoint URL (local Azure signing).
 
 .PARAMETER AzureCodeSigningAccountName
-    Azure Trusted Signing account name (CI).
+    Azure Trusted Signing account name (local Azure signing).
 
 .PARAMETER AzureCertificateProfileName
-    Azure Trusted Signing certificate profile name (CI).
+    Azure Trusted Signing certificate profile name (local Azure signing).
+
+.PARAMETER DlibPath
+    Path to Azure.CodeSigning.Dlib.dll.  When omitted, the script
+    searches the default NuGet package cache automatically.
 
 .EXAMPLE
     # Unsigned MSIX (local testing / sideloading)
@@ -46,7 +52,7 @@
     .\Build-Msix.ps1 -Version "0.5.0" -LocalPfx ".\cert.pfx" -PfxPassword "secret" -Publisher "CN=MyName"
 
 .EXAMPLE
-    # Sign with Azure Trusted Signing (CI)
+    # Sign with Azure Trusted Signing (local)
     .\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." -AzureEndpoint "https://eus.codesigning.azure.net/" -AzureCodeSigningAccountName "myacct" -AzureCertificateProfileName "myprofile"
 #>
 
@@ -62,10 +68,13 @@ param(
     [string]$LocalPfx = "",
     [string]$PfxPassword = "",
 
-    # Azure Trusted Signing parameters (passed via CI secrets)
+    # Azure Trusted Signing parameters (local signing only; CI uses azure/artifact-signing-action)
     [string]$AzureEndpoint = "",
     [string]$AzureCodeSigningAccountName = "",
-    [string]$AzureCertificateProfileName = ""
+    [string]$AzureCertificateProfileName = "",
+
+    # Path to Azure.CodeSigning.Dlib.dll (optional; auto-detected from NuGet cache if omitted)
+    [string]$DlibPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -195,13 +204,28 @@ if (-not $AzureEndpoint -or -not $AzureCodeSigningAccountName -or -not $AzureCer
 
 Write-Host "Signing with Azure Trusted Signing..." -ForegroundColor Cyan
 
-$dlibPath = Get-ChildItem -Path "$env:USERPROFILE\.nuget\packages\microsoft.trusted.signing.client" -Filter "Azure.CodeSigning.Dlib.dll" -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -match "x64" } |
-    Sort-Object FullName -Descending |
-    Select-Object -First 1
+if ($DlibPath) {
+    if (-not (Test-Path -Path $DlibPath -PathType Leaf)) {
+        Write-Error "Specified DLib file not found (or is not a file): $DlibPath"
+    }
+    $dlibFile = Get-Item $DlibPath
+    if ($dlibFile.Name -ne "Azure.CodeSigning.Dlib.dll") {
+        Write-Error "Invalid DLib file name '$($dlibFile.Name)'. Expected 'Azure.CodeSigning.Dlib.dll'."
+    }
+} else {
+    # Auto-detect from NuGet package cache
+    $searchPaths = @(
+        "$env:USERPROFILE\.nuget\packages\microsoft.trusted.signing.client"
+    )
+    $dlibFile = $searchPaths | Where-Object { Test-Path $_ } |
+        ForEach-Object { Get-ChildItem -Path $_ -Filter "Azure.CodeSigning.Dlib.dll" -Recurse -ErrorAction SilentlyContinue } |
+        Where-Object { $_.FullName -match "x64" } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
 
-if (-not $dlibPath) {
-    Write-Error "Azure.CodeSigning.Dlib.dll not found. Install the Microsoft.Trusted.Signing.Client NuGet package."
+    if (-not $dlibFile) {
+        Write-Error "Azure.CodeSigning.Dlib.dll not found. Pass -DlibPath with the full path to Azure.CodeSigning.Dlib.dll (for example from an existing NuGet cache or CI environment)."
+    }
 }
 
 $metadataJson = @{
@@ -213,7 +237,7 @@ $metadataJson = @{
 $metadataPath = Join-Path $env:TEMP "trustedsigning-metadata.json"
 $metadataJson | Set-Content $metadataPath -Encoding UTF8
 
-& $signTool.Path sign /v /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 /dlib $dlibPath.FullName /dmdf $metadataPath $OutputMsix
+& $signTool.Path sign /v /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 /dlib $dlibFile.FullName /dmdf $metadataPath $OutputMsix
 
 if ($LASTEXITCODE -ne 0) { Write-Error "Signing failed." }
 

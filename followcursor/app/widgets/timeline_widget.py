@@ -54,6 +54,7 @@ class _TimelineTrack(QWidget):
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
+    trim_reset = Signal()                # reset both trim handles to full range
     drag_finished = Signal()             # emitted when any drag completes
 
     EDGE_GRAB_PX = 6  # pixel tolerance for grabbing a segment edge
@@ -247,8 +248,21 @@ class _TimelineTrack(QWidget):
         event.accept()
 
     def _on_right_click(self, pos) -> None:
-        """Right-click on a pan point, zoom segment, click event, or empty space."""
+        """Right-click on a pan point, zoom segment, click event, trim handle, or empty space."""
         mx, my = pos.x(), pos.y()
+        # Check trim handle right-click — offer "Reset trim"
+        trim_hit = self._trim_hit_test(mx)
+        if trim_hit:
+            is_trimmed = self.trim_start_ms > 0 or (
+                self.trim_end_ms > 0 and self.trim_end_ms < self.duration
+            )
+            if is_trimmed:
+                menu = QMenu(self)
+                menu.setStyleSheet(self._MENU_STYLE)
+                reset_act = menu.addAction("↩  Reset trim")
+                reset_act.triggered.connect(self._reset_trim)
+                menu.exec(self.mapToGlobal(pos))
+            return
         # Check pan point markers first (higher priority than segment body)
         for cx, cy, r, pp_kf_id, seg_start_id in self._pan_point_markers:
             if (mx - cx) ** 2 + (my - cy) ** 2 <= (r + 3) ** 2:
@@ -1221,6 +1235,13 @@ class _TimelineTrack(QWidget):
             self.voiceover_clicked.emit(vid)  # main_window handles via edit dialog
             self.update()
 
+    def _reset_trim(self) -> None:
+        """Reset both trim handles to the full recording range."""
+        self.trim_start_ms = 0.0
+        self.trim_end_ms = 0.0
+        self.trim_reset.emit()
+        self.update()
+
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         if event.key() == Qt.Key.Key_S and not event.modifiers():
             if self.duration > 0:
@@ -1262,6 +1283,7 @@ class TimelineWidget(QWidget):
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
+    trim_reset = Signal()               # reset both trim handles to full range
     drag_finished = Signal()            # emitted when any drag completes
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -1334,6 +1356,7 @@ class TimelineWidget(QWidget):
         self._track.voiceover_moved.connect(self.voiceover_moved)
         self._track.split_requested.connect(self.split_requested)
         self._track.trim_changed.connect(self.trim_changed)
+        self._track.trim_reset.connect(self.trim_reset)
         self._track.drag_finished.connect(self.drag_finished)
         self._track.view_changed.connect(self._sync_scrollbar)
         layout.addWidget(self._track)
