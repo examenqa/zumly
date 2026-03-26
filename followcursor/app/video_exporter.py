@@ -920,7 +920,7 @@ class VideoExporter(QObject):
                     out_idx += 1
                     # Advance recording-time cursor by speed-adjusted interval
                     seg_speed = engine.get_speed_at(t_ms, duration_ms or eff_te)
-                    t_ms += (1.0 / fps) * 1000.0 * seg_speed
+                    t_ms += (1.0 / fps) * 1000.0 * max(seg_speed, 0.01)
 
                     if exported % 10 == 0:
                         self.progress.emit(min(1.0, exported / t_total))

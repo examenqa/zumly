@@ -57,23 +57,28 @@ def speed_at_time(keyframes: List[ZoomKeyframe], time_ms: float, duration_ms: fl
 
     The speed is stored on the zoom-in keyframe that starts each
     segment.  Returns 1.0 outside zoom segments.
+
+    The caller is expected to provide *keyframes* sorted by timestamp.
     """
-    sorted_kfs = sorted(keyframes, key=lambda k: k.timestamp)
     i = 0
-    while i < len(sorted_kfs):
-        kf = sorted_kfs[i]
+    while i < len(keyframes):
+        kf = keyframes[i]
         if kf.zoom > 1.01:
             start_ms = kf.timestamp
             speed = kf.speed
             j = i + 1
-            while j < len(sorted_kfs) and sorted_kfs[j].zoom > 1.01:
+            while j < len(keyframes) and keyframes[j].zoom > 1.01:
                 j += 1
-            if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
-                end_ms = min(sorted_kfs[j].timestamp + sorted_kfs[j].duration, duration_ms) if duration_ms > 0 else sorted_kfs[j].timestamp + sorted_kfs[j].duration
+            if j < len(keyframes) and keyframes[j].zoom <= 1.01:
+                end_ms = (
+                    min(keyframes[j].timestamp + keyframes[j].duration, duration_ms)
+                    if duration_ms > 0
+                    else keyframes[j].timestamp + keyframes[j].duration
+                )
                 i = j + 1
             else:
                 end_ms = duration_ms if duration_ms > 0 else float('inf')
-                i = len(sorted_kfs)
+                i = len(keyframes)
             if start_ms <= time_ms <= end_ms:
                 return speed
         else:

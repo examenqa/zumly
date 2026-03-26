@@ -166,6 +166,26 @@ class TestZoomKeyframe:
         kf = ZoomKeyframe.from_dict(d)
         assert kf.speed == 1.0
 
+    def test_speed_validation_negative(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": -1.0}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
+    def test_speed_validation_zero(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": 0}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
+    def test_speed_validation_exceeds_max(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": 99.0}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 10.0
+
+    def test_speed_validation_invalid_type(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": "fast"}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
 
 # ── RecordingSession ────────────────────────────────────────────────
 

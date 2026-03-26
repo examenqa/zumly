@@ -2175,7 +2175,9 @@ class MainWindow(QMainWindow):
         speed_val = 0.5
         while speed_val <= 10.0 + 0.001:
             check = "  ✓" if abs(current_speed - speed_val) < 0.01 else ""
-            label = f"{speed_val:.2g}×{check}"
+            disp = round(speed_val, 2)
+            speed_text = str(int(disp)) if disp == int(disp) else f"{disp:.2f}".rstrip("0").rstrip(".")
+            label = f"{speed_text}×{check}"
             act = speed_menu.addAction(label)
             act.triggered.connect(
                 lambda checked, s=speed_val: self._set_segment_speed(start_kf_id, s)

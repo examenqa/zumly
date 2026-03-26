@@ -138,6 +138,18 @@ class ZoomKeyframe:
         # Filter to only known fields to avoid TypeError from extra keys
         known = {"id", "timestamp", "zoom", "x", "y", "duration", "reason", "speed"}
         filtered = {k: v for k, v in d.items() if k in known}
+        # Validate speed to prevent division-by-zero and hangs on
+        # malformed/corrupt project files.
+        raw_speed = filtered.get("speed", 1.0)
+        try:
+            speed = float(raw_speed)
+        except (TypeError, ValueError):
+            speed = 1.0
+        if speed <= 0.0:
+            speed = 1.0
+        elif speed > 10.0:
+            speed = 10.0
+        filtered["speed"] = speed
         return ZoomKeyframe(**filtered)
 
 

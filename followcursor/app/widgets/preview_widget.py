@@ -95,10 +95,8 @@ class PreviewWidget(QWidget):
         self._video_fps: float = 30.0
         self._video_duration_ms: float = 0.0
         self._playback_pos_ms: float = 0.0
-        # Wall-clock anchors for accurate playback speed
-        self._play_start_wall: float = 0.0
-        self._play_start_pos_ms: float = 0.0
-        self._last_playback_wall: float = 0.0  # incremental wall-clock for speed-aware playback
+        # Wall-clock anchor for incremental, speed-aware playback
+        self._last_playback_wall: float = 0.0
         self._last_displayed_frame: int = -1
         self._frame_timestamps: Optional[List[float]] = None  # per-frame ms offsets
 
@@ -344,8 +342,7 @@ class PreviewWidget(QWidget):
                 self.update()
             # Reset wall-clock anchor so playback continues from here
             if self._playing:
-                self._play_start_wall = _time.perf_counter()
-                self._play_start_pos_ms = time_ms
+                self._last_playback_wall = _time.perf_counter()
 
     def play(self) -> None:
         """Start video playback from the current position."""
@@ -358,10 +355,8 @@ class PreviewWidget(QWidget):
             target_frame = self._time_to_frame(self._playback_pos_ms)
             self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
             self._last_displayed_frame = max(target_frame - 1, -1)
-            # Anchor wall-clock time for accurate playback speed
-            self._play_start_wall = _time.perf_counter()
-            self._play_start_pos_ms = self._playback_pos_ms
-            self._last_playback_wall = self._play_start_wall
+            # Anchor wall-clock time for incremental speed-aware playback
+            self._last_playback_wall = _time.perf_counter()
             self._playing = True
             # Use a fast timer (8ms) and select frames by wall-clock
             self._playback_timer.start(8)
