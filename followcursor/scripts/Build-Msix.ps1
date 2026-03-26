@@ -224,7 +224,7 @@ if ($DlibPath) {
         Select-Object -First 1
 
     if (-not $dlibFile) {
-        Write-Error "Azure.CodeSigning.Dlib.dll not found. Install the Microsoft.Trusted.Signing.Client NuGet package or pass -DlibPath."
+        Write-Error "Azure.CodeSigning.Dlib.dll not found. Pass -DlibPath with the full path to Azure.CodeSigning.Dlib.dll (for example from an existing NuGet cache or CI environment)."
     }
 }
 
