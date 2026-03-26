@@ -185,13 +185,11 @@ class ZoomEngine:
         self.keyframes = [kf for kf in self.keyframes if kf.id != kf_id]
 
     def clear(self) -> None:
-        """Remove all keyframes and reset zoom/pan/trim to defaults."""
+        """Remove all keyframes and reset zoom/pan to defaults."""
         self.keyframes.clear()
         self.current_zoom = 1.0
         self.current_pan_x = 0.5
         self.current_pan_y = 0.5
-        self.trim_start_ms = 0.0
-        self.trim_end_ms = 0.0
 
     def compute_at(self, time_ms: float) -> Tuple[float, float, float]:
         """Returns (zoom, pan_x, pan_y) at given time."""
