@@ -1194,6 +1194,8 @@ class MainWindow(QMainWindow):
         self._video_segments = []
         # Keep zoom engine segments in sync with session segments
         self._zoom_engine.video_segments = []
+        # Keep zoom engine segments in sync with session segments
+        self._zoom_engine.video_segments = []
         self._vo_played_ids = set()
         self._trim_start_ms = 0.0
         self._trim_end_ms = 0.0
