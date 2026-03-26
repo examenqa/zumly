@@ -2862,14 +2862,10 @@ class MainWindow(QMainWindow):
         self._video_segments = [s for s in self._video_segments if s.id != seg_id]
 
         # ── Ripple: shift everything after the deleted region back by `gap` ──
-        # Retime remaining video segments
+        # Retime remaining video segments (segments are non-overlapping by design)
         for s in self._video_segments:
             if s.start_ms >= seg.end_ms:
                 s.start_ms -= gap
-                s.end_ms -= gap
-            elif s.start_ms < seg.start_ms and s.end_ms > seg.start_ms:
-                # Segment spans the deleted region (shouldn't happen with
-                # non-overlapping segments, but handle defensively)
                 s.end_ms -= gap
 
         # Retime zoom keyframes after the deleted region
