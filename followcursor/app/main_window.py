@@ -2828,11 +2828,14 @@ class MainWindow(QMainWindow):
     def _on_video_segment_deleted(self, seg_id: str) -> None:
         """Delete a video segment by id (ripple delete).
 
-        At least one segment must remain.  Zoom keyframes and voiceover
-        segments whose timestamps fall within the deleted segment's
-        half-open interval [start_ms, end_ms) are removed.  All
-        timestamped data after the deleted segment is retimed so the
-        remaining segments close the gap.
+        At least one segment must remain.  Zoom keyframes within the
+        deleted segment's half-open interval [start_ms, end_ms) are
+        removed.  Voiceover segments are removed if their time range
+        [timestamp, timestamp + duration_ms) overlaps the deleted
+        segment at all (partial overlap means the audio would be
+        clipped, so the entire voiceover is removed).  All timestamped
+        data after the deleted segment is retimed so the remaining
+        segments close the gap.
         """
         if len(self._video_segments) <= 1:
             return
@@ -2850,11 +2853,14 @@ class MainWindow(QMainWindow):
             kf for kf in self._zoom_engine.keyframes
             if not (seg.start_ms <= kf.timestamp < seg.end_ms)
         ]
-        # Remove voiceover segments inside the deleted segment, using the same
-        # half-open interval convention as for zoom keyframes.
+        # Remove voiceover segments that overlap the deleted segment.
+        # A voiceover occupies [v.timestamp, v.timestamp + v.duration_ms).
+        # Any overlap with [seg.start_ms, seg.end_ms) means the audio would
+        # be partially clipped, so remove the entire voiceover.
         self._voiceover_segments = [
             v for v in self._voiceover_segments
-            if not (seg.start_ms <= v.timestamp < seg.end_ms)
+            if not (v.timestamp < seg.end_ms
+                    and v.timestamp + v.duration_ms > seg.start_ms)
         ]
         self._zoom_engine.voiceover_segments = self._voiceover_segments
 
