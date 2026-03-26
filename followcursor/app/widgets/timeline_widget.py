@@ -12,8 +12,9 @@ from PySide6.QtGui import (
     QLinearGradient,
     QFont,
     QMouseEvent,
+    QWheelEvent,
 )
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu, QScrollBar
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
 from ..utils import fmt_time as _fmt
@@ -54,6 +55,7 @@ class _TimelineTrack(QWidget):
     EDGE_GRAB_PX = 6  # pixel tolerance for grabbing a segment edge
     CLICK_HIT_PX = 8  # pixel tolerance for clicking on a click marker
     TRIM_GRAB_PX = 8  # pixel tolerance for grabbing a trim handle
+    MIN_VIEW_SCALE = 1.0  # 1.0 = fit-all (minimum zoom level)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -142,6 +144,100 @@ class _TimelineTrack(QWidget):
         "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
         "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
     )
+
+    # ── coordinate mapping helpers ────────────────────────────────
+
+    def _ms_to_x(self, ms: float) -> float:
+        """Map a time in milliseconds to a widget x-coordinate, accounting for view zoom/pan."""
+        return view_ms_to_x(ms, self.duration, self._view_scale, self._view_offset, self.width())
+
+    def _x_to_ms(self, x: float) -> float:
+        """Map a widget x-coordinate to a time in milliseconds, accounting for view zoom/pan."""
+        return view_x_to_ms(x, self.duration, self._view_scale, self._view_offset, self.width())
+
+    def _max_view_scale(self) -> float:
+        """Maximum view scale: 1 pixel = 10 ms."""
+        return view_max_scale(self.duration, self.width())
+
+    def _clamp_offset(self) -> None:
+        """Clamp _view_offset so the viewport stays within [0, duration]."""
+        self._view_offset = view_clamp_offset(self._view_offset, self.duration, self._view_scale)
+
+    def _clamp_view(self) -> None:
+        """Ensure view scale/offset are valid for the current duration and width."""
+        self._view_scale = max(self.MIN_VIEW_SCALE, min(self._view_scale, self._max_view_scale()))
+        self._clamp_offset()
+
+    # ── public view API ────────────────────────────────────────────
+
+    @property
+    def view_scale(self) -> float:
+        """Current time-axis zoom factor (1.0 = fit-all, read-only)."""
+        return self._view_scale
+
+    @property
+    def view_offset(self) -> float:
+        """Left-edge offset of the viewport in ms (read-only)."""
+        return self._view_offset
+
+    def set_view_offset(self, offset_ms: float) -> None:
+        """Set the left-edge offset and clamp to valid range."""
+        self._view_offset = offset_ms
+        self._clamp_offset()
+        self.update()
+
+    def reset_view(self) -> None:
+        """Reset zoom to fit-all (scale=1, offset=0)."""
+        self._view_scale = 1.0
+        self._view_offset = 0.0
+        self.view_changed.emit()
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        """Clamp view state when the widget is resized."""
+        super().resizeEvent(event)
+        self._clamp_view()
+        self.view_changed.emit()
+
+    # ── scroll-wheel zoom ─────────────────────────────────────────
+
+    view_changed = Signal()  # emitted when view_scale or view_offset changes
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # type: ignore[override]
+        """Scroll-wheel zooms the time axis, centered on the cursor position."""
+        if self.duration <= 0:
+            event.ignore()
+            return
+
+        degrees = event.angleDelta().y() / 8.0
+        steps = degrees / 15.0  # standard mouse wheel: 1 step = 15°
+
+        if steps == 0:
+            event.ignore()
+            return
+
+        zoom_factor = 1.15 ** steps  # ~15% per wheel step
+        old_scale = self._view_scale
+        new_scale = old_scale * zoom_factor
+        new_scale = max(self.MIN_VIEW_SCALE, min(new_scale, self._max_view_scale()))
+
+        if new_scale == old_scale:
+            event.accept()
+            return
+
+        # Keep the time under the cursor fixed
+        cursor_ms = self._x_to_ms(event.position().x())
+        self._view_scale = new_scale
+        # Recompute offset so cursor_ms stays at the same x position
+        visible_duration = self.duration / self._view_scale
+        w = self.width()
+        if w > 0:
+            ratio = event.position().x() / w
+            self._view_offset = cursor_ms - ratio * visible_duration
+        self._clamp_offset()
+        self.view_changed.emit()
+        self.update()
+        event.accept()
 
     def _on_right_click(self, pos) -> None:
         """Right-click on a pan point, zoom segment, click event, or empty space."""
@@ -269,7 +365,7 @@ class _TimelineTrack(QWidget):
             interval_ms = 5000
         elif eff_dur < 120000:
             interval_ms = 10000
-        else:
+        else:                             # ≥2 min visible → 30 s ticks
             interval_ms = 30000
 
         font = QFont()
@@ -1137,11 +1233,19 @@ class TimelineWidget(QWidget):
         self._track.voiceover_moved.connect(self.voiceover_moved)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.drag_finished.connect(self.drag_finished)
+        self._track.view_changed.connect(self._sync_scrollbar)
         layout.addWidget(self._track)
+
+        # ── Horizontal scrollbar (visible only when zoomed in) ──
+        self._hscroll = QScrollBar(Qt.Orientation.Horizontal)
+        self._hscroll.setObjectName("TimelineScrollBar")
+        self._hscroll.setVisible(False)
+        self._hscroll.valueChanged.connect(self._on_scrollbar)
+        layout.addWidget(self._hscroll)
 
         # ── Bottom hints ────────────────────────────────────────
         hints_row = QHBoxLayout()
-        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim")
+        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim · Scroll to zoom")
         hint_kf.setObjectName("Muted")
         hints_row.addWidget(hint_kf)
         hints_row.addStretch()
@@ -1155,6 +1259,32 @@ class TimelineWidget(QWidget):
         """Seek to the effective end of the visible (trimmed) range."""
         if self._track.duration > 0:
             self.seek_requested.emit(self._track._eff_end)
+
+    def _sync_scrollbar(self) -> None:
+        """Update scrollbar range/position to match the track's view state."""
+        track = self._track
+        if track.view_scale <= 1.0:
+            self._hscroll.setVisible(False)
+            return
+        self._hscroll.setVisible(True)
+        visible_duration = track.duration / track.view_scale
+        max_offset = track.duration - visible_duration
+        # Use integer steps (1 step = 1 ms) for fine granularity
+        self._hscroll.blockSignals(True)
+        self._hscroll.setMinimum(0)
+        self._hscroll.setMaximum(int(max_offset))
+        self._hscroll.setPageStep(int(visible_duration))
+        self._hscroll.setValue(int(track.view_offset))
+        self._hscroll.blockSignals(False)
+
+    def _on_scrollbar(self, value: int) -> None:
+        """Scroll the timeline track when the user moves the scrollbar."""
+        self._track.set_view_offset(float(value))
+
+    def reset_view(self) -> None:
+        """Reset the timeline zoom to fit-all."""
+        self._track.reset_view()
+        self._hscroll.setVisible(False)
 
     def set_data(
         self,
