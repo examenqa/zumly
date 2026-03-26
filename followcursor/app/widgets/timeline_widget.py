@@ -18,7 +18,10 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment
 from ..utils import fmt_time as _fmt
-from .timeline_math import trim_eff_start, trim_eff_end, trim_eff_dur, trim_ms_to_x, trim_x_to_ms
+from .timeline_math import (
+    trim_eff_start, trim_eff_end, trim_eff_dur, trim_ms_to_x, trim_x_to_ms,
+    view_ms_to_x, view_x_to_ms, view_max_scale, view_clamp_offset,
+)
 
 
 def _fmt_precise(ms: float) -> str:
