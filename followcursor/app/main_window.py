@@ -1528,6 +1528,9 @@ class MainWindow(QMainWindow):
             self._start_recording()
 
     def _refresh_editor(self) -> None:
+        out_dur = self._zoom_engine.compute_output_duration(
+            self._rec_duration_ms, self._trim_start_ms, self._trim_end_ms,
+        )
         self._editor.refresh(
             self._zoom_engine.keyframes,
             self._mouse_track,
@@ -1537,6 +1540,7 @@ class MainWindow(QMainWindow):
             self._click_events,
             self._trim_start_ms,
             self._trim_end_ms,
+            output_duration=out_dur,
         )
         self._timeline.set_data(
             self._rec_duration_ms,
@@ -2173,6 +2177,25 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
+        # ── Speed submenu ───────────────────────────────────────────
+        speed_menu = menu.addMenu("⏩  Speed")
+        speed_menu.setStyleSheet(menu.styleSheet())
+        current_speed = target_kf.speed
+        # 0.5, 0.75, 1.0, 1.25, 1.5, ... 10.0 in 0.25 steps
+        speed_val = 0.5
+        while speed_val <= 10.0 + 0.001:
+            check = "  ✓" if abs(current_speed - speed_val) < 0.01 else ""
+            disp = round(speed_val, 2)
+            speed_text = str(int(disp)) if disp == int(disp) else f"{disp:.2f}".rstrip("0").rstrip(".")
+            label = f"{speed_text}×{check}"
+            act = speed_menu.addAction(label)
+            act.triggered.connect(
+                lambda checked, s=speed_val: self._set_segment_speed(start_kf_id, s)
+            )
+            speed_val += 0.25
+
+        menu.addSeparator()
+
         # Centroid repositioning
         centroid_act = menu.addAction("📍  Pick zoom center on preview\u2026")
         centroid_act.triggered.connect(
@@ -2199,6 +2222,16 @@ class MainWindow(QMainWindow):
             self._zoom_engine.current_pan_x,
             self._zoom_engine.current_pan_y,
         )
+        self._refresh_editor()
+
+    def _set_segment_speed(self, kf_id: str, new_speed: float) -> None:
+        """Update the playback speed of a segment's start keyframe."""
+        self._zoom_engine.push_undo()
+        self._mark_dirty()
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == kf_id:
+                kf.speed = new_speed
+                break
         self._refresh_editor()
 
     def _add_pan_point(self, segment_start_id: str, time_ms: float) -> None:

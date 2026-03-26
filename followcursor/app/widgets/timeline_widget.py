@@ -651,7 +651,14 @@ class _TimelineTrack(QWidget):
             if label_w > 40:
                 painter.setPen(QPen(QColor("#a78bfa")))
                 text_rect = QRectF(label_left, top, label_w, h)
-                painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "🔍 Zoom")
+                # Show speed badge if non-default speed is set on the zoom-in kf
+                seg_speed = kf_in.speed if kf_in else 1.0
+                if abs(seg_speed - 1.0) > 0.01:
+                    speed_str = f"{seg_speed:.2f}".rstrip("0").rstrip(".")
+                    speed_label = f"🔍 {speed_str}×"
+                else:
+                    speed_label = "🔍 Zoom"
+                painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, speed_label)
 
             # ── Pan point markers (numbered circles for intermediate kfs) ──
             pan_points = []

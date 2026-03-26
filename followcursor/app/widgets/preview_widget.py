@@ -22,6 +22,7 @@ from PySide6.QtGui import QImage, QPainter, QColor, QFont, QPen
 from PySide6.QtWidgets import QWidget, QMenu
 
 from ..models import MousePosition, ClickEvent, ZoomKeyframe
+from ..zoom_engine import speed_at_time
 
 
 class PreviewWidget(QWidget):
@@ -94,9 +95,8 @@ class PreviewWidget(QWidget):
         self._video_fps: float = 30.0
         self._video_duration_ms: float = 0.0
         self._playback_pos_ms: float = 0.0
-        # Wall-clock anchors for accurate playback speed
-        self._play_start_wall: float = 0.0
-        self._play_start_pos_ms: float = 0.0
+        # Wall-clock anchor for incremental, speed-aware playback
+        self._last_playback_wall: float = 0.0
         self._last_displayed_frame: int = -1
         self._frame_timestamps: Optional[List[float]] = None  # per-frame ms offsets
         # Trim-aware playback boundary (0 = use full video duration)
@@ -344,8 +344,7 @@ class PreviewWidget(QWidget):
                 self.update()
             # Reset wall-clock anchor so playback continues from here
             if self._playing:
-                self._play_start_wall = _time.perf_counter()
-                self._play_start_pos_ms = time_ms
+                self._last_playback_wall = _time.perf_counter()
 
     def play(self) -> None:
         """Start video playback from the current position."""
@@ -358,9 +357,8 @@ class PreviewWidget(QWidget):
             target_frame = self._time_to_frame(self._playback_pos_ms)
             self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
             self._last_displayed_frame = max(target_frame - 1, -1)
-            # Anchor wall-clock time for accurate playback speed
-            self._play_start_wall = _time.perf_counter()
-            self._play_start_pos_ms = self._playback_pos_ms
+            # Anchor wall-clock time for incremental speed-aware playback
+            self._last_playback_wall = _time.perf_counter()
             self._playing = True
             # Use a fast timer (8ms) and select frames by wall-clock
             self._playback_timer.start(8)
@@ -1025,12 +1023,14 @@ class PreviewWidget(QWidget):
             self.pause()
             return
 
-        # Compute target playback position from wall-clock elapsed time.
-        # This avoids drift caused by QTimer interval rounding and the
-        # off-by-one in CAP_PROP_POS_FRAMES (which returns the *next*
-        # frame index, not the one just displayed).
-        elapsed_s = _time.perf_counter() - self._play_start_wall
-        target_ms = self._play_start_pos_ms + elapsed_s * 1000.0
+        # Compute target playback position using incremental wall-clock
+        # delta scaled by the segment playback speed at the current pos.
+        now = _time.perf_counter()
+        delta_s = now - self._last_playback_wall
+        self._last_playback_wall = now
+
+        speed = self._get_segment_speed(self._playback_pos_ms)
+        target_ms = self._playback_pos_ms + delta_s * 1000.0 * speed
 
         if target_ms >= self._video_duration_ms:
             self.pause()
@@ -1079,6 +1079,10 @@ class PreviewWidget(QWidget):
         self._current_time_ms = target_ms
         self._frame = self._numpy_to_qimage(frame)
         self.update()
+
+    def _get_segment_speed(self, time_ms: float) -> float:
+        """Return the playback speed at *time_ms* based on zoom keyframes."""
+        return speed_at_time(self._debug_keyframes, time_ms, self._video_duration_ms)
 
     @staticmethod
     def _numpy_to_qimage(frame: np.ndarray) -> QImage:
