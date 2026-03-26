@@ -146,6 +146,47 @@ class TestZoomKeyframe:
         assert kf.id == "abc"
         assert not hasattr(kf, "future_field")
 
+    def test_speed_default(self) -> None:
+        kf = ZoomKeyframe.create(timestamp=0, zoom=2.0)
+        assert kf.speed == 1.0
+
+    def test_speed_roundtrip(self) -> None:
+        kf = ZoomKeyframe.create(timestamp=100, zoom=2.0, speed=2.5)
+        d = kf.to_dict()
+        assert d["speed"] == 2.5
+        kf2 = ZoomKeyframe.from_dict(d)
+        assert kf2.speed == 2.5
+
+    def test_speed_omitted_when_default(self) -> None:
+        kf = ZoomKeyframe.create(timestamp=0, zoom=1.0)
+        d = kf.to_dict()
+        assert "speed" not in d
+
+    def test_speed_backward_compat(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
+    def test_speed_validation_negative(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": -1.0}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
+    def test_speed_validation_zero(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": 0}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
+    def test_speed_validation_exceeds_max(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": 99.0}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 10.0
+
+    def test_speed_validation_invalid_type(self) -> None:
+        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": "fast"}
+        kf = ZoomKeyframe.from_dict(d)
+        assert kf.speed == 1.0
+
 
 # ── RecordingSession ────────────────────────────────────────────────
 

@@ -44,7 +44,9 @@ jobs:
         run: |
           $base = "FollowCursor-${{ steps.version.outputs.APP_VERSION }}"
           if ("${{ github.event_name }}" -eq "pull_request") {
-            $name = "$base-pr${{ github.event.pull_request.number }}-$("${{ github.event.pull_request.head.sha }}".Substring(0,7))"
+            $sha = "${{ github.event.pull_request.head.sha }}"
+            $short = $sha.Substring(0, 7)
+            $name = "$base-pr${{ github.event.pull_request.number }}-$short"
           } else {
             $name = "$base-windows"
           }

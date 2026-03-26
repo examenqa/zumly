@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.zoom_engine import ease_out, smooth_step, ZoomEngine, MAX_UNDO
+from app.zoom_engine import ease_out, smooth_step, speed_at_time, ZoomEngine, MAX_UNDO
 from app.models import ClickEvent, ZoomKeyframe
 
 
@@ -312,6 +312,57 @@ class TestZoomEngineUndoRedo:
         engine.click_events[0] = ClickEvent(x=999, y=999, timestamp=999)
         engine.undo()
         assert engine.click_events[0].x == 10
+
+    def test_undo_restores_trim(self) -> None:
+        """Undo restores trim_start_ms and trim_end_ms."""
+        engine = ZoomEngine()
+        engine.trim_start_ms = 0.0
+        engine.trim_end_ms = 0.0
+        engine.push_undo()
+        engine.trim_start_ms = 500.0
+        engine.trim_end_ms = 3000.0
+        assert engine.undo()
+        assert engine.trim_start_ms == 0.0
+        assert engine.trim_end_ms == 0.0
+
+    def test_redo_restores_trim(self) -> None:
+        """Redo re-applies trim changes."""
+        engine = ZoomEngine()
+        engine.push_undo()
+        engine.trim_start_ms = 500.0
+        engine.trim_end_ms = 3000.0
+        engine.undo()
+        assert engine.trim_start_ms == 0.0
+        assert engine.trim_end_ms == 0.0
+        assert engine.redo()
+        assert engine.trim_start_ms == 500.0
+        assert engine.trim_end_ms == 3000.0
+
+    def test_trim_included_in_snapshot_with_keyframes(self) -> None:
+        """Snapshot captures trim alongside keyframes and clicks."""
+        engine = ZoomEngine()
+        engine.trim_start_ms = 100.0
+        engine.trim_end_ms = 2000.0
+        kf = ZoomKeyframe.create(timestamp=200, zoom=1.5)
+        engine.add_keyframe(kf)
+        engine.push_undo()
+        # Mutate everything
+        engine.trim_start_ms = 0.0
+        engine.trim_end_ms = 0.0
+        engine.keyframes.clear()
+        assert engine.undo()
+        assert engine.trim_start_ms == 100.0
+        assert engine.trim_end_ms == 2000.0
+        assert len(engine.keyframes) == 1
+
+    def test_clear_resets_trim(self) -> None:
+        """ZoomEngine.clear() resets trim to defaults."""
+        engine = ZoomEngine()
+        engine.trim_start_ms = 500.0
+        engine.trim_end_ms = 3000.0
+        engine.clear()
+        assert engine.trim_start_ms == 0.0
+        assert engine.trim_end_ms == 0.0
 
 
 # ── Pan point interpolation ────────────────────────────────────────

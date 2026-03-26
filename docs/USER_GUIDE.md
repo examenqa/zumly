@@ -432,12 +432,34 @@ Trim your recording to remove unwanted content at the start or end without re-re
 
 ### Trim Handles
 
-The timeline has **trim handles** at both ends. Drag them inward to set a trim range:
+The timeline has **trim handles** (yellow bars) at both edges. Drag them to adjust the trim range:
 
 - **Left handle** — sets the trim start point (content before this is excluded)
 - **Right handle** — sets the trim end point (content after this is excluded)
 
-Trimmed regions are shown as **dimmed overlays** on the timeline, with bright yellow handle bars at the trim edges.
+After trimming, the timeline viewport shows **only the content between the trim start and trim end**. All trimmed-out regions are hidden from view. Time markers re-index to start at **0:00** from the trim start, and the total duration display reflects the trimmed length.
+
+### Playback Behavior
+
+- Playback is confined to the trimmed range — the playhead cannot move outside it
+- Seeking, skipping to start/end, and clicking on the timeline all respect the trim boundaries
+- When playback reaches the trim end, it pauses automatically
+- Pressing play when paused at the trim end wraps back to the trim start
+
+### Visible Content
+
+Zoom segments, voiceover segments, activity heatmaps (mouse, keyboard, clicks), and click event markers that fall outside the trimmed range are hidden from the timeline.
+
+### Untrimming
+
+Drag the trim handles back outward to restore previously hidden content:
+
+- **Left handle** — drag leftward to reveal content before the current trim start, down to the beginning of the recording
+- **Right handle** — drag rightward to reveal content after the current trim end, up to the full recording duration
+
+### Reset Trim
+
+Right-click on either trim handle and select **↩ Reset trim** to reset both handles to the full recording range in one step.
 
 ### Constraints
 
@@ -482,7 +504,7 @@ All zoom keyframe, click event, and video segment changes can be undone and redo
 
 ### Supported Actions
 
-Every zoom keyframe and click event mutation is tracked:
+Every zoom keyframe, click event, and trim mutation is tracked:
 
 - Adding a keyframe (manual or auto-generated)
 - Removing a keyframe

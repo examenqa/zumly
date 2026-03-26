@@ -55,6 +55,40 @@ def ease_in_out(t: float) -> float:
 smooth_step = ease_out
 
 
+def speed_at_time(keyframes: List[ZoomKeyframe], time_ms: float, duration_ms: float = 0.0) -> float:
+    """Return the playback speed at *time_ms* from a list of keyframes.
+
+    The speed is stored on the zoom-in keyframe that starts each
+    segment.  Returns 1.0 outside zoom segments.
+
+    The caller is expected to provide *keyframes* sorted by timestamp.
+    """
+    i = 0
+    while i < len(keyframes):
+        kf = keyframes[i]
+        if kf.zoom > 1.01:
+            start_ms = kf.timestamp
+            speed = kf.speed
+            j = i + 1
+            while j < len(keyframes) and keyframes[j].zoom > 1.01:
+                j += 1
+            if j < len(keyframes) and keyframes[j].zoom <= 1.01:
+                end_ms = (
+                    min(keyframes[j].timestamp + keyframes[j].duration, duration_ms)
+                    if duration_ms > 0
+                    else keyframes[j].timestamp + keyframes[j].duration
+                )
+                i = j + 1
+            else:
+                end_ms = duration_ms if duration_ms > 0 else float('inf')
+                i = len(keyframes)
+            if start_ms <= time_ms <= end_ms:
+                return speed
+        else:
+            i += 1
+    return 1.0
+
+
 MAX_UNDO = 50  # maximum undo history depth
 
 
@@ -74,7 +108,11 @@ class ZoomEngine:
         self.current_pan_x: float = 0.5
         self.current_pan_y: float = 0.5
 
-        # Undo / redo stacks — each entry is a snapshot of keyframes + click events
+        # Trim state — included in undo/redo snapshots
+        self.trim_start_ms: float = 0.0
+        self.trim_end_ms: float = 0.0  # 0 = no trim (use full duration)
+
+        # Undo / redo stacks — each entry is a snapshot of keyframes + click events + trim
         self._undo_stack: List[_Snapshot] = []
         self._redo_stack: List[_Snapshot] = []
 
@@ -147,11 +185,13 @@ class ZoomEngine:
         self.keyframes = [kf for kf in self.keyframes if kf.id != kf_id]
 
     def clear(self) -> None:
-        """Remove all keyframes and reset zoom/pan to defaults."""
+        """Remove all keyframes and reset zoom/pan/trim to defaults."""
         self.keyframes.clear()
         self.current_zoom = 1.0
         self.current_pan_x = 0.5
         self.current_pan_y = 0.5
+        self.trim_start_ms = 0.0
+        self.trim_end_ms = 0.0
 
     def compute_at(self, time_ms: float) -> Tuple[float, float, float]:
         """Returns (zoom, pan_x, pan_y) at given time."""
@@ -189,6 +229,81 @@ class ZoomEngine:
         pan_y = prev_y + (active_kf.y - prev_y) * eased
 
         return zoom, pan_x, pan_y
+
+    # ── per-segment speed helpers ───────────────────────────────────
+
+    def _build_speed_segments(self, duration_ms: float) -> List[Tuple[float, float, float]]:
+        """Return a list of (start_ms, end_ms, speed) covering the full timeline.
+
+        Zoom segments with a non-default speed on their start keyframe
+        define speed regions; everything else is 1.0×.
+        """
+        segments: List[Tuple[float, float, float]] = []
+        sorted_kfs = sorted(self.keyframes, key=lambda k: k.timestamp)
+        i = 0
+        while i < len(sorted_kfs):
+            kf = sorted_kfs[i]
+            if kf.zoom > 1.01:
+                start_ms = kf.timestamp
+                speed = kf.speed
+                j = i + 1
+                while j < len(sorted_kfs) and sorted_kfs[j].zoom > 1.01:
+                    j += 1
+                if j < len(sorted_kfs) and sorted_kfs[j].zoom <= 1.01:
+                    end_ms = min(sorted_kfs[j].timestamp + sorted_kfs[j].duration, duration_ms)
+                    i = j + 1
+                else:
+                    end_ms = duration_ms
+                    i = len(sorted_kfs)
+                segments.append((start_ms, end_ms, speed))
+            else:
+                i += 1
+        return segments
+
+    def get_speed_at(self, time_ms: float, duration_ms: float = 0.0) -> float:
+        """Return the playback speed at the given recording time.
+
+        Delegates to the module-level ``speed_at_time()`` function.
+        """
+        return speed_at_time(self.keyframes, time_ms, duration_ms)
+
+    def compute_output_duration(
+        self, duration_ms: float, trim_start_ms: float = 0.0, trim_end_ms: float = 0.0,
+    ) -> float:
+        """Compute the total output duration accounting for per-segment speeds.
+
+        Regions inside zoom segments play at their assigned speed;
+        regions outside play at 1.0×.  The returned value is in ms.
+        """
+        eff_start = trim_start_ms if trim_start_ms > 0 else 0.0
+        eff_end = trim_end_ms if trim_end_ms > 0 else duration_ms
+        if eff_end <= eff_start:
+            return 0.0
+
+        speed_segs = self._build_speed_segments(duration_ms)
+        output_ms = 0.0
+        cursor = eff_start
+
+        for seg_start, seg_end, speed in speed_segs:
+            if seg_end <= cursor or seg_start >= eff_end:
+                continue
+            # Gap before this segment (speed 1.0)
+            gap_end = min(seg_start, eff_end)
+            if gap_end > cursor:
+                output_ms += gap_end - cursor
+                cursor = gap_end
+            # Overlap of this segment with [cursor, eff_end]
+            overlap_start = max(cursor, seg_start)
+            overlap_end = min(seg_end, eff_end)
+            if overlap_end > overlap_start:
+                output_ms += (overlap_end - overlap_start) / speed
+                cursor = overlap_end
+
+        # Remaining gap after last segment
+        if cursor < eff_end:
+            output_ms += eff_end - cursor
+
+        return output_ms
 
     def update(self, time_ms: float) -> None:
         """Evaluate zoom state at *time_ms* and cache the result.
