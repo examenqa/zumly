@@ -1490,7 +1490,7 @@ class TimelineWidget(QWidget):
         self._track.trim_end_ms = trim_end_ms
         if voiceover_segments is not None:
             self._track.voiceover_segments = voiceover_segments
-    if video_segments is not None:
+        if video_segments is not None:
             self._track.video_segments = video_segments
         self._time_current.setText(_fmt_precise(current_time))
         self._time_total.setText(_fmt_precise(duration))
