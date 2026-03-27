@@ -107,10 +107,11 @@ $manifest = Get-Content (Join-Path $MsixDir "AppxManifest.xml") -Raw
 
 # MSIX requires four-part version: Major.Minor.Patch.Build
 $msixVersion = "$Version.0"
-$manifest = $manifest -replace 'Version="[^"]*"', "Version=`"$msixVersion`""
+# Only replace Version in the <Identity> element, not the XML declaration
+$manifest = $manifest -replace '(<Identity[^>]*?)Version="[^"]*"', "`$1Version=`"$msixVersion`""
 
 if ($Publisher) {
-    $manifest = $manifest -replace 'Publisher="[^"]*"', "Publisher=`"$Publisher`""
+    $manifest = $manifest -replace '(<Identity[^>]*?)Publisher="[^"]*"', "`$1Publisher=`"$Publisher`""
 }
 
 # Write patched manifest to staging (don't modify the template)
@@ -131,8 +132,9 @@ $assetsStaging = Join-Path $StagingDir "Assets"
 New-Item -ItemType Directory -Path $assetsStaging -Force | Out-Null
 Copy-Item (Join-Path $MsixDir "Assets\*") $assetsStaging -Recurse -Force
 
-# Write patched manifest
-$manifest | Set-Content (Join-Path $StagingDir "AppxManifest.xml") -Encoding UTF8
+# Write patched manifest (UTF-8 without BOM — MakeAppx rejects BOM)
+$manifestPath = Join-Path $StagingDir "AppxManifest.xml"
+[System.IO.File]::WriteAllText($manifestPath, $manifest, [System.Text.UTF8Encoding]::new($false))
 
 # ── 4. Build MSIX ───────────────────────────────────────────────
 Write-Host "Building MSIX package..." -ForegroundColor Cyan

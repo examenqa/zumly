@@ -164,7 +164,8 @@
 		{
 			"id": "msixPublisher",
 			"type": "promptString",
-			"description": "Certificate subject (e.g. CN=Name, O=Org, L=City, S=State, C=US)"
+			"description": "Certificate subject (e.g. CN=Name, O=Org, L=City, S=State, C=US)",
+			"default": "CN=FollowCursor-Dev"
 		},
 		{
 			"id": "pfxPath",

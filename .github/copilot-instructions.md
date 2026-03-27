@@ -1,7 +1,6 @@
 # FollowCursor — Copilot Agent Instructions
 
-> **Architecture details** are split into focused instruction files in `.github/instructions/`.
-> VS Code Copilot loads them automatically via `applyTo` globs when you work on relevant source files.
+> Additional instruction files in `.github/instructions/` cover issue implementation conventions and release/versioning.
 
 ## Project Overview
 
@@ -144,10 +143,12 @@ Do **not** skip documentation updates — they are part of completing any featur
 
 1. **Never** use `source` or `bash` commands for Windows Python — use `.venv\Scripts\python.exe` directly
 2. **Never** add `SetProcessDpiAwareness` — Qt handles it
-3. **Never** use `CFUNCTYPE` for Win32 hook callbacks — use `WINFUNCTYPE`
+3. **Never** use `CFUNCTYPE` for Win32 hook callbacks — use `WINFUNCTYPE`. Hook callbacks must have explicit `argtypes` and `restype` to prevent integer overflow on 64-bit pointers
 4. **Never** use trademarked device names (Surface, MacBook) in frame presets
 5. **Never** run compositor during recording — use blur overlay instead
-6. `.github/` folder lives at **repo root**, not inside `followcursor/`
-7. `.gitignore` lives at **repo root**
-8. VS Code config (`.vscode/`) lives at **repo root**
-9. Python project files live inside `followcursor/` subfolder
+6. Catch both `BrokenPipeError` and `OSError` on ffmpeg pipe writes — Windows raises `OSError(22)` instead of `BrokenPipeError`
+7. `closeEvent` uses `os._exit(0)` for clean shutdown — prevents Qt cleanup hangs with native hooks
+8. `.github/` folder lives at **repo root**, not inside `followcursor/`
+9. `.gitignore` lives at **repo root**
+10. VS Code config (`.vscode/`) lives at **repo root**
+11. Python project files live inside `followcursor/` subfolder

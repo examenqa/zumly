@@ -139,6 +139,40 @@ PyInstaller output, then run `Build-Msix.ps1` to package and optionally sign it:
 
 Requires the Windows SDK (`MakeAppx.exe`, `SignTool.exe`).
 
+#### Local Sideloading with a Self-Signed Certificate
+
+Unsigned MSIX packages cannot be installed directly — Windows requires a trusted
+signature. For local testing, create a self-signed certificate and trust it on your
+machine (run in an **elevated** PowerShell):
+
+```powershell
+# 1. Create a self-signed code-signing certificate
+$cert = New-SelfSignedCertificate -Type Custom -Subject "CN=FollowCursor-Dev" `
+    -KeyUsage DigitalSignature -FriendlyName "FollowCursor Dev" `
+    -CertStoreLocation "Cert:\CurrentUser\My" `
+    -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+
+# 2. Trust the certificate (allows MSIX install without Store)
+Export-Certificate -Cert $cert -FilePath "$env:TEMP\FollowCursor-Dev.cer"
+Import-Certificate -FilePath "$env:TEMP\FollowCursor-Dev.cer" `
+    -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
+
+# 3. Export a PFX for signing builds
+Export-PfxCertificate -Cert $cert -FilePath "$env:TEMP\FollowCursor-Dev.pfx" `
+    -Password (ConvertTo-SecureString -String "dev" -Force -AsPlainText)
+```
+
+Then build and sign the MSIX with that certificate:
+
+```powershell
+.\scripts\Build-Msix.ps1 -Version "0.7.0" `
+    -Publisher "CN=FollowCursor-Dev" `
+    -LocalPfx "$env:TEMP\FollowCursor-Dev.pfx" `
+    -PfxPassword "dev"
+```
+
+The resulting `.msix` can be double-clicked to install on the same machine.
+
 ## CI/CD
 
 A GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push/PR to `main`:
