@@ -23,5 +23,8 @@ followcursor/msix/Assets/
 # Logs
 *.log
 
+# Dev signing certificates
+.certs/
+
 # IDE (keep .vscode tracked for shared config)
 .idea/

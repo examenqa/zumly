@@ -99,7 +99,9 @@
 				"-Publisher",
 				"${input:msixPublisher}",
 				"-LocalPfx",
-				"${input:pfxPath}"
+				"${input:pfxPath}",
+				"-PfxPassword",
+				"${input:pfxPassword}"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}/followcursor"
@@ -152,6 +154,28 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
+		},
+		{
+			"label": "Create Dev Signing Certificate",
+			"type": "process",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"$certsDir = Join-Path '${workspaceFolder}' '.certs'; if (-not (Test-Path $certsDir)) { New-Item -ItemType Directory -Path $certsDir -Force | Out-Null }; $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=FollowCursor-Dev' -KeyUsage DigitalSignature -FriendlyName 'FollowCursor Dev' -CertStoreLocation 'Cert:\\CurrentUser\\My' -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3'); $cerPath = Join-Path $certsDir 'FollowCursor-Dev.cer'; $pfxPath = Join-Path $certsDir 'FollowCursor-Dev.pfx'; Export-Certificate -Cert $cert -FilePath $cerPath; Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\\CurrentUser\\TrustedPeople'; Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password (ConvertTo-SecureString -String 'dev' -Force -AsPlainText); Write-Host \"`nCertificate created and trusted.`nPFX path: $pfxPath`nPublisher: CN=FollowCursor-Dev`nPassword: dev\" -ForegroundColor Green"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/followcursor"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": [],
+			"runOptions": {
+				"runOn": "default"
+			}
 		}
 	],
 	"inputs": [
@@ -170,7 +194,15 @@
 		{
 			"id": "pfxPath",
 			"type": "promptString",
-			"description": "Path to .pfx certificate file"
+			"description": "Path to .pfx certificate file",
+			"default": "${workspaceFolder}/.certs/FollowCursor-Dev.pfx"
+		},
+		{
+			"id": "pfxPassword",
+			"type": "promptString",
+			"description": "PFX certificate password",
+			"default": "dev",
+			"password": true
 		}
 	]
 }

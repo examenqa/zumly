@@ -175,6 +175,7 @@ if (-not $signTool) {
 
 # ── 5a. Local PFX signing ───────────────────────────────────────
 if ($LocalPfx) {
+    $LocalPfx = $LocalPfx.Trim('"', "'", ' ')
     if (-not (Test-Path $LocalPfx)) {
         Write-Error "PFX file not found: $LocalPfx"
     }

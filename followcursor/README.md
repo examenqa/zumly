@@ -108,6 +108,7 @@ All build steps are available as VS Code tasks (`Ctrl+Shift+P` → **Tasks: Run 
 | **Build MSIX (Signed with PFX)** | Builds the app, then packages and signs the `.msix` with a local certificate |
 | **Install Dependencies** | Runs `pip install -r requirements.txt` into the venv |
 | **Run Tests** | Runs the pytest suite — **always run before merging or releasing** |
+| **Create Dev Signing Certificate** | Creates a self-signed certificate for local MSIX sideloading (no admin required) |
 
 The MSIX tasks depend on **Build** and will run it automatically first. When prompted, enter the version string (e.g. `0.6.0`) and, for signed builds, the certificate subject and `.pfx` path.
 
@@ -143,7 +144,8 @@ Requires the Windows SDK (`MakeAppx.exe`, `SignTool.exe`).
 
 Unsigned MSIX packages cannot be installed directly — Windows requires a trusted
 signature. For local testing, create a self-signed certificate and trust it on your
-machine (run in an **elevated** PowerShell):
+machine. You can run the **Create Dev Signing Certificate** VS Code task, or run
+these commands manually in PowerShell:
 
 ```powershell
 # 1. Create a self-signed code-signing certificate
@@ -155,7 +157,7 @@ $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=FollowCursor-Dev" `
 # 2. Trust the certificate (allows MSIX install without Store)
 Export-Certificate -Cert $cert -FilePath "$env:TEMP\FollowCursor-Dev.cer"
 Import-Certificate -FilePath "$env:TEMP\FollowCursor-Dev.cer" `
-    -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
+    -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
 
 # 3. Export a PFX for signing builds
 Export-PfxCertificate -Cert $cert -FilePath "$env:TEMP\FollowCursor-Dev.pfx" `
