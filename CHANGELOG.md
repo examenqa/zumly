@@ -4,6 +4,18 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] — 2026-03-27
+
+### Changed
+
+- **MSIX build script** — fixed XML declaration corruption by anchoring version regex to the `<Identity>` element; write manifest without BOM for MakeAppx compatibility; strip stray quotes from PFX path
+- **CI workflow** — release job can now be triggered manually via workflow_dispatch for testing Azure signing without creating a GitHub Release
+- **Dev signing** — added VS Code task to create a self-signed certificate for local MSIX sideloading; certificate and PFX output to `.certs/` folder
+
+### Fixed
+
+- **Timeline widget** — fixed indentation error in `video_segments` assignment that prevented app launch
+
 ## [0.7.0] — 2026-03-25
 
 ### Added
