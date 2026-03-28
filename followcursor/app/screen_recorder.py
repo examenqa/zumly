@@ -67,12 +67,12 @@ def _precise_sleep(seconds: float) -> None:
 def _start_ffmpeg_writer(
     out_path: str, w: int, h: int, fps: int,
 ) -> Optional[subprocess.Popen]:
-    """Launch an ffmpeg subprocess that accepts raw BGRA on stdin → AVI.
+    """Launch an ffmpeg subprocess that accepts raw BGRA on stdin → MKV.
 
-    Uses H.264 (CRF 18, ultrafast) for near-lossless quality at a
-    fraction of the file size compared to raw/huffyuv codecs.  For a
-    4K@60fps recording this reduces temp files from ~50 GB/min to
-    well under 1 GB/min.
+    Uses H.264 (CRF 18, ultrafast) in a Matroska container for
+    near-lossless quality at a fraction of the file size compared to
+    raw/huffyuv codecs.  MKV properly handles H.264 NAL unit framing,
+    avoiding the macroblock corruption that can occur with AVI.
 
     Returns the Popen object, or None if ffmpeg couldn't start.
     """
@@ -300,7 +300,7 @@ class ScreenRecorder(QObject):
                 pass
 
         temp_path = os.path.join(
-            tempfile.gettempdir(), f"followcursor_{int(time.time())}.avi"
+            tempfile.gettempdir(), f"followcursor_{int(time.time())}.mkv"
         )
         with self._lock:
             self._output_path = temp_path
@@ -453,8 +453,8 @@ class ScreenRecorder(QObject):
                 cur_w, cur_h = frame_dims
                 if is_recording and not was_recording:
                     out_path = output_path
-                    if not out_path.lower().endswith(".avi"):
-                        out_path = output_path.rsplit(".", 1)[0] + ".avi"
+                    if not out_path.lower().endswith(".mkv"):
+                        out_path = output_path.rsplit(".", 1)[0] + ".mkv"
                         with self._lock:
                             self._output_path = out_path
                     # Try ffmpeg pipe (fast, out-of-process encoding)
@@ -500,11 +500,19 @@ class ScreenRecorder(QObject):
 
                     if writer_proc and writer_proc.stdin and not writer_proc.stdin.closed:
                         try:
-                            writer_proc.stdin.write(
+                            frame_bytes = (
                                 frame_bgra.tobytes()
                                 if frame_bgra.flags["C_CONTIGUOUS"]
                                 else np.ascontiguousarray(frame_bgra).tobytes()
                             )
+                            expected = w * h * 4
+                            if len(frame_bytes) != expected:
+                                logger.warning(
+                                    "Frame size mismatch: %d vs expected %d — skipping",
+                                    len(frame_bytes), expected,
+                                )
+                                continue
+                            writer_proc.stdin.write(frame_bytes)
                             with self._lock:
                                 ts = (time.time() - self._start_time) * 1000.0
                                 self._frame_timestamps.append(ts)
@@ -579,8 +587,8 @@ class ScreenRecorder(QObject):
                     # state transitions
                     if is_recording and not was_recording:
                         out_path = output_path
-                        if not out_path.lower().endswith(".avi"):
-                            out_path = output_path.rsplit(".", 1)[0] + ".avi"
+                        if not out_path.lower().endswith(".mkv"):
+                            out_path = output_path.rsplit(".", 1)[0] + ".mkv"
                             with self._lock:
                                 self._output_path = out_path
                         writer_proc = _start_ffmpeg_writer(out_path, w, h, record_fps)
@@ -701,8 +709,8 @@ class ScreenRecorder(QObject):
 
                     if is_recording and not was_recording:
                         out_path = output_path
-                        if not out_path.lower().endswith(".avi"):
-                            out_path = output_path.rsplit(".", 1)[0] + ".avi"
+                        if not out_path.lower().endswith(".mkv"):
+                            out_path = output_path.rsplit(".", 1)[0] + ".mkv"
                             with self._lock:
                                 self._output_path = out_path
                         record_fps = min(self._fps, 30)

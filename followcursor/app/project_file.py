@@ -3,7 +3,7 @@
 A .fcproj file is a ZIP archive containing:
   - project.json   — session metadata (mouse track, keyframes, key events,
                       voiceover segments, etc.)
-  - recording.avi  — the raw MJPG intermediate video
+  - recording.mkv  — the raw H.264 intermediate video
   - voiceover_*.wav — synthesized voiceover audio files (one per segment)
 
 This lets users save their work and resume editing later.
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 PROJ_EXT = ".fcproj"
 _JSON_NAME = "project.json"
-_VIDEO_NAME = "recording.avi"
+_VIDEO_NAME = "recording.mkv"
 
 
 def save_project(
@@ -257,7 +257,7 @@ def load_project(input_path: str) -> dict:
 
     Returns dict with keys:
       - session: RecordingSession
-      - video_path: str — path to extracted AVI (in temp dir)
+      - video_path: str — path to extracted video (in temp dir)
       - monitor_rect: dict | None
       - actual_fps: float
     """

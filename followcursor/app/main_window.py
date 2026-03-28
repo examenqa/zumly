@@ -181,7 +181,7 @@ class _FinalizeWorker(QThread):
     # ── remux (runs in worker thread) ───────────────────────────────
 
     def _remux_with_correct_fps(self, actual_fps: float) -> float:
-        """Remux the recorded AVI so its metadata FPS matches reality.
+        """Remux the recording so its metadata FPS matches reality.
 
         Returns the correct FPS value.
         """
@@ -208,7 +208,7 @@ class _FinalizeWorker(QThread):
 
         if old_meta_fps > 0 and abs(correct_fps - old_meta_fps) / old_meta_fps < 0.05:
             logger.info(
-                "AVI metadata already correct (meta_fps=%.1f, real_fps=%.2f)",
+                "Video metadata already correct (meta_fps=%.1f, real_fps=%.2f)",
                 old_meta_fps, correct_fps,
             )
             return correct_fps
@@ -220,7 +220,7 @@ class _FinalizeWorker(QThread):
             logger.warning("ffmpeg not found — skipping remux")
             return actual_fps
 
-        temp_output = self._video_path + ".remux.avi"
+        temp_output = self._video_path + ".remux.mkv"
         cmd = [
             ffmpeg, "-y",
             "-r", f"{correct_fps:.4f}",
@@ -239,7 +239,7 @@ class _FinalizeWorker(QThread):
             if result.returncode == 0 and os.path.isfile(temp_output):
                 os.replace(temp_output, self._video_path)
                 logger.info(
-                    "Remuxed AVI: %d frames, fps %.1f → %.2f",
+                    "Remuxed video: %d frames, fps %.1f → %.2f",
                     real_frames, old_meta_fps, correct_fps,
                 )
                 return correct_fps
@@ -1349,11 +1349,11 @@ class MainWindow(QMainWindow):
         self._finalize_worker = None
 
     def _remux_with_correct_fps(self) -> None:
-        """Remux the recorded AVI so its metadata FPS matches reality.
+        """Remux the recording so its metadata FPS matches reality.
 
         The recording pipe tells ffmpeg ``-r {target_fps}`` (e.g. 60) but
         WGC only delivers changed frames, so the real write-rate is much
-        lower (e.g. 7 fps).  This makes the AVI header claim 60 fps for
+        lower (e.g. 7 fps).  This makes the container claim 60 fps for
         only ~270 frames → OpenCV thinks the video is ~4.5 s instead of
         ~37 s.  Every seek, playback, and export is then wrong.
 
@@ -1368,7 +1368,6 @@ class MainWindow(QMainWindow):
 
         import cv2 as _cv2
 
-        # Count real frames — the only reliable method for huffyuv AVI
         cap = _cv2.VideoCapture(self._video_path)
         if not cap.isOpened():
             return
@@ -1386,7 +1385,7 @@ class MainWindow(QMainWindow):
         # Skip remux if metadata is already close enough (within 5 %)
         if old_meta_fps > 0 and abs(correct_fps - old_meta_fps) / old_meta_fps < 0.05:
             logger.info(
-                "AVI metadata already correct (meta_fps=%.1f, real_fps=%.2f)",
+                "Video metadata already correct (meta_fps=%.1f, real_fps=%.2f)",
                 old_meta_fps, correct_fps,
             )
             self._actual_fps_override = correct_fps
@@ -1399,7 +1398,7 @@ class MainWindow(QMainWindow):
             logger.warning("ffmpeg not found — skipping remux")
             return
 
-        temp_output = self._video_path + ".remux.avi"
+        temp_output = self._video_path + ".remux.mkv"
         cmd = [
             ffmpeg, "-y",
             "-r", f"{correct_fps:.4f}",
@@ -1419,7 +1418,7 @@ class MainWindow(QMainWindow):
                 os.replace(temp_output, self._video_path)
                 self._actual_fps_override = correct_fps
                 logger.info(
-                    "Remuxed AVI: %d frames, fps %.1f → %.2f",
+                    "Remuxed video: %d frames, fps %.1f → %.2f",
                     real_frames, old_meta_fps, correct_fps,
                 )
             else:
