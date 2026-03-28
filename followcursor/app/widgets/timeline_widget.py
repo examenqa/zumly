@@ -129,6 +129,10 @@ class _TimelineTrack(QWidget):
         # Trim-handle snap-to-playhead state
         self._trim_snapped: bool = False
 
+        # View zoom/pan state
+        self._view_scale: float = 1.0   # 1.0 = fit-all
+        self._view_offset: float = 0.0  # left-edge offset in ms
+
     # ── trim-aware coordinate helpers ─────────────────────────────────
 
     @property
