@@ -67,11 +67,11 @@ def _precise_sleep(seconds: float) -> None:
 def _start_ffmpeg_writer(
     out_path: str, w: int, h: int, fps: int,
 ) -> Optional[subprocess.Popen]:
-    """Launch an ffmpeg subprocess that accepts raw BGRA on stdin → MKV.
+    """Launch an ffmpeg subprocess that accepts raw BGRA on stdin → MP4.
 
-    Uses H.264 (CRF 18, ultrafast) in a Matroska container for
+    Uses H.264 (CRF 18, ultrafast) in an MP4 container for
     near-lossless quality at a fraction of the file size compared to
-    raw/huffyuv codecs.  MKV properly handles H.264 NAL unit framing,
+    raw/huffyuv codecs.  MP4 properly handles H.264 NAL unit framing,
     avoiding the macroblock corruption that can occur with AVI.
 
     Returns the Popen object, or None if ffmpeg couldn't start.
@@ -300,7 +300,7 @@ class ScreenRecorder(QObject):
                 pass
 
         temp_path = os.path.join(
-            tempfile.gettempdir(), f"followcursor_{int(time.time())}.mkv"
+            tempfile.gettempdir(), f"followcursor_{int(time.time())}.mp4"
         )
         with self._lock:
             self._output_path = temp_path
@@ -453,8 +453,8 @@ class ScreenRecorder(QObject):
                 cur_w, cur_h = frame_dims
                 if is_recording and not was_recording:
                     out_path = output_path
-                    if not out_path.lower().endswith(".mkv"):
-                        out_path = output_path.rsplit(".", 1)[0] + ".mkv"
+                    if not out_path.lower().endswith(".mp4"):
+                        out_path = output_path.rsplit(".", 1)[0] + ".mp4"
                         with self._lock:
                             self._output_path = out_path
                     # Try ffmpeg pipe (fast, out-of-process encoding)
@@ -587,8 +587,8 @@ class ScreenRecorder(QObject):
                     # state transitions
                     if is_recording and not was_recording:
                         out_path = output_path
-                        if not out_path.lower().endswith(".mkv"):
-                            out_path = output_path.rsplit(".", 1)[0] + ".mkv"
+                        if not out_path.lower().endswith(".mp4"):
+                            out_path = output_path.rsplit(".", 1)[0] + ".mp4"
                             with self._lock:
                                 self._output_path = out_path
                         writer_proc = _start_ffmpeg_writer(out_path, w, h, record_fps)
@@ -709,8 +709,8 @@ class ScreenRecorder(QObject):
 
                     if is_recording and not was_recording:
                         out_path = output_path
-                        if not out_path.lower().endswith(".mkv"):
-                            out_path = output_path.rsplit(".", 1)[0] + ".mkv"
+                        if not out_path.lower().endswith(".mp4"):
+                            out_path = output_path.rsplit(".", 1)[0] + ".mp4"
                             with self._lock:
                                 self._output_path = out_path
                         record_fps = min(self._fps, 30)

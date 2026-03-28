@@ -220,7 +220,7 @@ class _FinalizeWorker(QThread):
             logger.warning("ffmpeg not found — skipping remux")
             return actual_fps
 
-        temp_output = self._video_path + ".remux.mkv"
+        temp_output = self._video_path + ".remux.mp4"
         cmd = [
             ffmpeg, "-y",
             "-r", f"{correct_fps:.4f}",
@@ -1398,7 +1398,7 @@ class MainWindow(QMainWindow):
             logger.warning("ffmpeg not found — skipping remux")
             return
 
-        temp_output = self._video_path + ".remux.mkv"
+        temp_output = self._video_path + ".remux.mp4"
         cmd = [
             ffmpeg, "-y",
             "-r", f"{correct_fps:.4f}",
