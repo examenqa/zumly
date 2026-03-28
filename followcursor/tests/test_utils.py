@@ -115,12 +115,15 @@ class TestEncoderDetection:
         # Reset cache
         app.utils._available_encoders = None
 
-    def test_best_hw_encoder_returns_string(self) -> None:
+    def test_best_hw_encoder_prefers_hardware(self) -> None:
+        """best_hw_encoder should return the first encoder from detection."""
         import app.utils
         app.utils._available_encoders = None
         enc = best_hw_encoder()
-        assert isinstance(enc, str)
         assert enc in ENCODER_PROFILES
+        # Must match the first entry from detect (preference order)
+        detected = detect_available_encoders()
+        assert enc == detected[0]
         app.utils._available_encoders = None
 
     def test_detection_caching(self) -> None:
@@ -150,10 +153,16 @@ class TestGifExport:
         assert isinstance(GIF_FPS, int)
         assert GIF_FPS > 0
 
-    def test_build_gif_args_returns_list(self) -> None:
+    def test_build_gif_args_has_palette_pipeline(self) -> None:
+        """GIF args must include the palettegen+paletteuse filtergraph."""
         args = build_gif_args()
-        assert isinstance(args, list)
-        assert len(args) > 0
+        assert "-vf" in args
+        vf_value = args[args.index("-vf") + 1]
+        # Must contain the split→palettegen→paletteuse pipeline
+        assert "palettegen" in vf_value
+        assert "paletteuse" in vf_value
+        assert "split" in vf_value
+        assert f"fps={GIF_FPS}" in vf_value
 
     def test_build_gif_args_contains_vf(self) -> None:
         args = build_gif_args()

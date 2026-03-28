@@ -96,12 +96,14 @@ class TestAnalyzeEdgeCases:
         assert analyze_activity([], MONITOR) == []
 
     def test_stationary_mouse_no_keys_no_clicks(self) -> None:
-        """Purely stationary mouse with no keys/clicks may still produce
-        keyframes from the fallback path, but should not crash."""
+        """Stationary mouse with no key/click activity → zero keyframes.
+
+        The analyzer only generates zoom events from typing zones (keys
+        while mouse is still) or click clusters.  Without either signal
+        there is nothing to zoom into."""
         track = _make_track(5000)
         kfs = analyze_activity(track, MONITOR)
-        # Should not crash; may or may not produce keyframes
-        assert isinstance(kfs, list)
+        assert kfs == []
 
 
 # ── analyze_activity — typing detection ─────────────────────────────

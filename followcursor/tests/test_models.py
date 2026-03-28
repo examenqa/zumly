@@ -167,25 +167,35 @@ class TestZoomKeyframe:
         kf = ZoomKeyframe.from_dict(d)
         assert kf.speed == 1.0
 
-    def test_speed_validation_negative(self) -> None:
-        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": -1.0}
-        kf = ZoomKeyframe.from_dict(d)
-        assert kf.speed == 1.0
+    def test_speed_clamped_for_invalid_values(self) -> None:
+        """Speed ≤ 0 or non-numeric → default 1.0; > 10 → clamped to 10."""
+        base = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600}
+        cases = [
+            # (input_speed, expected_speed)
+            (-100.0, 1.0),   # far below valid range
+            (-1.0, 1.0),     # negative
+            (0, 1.0),        # zero (would cause division-by-zero)
+            ("fast", 1.0),   # non-numeric string
+            (None, 1.0),     # None
+            (99.0, 10.0),    # above max
+            (10.1, 10.0),    # just above max
+        ]
+        for speed_in, expected in cases:
+            d = {**base, "speed": speed_in}
+            kf = ZoomKeyframe.from_dict(d)
+            assert kf.speed == expected, (
+                f"speed={speed_in!r} should become {expected}, got {kf.speed}"
+            )
 
-    def test_speed_validation_zero(self) -> None:
-        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": 0}
-        kf = ZoomKeyframe.from_dict(d)
-        assert kf.speed == 1.0
-
-    def test_speed_validation_exceeds_max(self) -> None:
-        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": 99.0}
-        kf = ZoomKeyframe.from_dict(d)
-        assert kf.speed == 10.0
-
-    def test_speed_validation_invalid_type(self) -> None:
-        d = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600, "speed": "fast"}
-        kf = ZoomKeyframe.from_dict(d)
-        assert kf.speed == 1.0
+    def test_speed_preserved_for_valid_values(self) -> None:
+        """Valid speeds in (0, 10] must survive from_dict roundtrip."""
+        base = {"id": "abc", "timestamp": 10, "zoom": 2.0, "x": 0.5, "y": 0.5, "duration": 600}
+        for speed_in in [0.5, 1.0, 1.5, 5.0, 9.99, 10.0]:
+            d = {**base, "speed": speed_in}
+            kf = ZoomKeyframe.from_dict(d)
+            assert kf.speed == speed_in, (
+                f"valid speed={speed_in} should be preserved, got {kf.speed}"
+            )
 
 
 # ── RecordingSession ────────────────────────────────────────────────
@@ -445,8 +455,12 @@ class TestRecordingSessionVideoSegments:
 
 
 class TestConstants:
-    def test_default_fps(self) -> None:
+    def test_default_fps_and_interval_are_consistent(self) -> None:
+        """Mouse polling interval should approximate 1000/FPS."""
         assert DEFAULT_FPS == 60
-
-    def test_default_mouse_interval(self) -> None:
         assert DEFAULT_MOUSE_INTERVAL == 16
+        # 16ms polling → 62.5 Hz, close to 60 fps target
+        polling_hz = 1000.0 / DEFAULT_MOUSE_INTERVAL
+        assert abs(polling_hz - DEFAULT_FPS) < 5, (
+            f"Polling rate {polling_hz:.1f} Hz does not approximate FPS {DEFAULT_FPS}"
+        )

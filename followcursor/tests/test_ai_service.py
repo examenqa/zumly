@@ -220,8 +220,18 @@ class TestParseZoomResponse:
         assert zoom_out.timestamp <= 10000.0
 
     def test_zoom_in_time_not_negative(self):
+        """Even with a very early start_ms the zoom-in time must clamp to 0."""
         response = json.dumps([
             {"start_ms": 100, "x": 0.5, "y": 0.5, "zoom": 1.5, "hold_ms": 1000, "reason": "Start"},
         ])
         keyframes = _parse_zoom_response(response, 1.5, 10000.0)
-        assert all(kf.timestamp >= 0 for kf in keyframes)
+        # Must produce a zoom-in and a zoom-out keyframe
+        assert len(keyframes) == 2
+        zoom_in = keyframes[0]
+        zoom_out = keyframes[1]
+        # Zoom-in time: max(0, start_ms - transition - anticipation) = max(0, 100-600-100) = 0
+        assert zoom_in.timestamp == 0.0
+        assert zoom_in.zoom == 1.5
+        # Zoom-out should start at start_ms + hold_ms = 1100
+        assert zoom_out.timestamp == 1100.0
+        assert zoom_out.zoom == 1.0
