@@ -67,7 +67,12 @@ def _precise_sleep(seconds: float) -> None:
 def _start_ffmpeg_writer(
     out_path: str, w: int, h: int, fps: int,
 ) -> Optional[subprocess.Popen]:
-    """Launch an ffmpeg subprocess that accepts raw BGRA on stdin → lossless AVI.
+    """Launch an ffmpeg subprocess that accepts raw BGRA on stdin → AVI.
+
+    Uses H.264 (CRF 18, ultrafast) for near-lossless quality at a
+    fraction of the file size compared to raw/huffyuv codecs.  For a
+    4K@60fps recording this reduces temp files from ~50 GB/min to
+    well under 1 GB/min.
 
     Returns the Popen object, or None if ffmpeg couldn't start.
     """
@@ -81,7 +86,11 @@ def _start_ffmpeg_writer(
             "-s", f"{w}x{h}",
             "-r", str(fps),
             "-i", "pipe:0",
-            "-c:v", "huffyuv",           # very fast lossless, ~2:1 compression
+            "-c:v", "libx264",
+            "-preset", "ultrafast",      # real-time encoding speed
+            "-crf", "18",                # near-lossless quality
+            "-tune", "zerolatency",      # minimal buffering for live capture
+            "-pix_fmt", "yuv420p",       # standard pixel format
             out_path,
         ]
         proc = subprocess.Popen(
