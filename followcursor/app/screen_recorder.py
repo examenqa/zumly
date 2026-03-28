@@ -91,21 +91,21 @@ def _start_ffmpeg_writer(
             "-crf", "18",                # near-lossless quality
             "-tune", "zerolatency",      # minimal buffering for live capture
             "-pix_fmt", "yuv420p",       # standard pixel format
+            "-movflags", "+frag_keyframe+empty_moov",  # fragmented MP4: always valid
             out_path,
         ]
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,      # capture errors for diagnostics
+            stderr=subprocess.DEVNULL,   # avoid buffer deadlock on Windows
             **_subprocess_kwargs(),
         )
         # Give ffmpeg a moment to fail on bad args
         import time as _t
         _t.sleep(0.05)
         if proc.poll() is not None:
-            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-            logger.error("ffmpeg exited immediately: %s", stderr[:300])
+            logger.error("ffmpeg exited immediately (rc=%s)", proc.returncode)
             return None
         return proc
     except Exception as exc:
@@ -119,21 +119,19 @@ def _stop_ffmpeg_writer(proc: Optional[subprocess.Popen]) -> None:
         return
     try:
         if proc.stdin and not proc.stdin.closed:
+            try:
+                proc.stdin.flush()
+            except OSError:
+                pass
             proc.stdin.close()
-        proc.wait(timeout=15)
+        proc.wait(timeout=30)
     except Exception:
         try:
             proc.kill()
         except Exception:
             pass
-    # Log any errors
-    if proc.stderr:
-        try:
-            tail = proc.stderr.read().decode(errors="replace").strip()
-            if tail and proc.returncode != 0:
-                logger.warning("ffmpeg stderr: %s", tail[-300:])
-        except Exception:
-            pass
+    if proc.returncode and proc.returncode != 0:
+        logger.warning("ffmpeg exited with rc=%s", proc.returncode)
 
 
 class ScreenRecorder(QObject):
