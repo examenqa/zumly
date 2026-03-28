@@ -288,6 +288,17 @@ class ScreenRecorder(QObject):
         so all timestamps are relative to the same origin.  If 0 the current
         wall-clock is used.
         """
+        # Clean up previous temp recording file (if any) to avoid
+        # accumulating large orphaned files in %TEMP%.
+        with self._lock:
+            old_path = self._output_path
+        if old_path and os.path.isfile(old_path):
+            try:
+                os.remove(old_path)
+                logger.info("Cleaned up previous temp recording: %s", old_path)
+            except OSError:
+                pass
+
         temp_path = os.path.join(
             tempfile.gettempdir(), f"followcursor_{int(time.time())}.avi"
         )

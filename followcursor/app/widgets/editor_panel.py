@@ -899,12 +899,13 @@ class EditorPanel(QWidget):
     def _show_ai_settings(self) -> None:
         """Open the AI settings dialog."""
         from ..ai_service import AISettings
+        from ..credentials import protect, unprotect
         from PySide6.QtCore import QSettings
 
         settings = QSettings("FollowCursor", "FollowCursor")
         current = AISettings(
             endpoint=settings.value("ai/endpoint", ""),
-            api_key=settings.value("ai/apiKey", ""),
+            api_key=unprotect(settings.value("ai/apiKey", "")),
             chat_model=settings.value("ai/chatModel", ""),
             tts_voice=settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
         )
@@ -913,7 +914,7 @@ class EditorPanel(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             result = dlg.get_settings()
             settings.setValue("ai/endpoint", result.endpoint)
-            settings.setValue("ai/apiKey", result.api_key)
+            settings.setValue("ai/apiKey", protect(result.api_key))
             settings.setValue("ai/chatModel", result.chat_model)
             self.ai_settings_changed.emit()
             logger.info("AI settings updated")

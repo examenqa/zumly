@@ -235,3 +235,15 @@ class TestParseZoomResponse:
         # Zoom-out should start at start_ms + hold_ms = 1100
         assert zoom_out.timestamp == 1100.0
         assert zoom_out.zoom == 1.0
+
+    def test_excessive_sections_capped(self):
+        """AI returning more than 50 sections should be truncated."""
+        sections = [
+            {"start_ms": i * 500, "x": 0.5, "y": 0.5, "zoom": 1.5,
+             "hold_ms": 200, "reason": f"s{i}"}
+            for i in range(100)
+        ]
+        response = json.dumps(sections)
+        keyframes = _parse_zoom_response(response, 1.5, 100000.0)
+        # Each section produces 2 keyframes (in + out); capped at 50 sections → 100 kfs
+        assert len(keyframes) <= 50 * 2

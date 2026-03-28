@@ -214,6 +214,16 @@ class TestLoadProject:
         result = load_project(out)
         assert result["frame_preset"] is None
 
+    def test_zip_slip_rejected(self, tmp_dir) -> None:
+        """A crafted ZIP with path-traversal entries must be rejected."""
+        malicious = str(tmp_dir / "evil.fcproj")
+        with zipfile.ZipFile(malicious, "w") as zf:
+            zf.writestr(_JSON_NAME, '{"id":"x","startTime":0,"duration":1,"mouseTrack":[],"keyframes":[]}')
+            # Entry that tries to escape the extraction directory
+            zf.writestr("../../escape.txt", "pwned")
+        with pytest.raises(ValueError, match="Malicious path"):
+            load_project(malicious)
+
 
 # ── metadata_only save ──────────────────────────────────────────────
 

@@ -9,6 +9,7 @@ A .fcproj file is a ZIP archive containing:
 This lets users save their work and resume editing later.
 """
 
+import atexit
 import json
 import logging
 import os
@@ -18,7 +19,23 @@ import tempfile
 import time
 import zipfile
 import zlib
-from typing import Optional
+from typing import List, Optional
+
+# Track extraction directories so they can be cleaned up on exit.
+_extract_dirs: List[str] = []
+
+
+def _cleanup_extract_dirs() -> None:
+    """Remove temporary extraction directories on interpreter exit."""
+    for d in _extract_dirs:
+        try:
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_extract_dirs)
 
 from .models import RecordingSession
 from .backgrounds import BackgroundPreset
@@ -249,8 +266,18 @@ def load_project(input_path: str) -> dict:
 
     # Extract to a temp directory
     extract_dir = tempfile.mkdtemp(prefix="followcursor_proj_")
+    _extract_dirs.append(extract_dir)
 
     with zipfile.ZipFile(input_path, "r") as zf:
+        # Validate all member paths to prevent Zip Slip (CWE-22):
+        # reject entries whose resolved path escapes the extract dir.
+        for member in zf.infolist():
+            target = os.path.realpath(os.path.join(extract_dir, member.filename))
+            if not target.startswith(os.path.realpath(extract_dir) + os.sep) and \
+               target != os.path.realpath(extract_dir):
+                raise ValueError(
+                    f"Malicious path in project file: {member.filename}"
+                )
         zf.extractall(extract_dir)
 
     json_path = os.path.join(extract_dir, _JSON_NAME)

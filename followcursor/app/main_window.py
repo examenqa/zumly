@@ -547,9 +547,10 @@ class _VoiceoverDialog(QDialog):
 
         # Load AI settings for endpoint + key
         from PySide6.QtCore import QSettings
+        from .credentials import unprotect
         settings = QSettings("FollowCursor", "FollowCursor")
         endpoint = settings.value("ai/endpoint", "")
-        api_key = settings.value("ai/apiKey", "")
+        api_key = unprotect(settings.value("ai/apiKey", ""))
         if not endpoint or not api_key:
             self._status_label.setText("Configure AI Settings first (endpoint + API key).")
             self._status_label.setVisible(True)
@@ -1653,9 +1654,10 @@ class MainWindow(QMainWindow):
     def _load_ai_settings(self):
         """Load AI settings from QSettings."""
         from .ai_service import AISettings
+        from .credentials import unprotect
         return AISettings(
             endpoint=self._settings.value("ai/endpoint", ""),
-            api_key=self._settings.value("ai/apiKey", ""),
+            api_key=unprotect(self._settings.value("ai/apiKey", "")),
             chat_model=self._settings.value("ai/chatModel", ""),
             tts_voice=self._settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
         )
@@ -3384,6 +3386,18 @@ class MainWindow(QMainWindow):
         for w in QApplication.topLevelWidgets():
             if w is not self:
                 w.close()
+
+        # Clean up temporary recording file before force-quit
+        # (os._exit skips atexit handlers, so we do it explicitly)
+        if self._video_path and os.path.isfile(self._video_path):
+            try:
+                os.remove(self._video_path)
+            except OSError:
+                pass
+
+        # Clean up project extraction directories
+        from .project_file import _cleanup_extract_dirs
+        _cleanup_extract_dirs()
 
         event.accept()
         # Force quit — ensures the process exits even with leftover threads

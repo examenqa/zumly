@@ -330,6 +330,15 @@ def _parse_zoom_response(
     if not isinstance(sections, list):
         raise ValueError("AI response is not a JSON array")
 
+    # Cap the number of sections to prevent a malicious/confused LLM
+    # from returning thousands of keyframes that cause memory pressure.
+    _MAX_AI_SECTIONS = 50
+    if len(sections) > _MAX_AI_SECTIONS:
+        logger.warning(
+            "AI returned %d sections, capping to %d", len(sections), _MAX_AI_SECTIONS
+        )
+        sections = sections[:_MAX_AI_SECTIONS]
+
     transition_ms = 600.0
     keyframes: List[ZoomKeyframe] = []
 
@@ -546,7 +555,7 @@ def _extract_region(endpoint: str) -> str:
     try:
         req = urllib.request.Request(endpoint, method="HEAD")
         with urllib.request.urlopen(req, timeout=5) as resp:
-            region = resp.headers.get("x-]]ms-region", "")
+            region = resp.headers.get("x-ms-region", "")
             if region:
                 return region.lower()
     except Exception:

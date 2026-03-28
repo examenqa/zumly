@@ -26,6 +26,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 import bisect
 
 logger = logging.getLogger(__name__)
@@ -335,7 +336,10 @@ def _merge_voiceover_segments(
     # to the full recording, so we shift them by trim_start_ms.
     offset_ms = trim_start_ms if trim_start_ms > 0 else 0.0
 
-    output_path = os.path.join(tempfile.gettempdir(), "followcursor_vo_merged.wav")
+    output_path = os.path.join(
+        tempfile.gettempdir(),
+        f"followcursor_vo_merged_{os.getpid()}_{int(time.time())}.wav",
+    )
 
     if len(segments) == 1:
         seg = segments[0]
