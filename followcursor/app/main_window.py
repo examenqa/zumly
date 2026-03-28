@@ -132,7 +132,7 @@ class _FinalizeWorker(QThread):
     def __init__(
         self,
         recorder: "ScreenRecorder",
-        mouse_tracker: "MouseTracker",
+        mouse_positions: list,
         keyboard_tracker: "KeyboardTracker",
         click_tracker: "ClickTracker",
         video_path: str,
@@ -142,7 +142,7 @@ class _FinalizeWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self._recorder = recorder
-        self._mouse_tracker = mouse_tracker
+        self._mouse_positions = mouse_positions
         self._keyboard_tracker = keyboard_tracker
         self._click_tracker = click_tracker
         self._video_path = video_path
@@ -153,7 +153,7 @@ class _FinalizeWorker(QThread):
     def run(self) -> None:  # noqa: D401 — required by QThread
         # These calls may block briefly (capture-thread join, hook-thread joins).
         self._recorder.stop_capture()
-        mouse_track = self._mouse_tracker.stop()
+        mouse_track = self._mouse_positions  # already stopped on main thread
         key_events = self._keyboard_tracker.stop()
         click_events = self._click_tracker.stop()
         frame_timestamps = self._recorder.frame_timestamps
@@ -1264,6 +1264,10 @@ class MainWindow(QMainWindow):
         self._preview.set_recording_mode(False)  # restore normal preview
         self._dur_timer.stop()
 
+        # Stop mouse tracker here (main thread) — its QTimer must not be
+        # stopped from _FinalizeWorker's background thread.
+        self._mouse_positions = self._mouse_tracker.stop()
+
         try:
             # Snapshot wall-clock duration and signal recorder to stop writing
             # frames (non-blocking — just toggles a flag).
@@ -1296,7 +1300,7 @@ class MainWindow(QMainWindow):
         """Kick off heavy post-recording work in a background thread."""
         self._finalize_worker = _FinalizeWorker(
             recorder=self._recorder,
-            mouse_tracker=self._mouse_tracker,
+            mouse_positions=self._mouse_positions,
             keyboard_tracker=self._keyboard_tracker,
             click_tracker=self._click_tracker,
             video_path=self._video_path,
