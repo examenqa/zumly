@@ -150,14 +150,6 @@ class _TimelineTrack(QWidget):
         """Effective visible duration (ms)."""
         return trim_eff_dur(self.trim_start_ms, self.trim_end_ms, self.duration)
 
-    def _ms_to_x(self, time_ms: float, w: int) -> float:
-        """Convert absolute time (ms) to x-pixel within the trimmed viewport."""
-        return trim_ms_to_x(time_ms, w, self.trim_start_ms, self.trim_end_ms, self.duration)
-
-    def _x_to_ms(self, x: float, w: int) -> float:
-        """Convert x-pixel position to absolute time (ms) in the trimmed viewport."""
-        return trim_x_to_ms(x, w, self.trim_start_ms, self.trim_end_ms, self.duration)
-
     _MENU_STYLE = (
         "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
         "        border-radius: 6px; padding: 4px 0; }"
@@ -168,11 +160,11 @@ class _TimelineTrack(QWidget):
 
     # ── coordinate mapping helpers ────────────────────────────────
 
-    def _ms_to_x(self, ms: float) -> float:
+    def _ms_to_x(self, ms: float, _w: int | None = None) -> float:
         """Map a time in milliseconds to a widget x-coordinate, accounting for view zoom/pan."""
         return view_ms_to_x(ms, self.duration, self._view_scale, self._view_offset, self.width())
 
-    def _x_to_ms(self, x: float) -> float:
+    def _x_to_ms(self, x: float, _w: int | None = None) -> float:
         """Map a widget x-coordinate to a time in milliseconds, accounting for view zoom/pan."""
         return view_x_to_ms(x, self.duration, self._view_scale, self._view_offset, self.width())
 
