@@ -4,6 +4,23 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] — 2026-03-28
+
+### Changed
+
+- **Recording compression** — switched intermediate recording codec from huffyuv to H.264 (CRF 18, ultrafast), reducing temp file sizes from ~50 GB/min to under 1 GB/min for 4K recordings
+
+### Fixed
+
+- **Zip Slip vulnerability** — project file loading now validates all ZIP member paths before extraction, preventing path traversal attacks (CWE-22)
+- **API key storage** — AI API keys are now encrypted with Windows DPAPI before storing in the registry, instead of plaintext
+- **AI response cap** — AI zoom analysis responses are capped at 50 sections to prevent excessive memory usage from malformed LLM responses
+- **Temp file leak** — previous recording temp files are cleaned up when starting a new recording
+- **Temp file collision** — voiceover merge now uses unique temp filenames instead of a fixed path
+- **Temp directory leak** — project extraction directories are tracked and cleaned up on exit
+- **Region header typo** — fixed `x-ms-region` header name in Azure Speech region extraction
+- **Test quality** — strengthened test assertions to verify actual logic behavior instead of trivially passing
+
 ## [0.7.1] — 2026-03-27
 
 ### Changed
