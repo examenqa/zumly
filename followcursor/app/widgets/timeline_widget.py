@@ -1079,10 +1079,10 @@ class _TimelineTrack(QWidget):
             self._selected_video_seg_id = ""
             if self.duration > 0:
                 click_time_ms = self._x_to_ms(mx)
-                ratio = max(0.0, min(1.0, click_time_ms / self.duration))
+                click_time_ms = max(0.0, min(click_time_ms, self.duration))
             else:
-                ratio = 0.0
-            self.clicked.emit(ratio)
+                click_time_ms = 0.0
+            self.clicked.emit(click_time_ms)
             self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
