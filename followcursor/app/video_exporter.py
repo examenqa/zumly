@@ -212,7 +212,9 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
                 scr_x: int, scr_y: int, scr_w: int, scr_h: int,
                 zoom_video_only: bool = False,
                 bg_canvas: np.ndarray | None = None,
-                device_mask_u8: np.ndarray | None = None) -> np.ndarray:
+                device_mask_u8: np.ndarray | None = None,
+                _buf_canvas: np.ndarray | None = None,
+                _buf_result: np.ndarray | None = None) -> np.ndarray:
     """Fast compositor — copies pre-rendered bezel, places video in screen,
     then applies zoom.
 
@@ -223,8 +225,15 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
     (the background-only layer without bezel).
     *device_mask_u8* — pre-computed mask (255 where bezel differs from
     background).  When ``None``, computed on the fly (slower).
+    *_buf_canvas* / *_buf_result* — optional pre-allocated buffers
+    (same shape as base_canvas / bg_canvas) to avoid per-frame copies.
     """
-    canvas = base_canvas.copy()
+    # Reuse pre-allocated buffer instead of copying per-frame
+    if _buf_canvas is not None and _buf_canvas.shape == base_canvas.shape:
+        np.copyto(_buf_canvas, base_canvas)
+        canvas = _buf_canvas
+    else:
+        canvas = base_canvas.copy()
     fh, fw = frame_bgr.shape[:2]
 
     if scr_w <= 0 or scr_h <= 0:
@@ -293,7 +302,11 @@ def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
         )
 
         # Composite: static background + zoomed device on top
-        result = bg_canvas.copy()
+        if _buf_result is not None and bg_canvas is not None and _buf_result.shape == bg_canvas.shape:
+            np.copyto(_buf_result, bg_canvas)
+            result = _buf_result
+        else:
+            result = bg_canvas.copy()
         if device_mask_u8 is None:
             device_mask_u8 = (np.any(base_canvas != bg_canvas, axis=2)
                               .astype(np.uint8) * 255)
@@ -692,7 +705,6 @@ class VideoExporter(QObject):
             original_encoder_id = encoder_id
 
             # Build merged audio from voiceover segments (if any)
-            _merged_audio_path = ""
             _has_audio = False
             if voiceover_segments and not _is_gif:
                 ready = [s for s in voiceover_segments if s.audio_path and os.path.isfile(s.audio_path)]
@@ -830,7 +842,7 @@ class VideoExporter(QObject):
                             break
                         try:
                             proc.stdin.write(data)
-                        except Exception:
+                        except (BrokenPipeError, OSError, ValueError):
                             pipe_err.set()
                             break
 
@@ -894,6 +906,10 @@ class VideoExporter(QObject):
                 out_idx = 0
                 t_ms = eff_ts  # recording-time cursor (advances by speed-adjusted intervals)
 
+                # Pre-allocate reusable frame buffers to avoid per-frame copies
+                _buf_canvas = base_canvas.copy()
+                _buf_result = bg.copy() if bg is not None else None
+
                 while True:
                     if t_ms > eff_te + 0.0001:
                         break
@@ -955,6 +971,8 @@ class VideoExporter(QObject):
                         zoom_video_only=fp.is_none,
                         bg_canvas=bg,
                         device_mask_u8=_device_mask_u8,
+                        _buf_canvas=_buf_canvas,
+                        _buf_result=_buf_result,
                     )
                     if not _enqueue(composed.tobytes()):
                         break
@@ -997,6 +1015,8 @@ class VideoExporter(QObject):
                                 zoom_video_only=fp.is_none,
                                 bg_canvas=bg,
                                 device_mask_u8=_device_mask_u8,
+                                _buf_canvas=_buf_canvas,
+                                _buf_result=_buf_result,
                             )
                             if not _enqueue(composed.tobytes()):
                                 break
@@ -1053,6 +1073,26 @@ class VideoExporter(QObject):
 
             proc = _launch_ffmpeg(encoder_id)
 
+            def _kill_proc(p: subprocess.Popen) -> None:
+                """Safely terminate an ffmpeg process and close its pipes."""
+                if p is None:
+                    return
+                try:
+                    if p.stdin and not p.stdin.closed:
+                        p.stdin.close()
+                except OSError:
+                    pass
+                try:
+                    p.kill()
+                    p.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                try:
+                    if p.stderr and not p.stderr.closed:
+                        p.stderr.close()
+                except OSError:
+                    pass
+
             # Check for immediate launch failure
             import time as _time
             _time.sleep(0.1)
@@ -1069,19 +1109,7 @@ class VideoExporter(QObject):
                     self.status.emit(f"{encoder_display_name(encoder_id)} failed, trying {fb_name}\u2026")
                     logger.info("Trying fallback encoder: %s", fallback_id)
                     encoder_id = fallback_id
-                    # Kill the previous (already-exited) process to release handles
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
-                    if proc.stdin and not proc.stdin.closed:
-                        proc.stdin.close()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
-                    if proc.stderr:
-                        proc.stderr.close()
+                    _kill_proc(proc)
                     proc = _launch_ffmpeg(encoder_id)
                     _time.sleep(0.1)
                     if proc.poll() is None:
@@ -1090,6 +1118,7 @@ class VideoExporter(QObject):
                     else:
                         logger.warning("Fallback encoder %s also failed immediately", encoder_id)
                 if not launched:
+                    _kill_proc(proc)
                     self.error.emit("All encoders failed to launch")
                     cap.release()
                     return
@@ -1122,19 +1151,7 @@ class VideoExporter(QObject):
                     fb_name = encoder_display_name(fallback_id)
                     self.status.emit(f"{encoder_display_name(failed_id)} failed mid-export, trying {fb_name}\u2026")
                     encoder_id = fallback_id
-                    # Kill the previous failed process before launching a replacement
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
-                    if proc.stdin and not proc.stdin.closed:
-                        proc.stdin.close()
-                    if proc.stderr and not proc.stderr.closed:
-                        proc.stderr.close()
+                    _kill_proc(proc)
                     proc = _launch_ffmpeg(encoder_id)
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     pipe_ok = _encode_frames(proc)
@@ -1167,21 +1184,10 @@ class VideoExporter(QObject):
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
-            # Terminate any live ffmpeg process to avoid zombie processes
-            try:
-                if proc is not None:
-                    if proc.stdin and not proc.stdin.closed:
-                        proc.stdin.close()
-                    if proc.poll() is None:
-                        proc.kill()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
-                    if proc.stderr and not proc.stderr.closed:
-                        proc.stderr.close()
-            except Exception:
-                pass
+            # Ensure ffmpeg process is not leaked on any error path
+            if proc is not None and proc.poll() is None:
+                logger.warning("Cleaning up orphaned ffmpeg process (pid=%s)", proc.pid)
+                _kill_proc(proc)
             # Clean up merged voiceover temp file
             if _merged_audio_path and os.path.isfile(_merged_audio_path):
                 try:

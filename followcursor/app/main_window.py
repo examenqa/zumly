@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import threading
 import uuid
 from typing import Optional, List
 
@@ -585,6 +586,7 @@ class _VoiceoverDialog(QDialog):
         )
         self._synth_worker.done.connect(self._on_preview_synth_done)
         self._synth_worker.error.connect(self._on_preview_synth_error)
+        self._synth_worker.finished.connect(self._synth_worker.deleteLater)
         self._synth_worker.start()
 
     def _on_preview_synth_done(self, output_path: str) -> None:
@@ -703,6 +705,7 @@ class MainWindow(QMainWindow):
         self._voiceover_segments: list = []  # List[VoiceoverSegment]
         self._video_segments: List[VideoSegment] = []  # timeline video segments
         self._vo_played_ids: set = set()  # track which voiceovers have played this playback
+        self._vo_lock = threading.Lock()  # protect _vo_played_ids access
 
         self._recording = False
         self._selected_monitor: int = 0  # 0 = none selected
@@ -712,6 +715,7 @@ class MainWindow(QMainWindow):
         self._view: str = "record"  # "record" | "edit"
         self._rec_duration_ms: float = 0
         self._mouse_track: List[MousePosition] = []
+        self._mouse_track_timestamps: List[float] = []
         self._key_events: List[KeyEvent] = []
         self._click_events: List[ClickEvent] = []
         self._video_path: str = ""
@@ -1185,11 +1189,7 @@ class MainWindow(QMainWindow):
 
         # Session data
         self._mouse_track = []
-        self._key_events = []
-        self._click_events = []
-        self._frame_timestamps = []
-        self._rec_duration_ms = 0
-        self._playback_time = 0
+        self._mouse_track_timestamps = []
         self._actual_fps_override = 0.0
 
         # Voiceover / trim / project / video segments
@@ -1322,6 +1322,7 @@ class MainWindow(QMainWindow):
         """Called on the GUI thread when the finalize worker finishes."""
         try:
             self._mouse_track = mouse_track
+            self._mouse_track_timestamps = [mp.timestamp for mp in self._mouse_track]
             self._key_events = key_events
             self._click_events = click_events
             self._zoom_engine.click_events = self._click_events
@@ -2063,16 +2064,22 @@ class MainWindow(QMainWindow):
         normalized pan coordinates (0-1).  Falls back to (0.5, 0.5)."""
         if not self._mouse_track or not self._monitor_rect:
             return 0.5, 0.5
-        # Binary-ish search: find the sample closest to time_ms
-        best = self._mouse_track[0]
-        best_delta = abs(best.timestamp - time_ms)
-        for mp in self._mouse_track:
-            d = abs(mp.timestamp - time_ms)
-            if d < best_delta:
-                best = mp
-                best_delta = d
-            elif mp.timestamp > time_ms:
-                break
+        import bisect
+        # Use pre-built timestamp cache for O(log n) lookup without per-call allocation
+        timestamps = self._mouse_track_timestamps
+        idx = bisect.bisect_left(timestamps, time_ms)
+        # Pick the closer of the two surrounding samples
+        if idx == 0:
+            best = self._mouse_track[0]
+        elif idx >= len(self._mouse_track):
+            best = self._mouse_track[-1]
+        else:
+            before = self._mouse_track[idx - 1]
+            after = self._mouse_track[idx]
+            if (time_ms - before.timestamp) <= (after.timestamp - time_ms):
+                best = before
+            else:
+                best = after
         mon = self._monitor_rect
         px = (best.x - mon.get("left", 0)) / max(mon.get("width", 1), 1)
         py = (best.y - mon.get("top", 0)) / max(mon.get("height", 1), 1)
@@ -2185,7 +2192,7 @@ class MainWindow(QMainWindow):
         moved_kf = kfs[moved_idx]
         if abs(moved_kf.timestamp - new_time_ms) > 0.5:
             # Debounce: only push if we haven't already pushed for this drag
-            if not hasattr(self, '_drag_undo_pushed') or not self._drag_undo_pushed:
+            if not self._drag_undo_pushed:
                 self._zoom_engine.push_undo()
                 self._drag_undo_pushed = True
             self._mark_dirty()
@@ -2461,11 +2468,37 @@ class MainWindow(QMainWindow):
             self._refresh_editor()
 
     def _delete_pan_point(self, kf_id: str) -> None:
-        """Delete a pan point keyframe."""
+        """Delete a pan point keyframe and offer to re-place it."""
+        # Find the keyframe before deleting, so we can create a replacement
+        deleted_kf = None
+        for kf in self._zoom_engine.keyframes:
+            if kf.id == kf_id:
+                deleted_kf = kf
+                break
+        if deleted_kf is None:
+            return
+
         self._zoom_engine.push_undo()
+
+        # Create a replacement keyframe with a new ID at the same position
+        from .models import ZoomKeyframe
+        new_kf = ZoomKeyframe.create(
+            timestamp=deleted_kf.timestamp,
+            zoom=deleted_kf.zoom,
+            x=deleted_kf.x,
+            y=deleted_kf.y,
+            duration=deleted_kf.duration,
+            reason=deleted_kf.reason,
+            speed=deleted_kf.speed,
+        )
+
+        # Remove old, insert new
         self._zoom_engine.keyframes = [
             kf for kf in self._zoom_engine.keyframes if kf.id != kf_id
         ]
+        self._zoom_engine.keyframes.append(new_kf)
+        self._zoom_engine.keyframes.sort(key=lambda k: k.timestamp)
+
         self._mark_dirty()
         self._zoom_engine.update(self._playback_time)
         self._preview.set_zoom(
@@ -2474,7 +2507,7 @@ class MainWindow(QMainWindow):
             self._zoom_engine.current_pan_y,
         )
         self._refresh_editor()
-        self._centroid_target_kf_id = kf_id
+        self._centroid_target_kf_id = new_kf.id
         self._preview.enter_centroid_pick_mode()
         self._status_text.setText(
             "Click on the preview to set the zoom center. "
@@ -2607,10 +2640,11 @@ class MainWindow(QMainWindow):
         # Mark voiceovers whose audio has fully passed as already played.
         # Segments the playhead is currently inside remain unplayed so
         # _check_voiceover_playback can start them from the offset.
-        self._vo_played_ids = {
-            seg.id for seg in self._voiceover_segments
-            if (seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)) < time_ms
-        }
+        with self._vo_lock:
+            self._vo_played_ids = {
+                seg.id for seg in self._voiceover_segments
+                if (seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)) < time_ms
+            }
         self._stop_voiceover_audio()
         self._preview.seek_to(time_ms)
         self._preview.set_current_time(time_ms)
@@ -2829,10 +2863,11 @@ class MainWindow(QMainWindow):
                 self._preview.seek_to(eff_start)
                 self._preview.set_current_time(eff_start)
             # Only mark voiceovers as played if their audio has fully passed
-            self._vo_played_ids = {
-                seg.id for seg in self._voiceover_segments
-                if (seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)) < self._playback_time
-            }
+            with self._vo_lock:
+                self._vo_played_ids = {
+                    seg.id for seg in self._voiceover_segments
+                    if (seg.timestamp + (seg.duration_ms if seg.duration_ms > 0 else 5000)) < self._playback_time
+                }
             self._preview.play()
             # Only update the button if play actually started
             self._timeline.set_playing(self._preview.is_playing)
@@ -2845,14 +2880,16 @@ class MainWindow(QMainWindow):
         """
         import winsound
         for seg in self._voiceover_segments:
-            if seg.id in self._vo_played_ids:
-                continue
+            with self._vo_lock:
+                if seg.id in self._vo_played_ids:
+                    continue
             if not seg.audio_path or not os.path.isfile(seg.audio_path):
                 continue
             if seg.timestamp > t_ms:
                 continue  # not reached yet
 
-            self._vo_played_ids.add(seg.id)
+            with self._vo_lock:
+                self._vo_played_ids.add(seg.id)
 
             # Calculate how far into the segment we are
             offset_ms = t_ms - seg.timestamp
@@ -3235,6 +3272,7 @@ class MainWindow(QMainWindow):
         try:
             session = proj["session"]
             self._mouse_track = session.mouse_track
+            self._mouse_track_timestamps = [mp.timestamp for mp in self._mouse_track]
             self._key_events = session.key_events or []
             self._click_events = session.click_events or []
             self._zoom_engine.click_events = self._click_events
