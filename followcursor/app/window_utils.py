@@ -134,62 +134,78 @@ def capture_window_thumbnail(
     if w < 10 or h < 10:
         return None
 
+    # Scale down to thumbnail size before GDI allocation so the bitmap buffer
+    # stays small (≤ max_w × max_h × 4 bytes) regardless of window size.
+    cap_scale = min(max_w / w, max_h / h, 1.0)
+    cap_w = max(10, int(w * cap_scale))
+    cap_h = max(10, int(h * cap_scale))
+
     try:
         gdi32 = ctypes.windll.gdi32
 
-        hwnd_dc = user32.GetWindowDC(hwnd)
-        if not hwnd_dc:
-            return None
+        # Initialize to 0 so the finally block can safely skip handles that
+        # were never acquired (0 is an invalid GDI handle on Windows).
+        hwnd_dc = 0
+        mem_dc = 0
+        bitmap = 0
+        old_bmp = 0
+        try:
+            hwnd_dc = user32.GetWindowDC(hwnd)
+            if not hwnd_dc:
+                return None
+            mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+            bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, cap_w, cap_h)
+            old_bmp = gdi32.SelectObject(mem_dc, bitmap)
 
-        mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
-        bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
-        old_bmp = gdi32.SelectObject(mem_dc, bitmap)
+            # PW_RENDERFULLCONTENT = 2 (works for DWM-composed windows)
+            result = user32.PrintWindow(hwnd, mem_dc, 2)
+            if not result:
+                result = user32.PrintWindow(hwnd, mem_dc, 0)
 
-        # PW_RENDERFULLCONTENT = 2 (works for DWM-composed windows)
-        result = user32.PrintWindow(hwnd, mem_dc, 2)
-        if not result:
-            result = user32.PrintWindow(hwnd, mem_dc, 0)
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ("biSize", ctypes.c_uint32),
+                    ("biWidth", ctypes.c_int32),
+                    ("biHeight", ctypes.c_int32),
+                    ("biPlanes", ctypes.c_uint16),
+                    ("biBitCount", ctypes.c_uint16),
+                    ("biCompression", ctypes.c_uint32),
+                    ("biSizeImage", ctypes.c_uint32),
+                    ("biXPelsPerMeter", ctypes.c_int32),
+                    ("biYPelsPerMeter", ctypes.c_int32),
+                    ("biClrUsed", ctypes.c_uint32),
+                    ("biClrImportant", ctypes.c_uint32),
+                ]
 
-        class BITMAPINFOHEADER(ctypes.Structure):
-            _fields_ = [
-                ("biSize", ctypes.c_uint32),
-                ("biWidth", ctypes.c_int32),
-                ("biHeight", ctypes.c_int32),
-                ("biPlanes", ctypes.c_uint16),
-                ("biBitCount", ctypes.c_uint16),
-                ("biCompression", ctypes.c_uint32),
-                ("biSizeImage", ctypes.c_uint32),
-                ("biXPelsPerMeter", ctypes.c_int32),
-                ("biYPelsPerMeter", ctypes.c_int32),
-                ("biClrUsed", ctypes.c_uint32),
-                ("biClrImportant", ctypes.c_uint32),
-            ]
+            bmi = BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.biWidth = cap_w
+            bmi.biHeight = -cap_h  # top-down
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
+            bmi.biCompression = 0  # BI_RGB
 
-        bmi = BITMAPINFOHEADER()
-        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.biWidth = w
-        bmi.biHeight = -h  # top-down
-        bmi.biPlanes = 1
-        bmi.biBitCount = 32
-        bmi.biCompression = 0  # BI_RGB
+            buf = (ctypes.c_char * (cap_w * cap_h * 4))()
+            gdi32.GetDIBits(mem_dc, bitmap, 0, cap_h, buf, ctypes.byref(bmi), 0)
 
-        buf = (ctypes.c_char * (w * h * 4))()
-        gdi32.GetDIBits(mem_dc, bitmap, 0, h, buf, ctypes.byref(bmi), 0)
+            frame = np.frombuffer(buf, dtype=np.uint8).reshape(cap_h, cap_w, 4)
+            blank = frame.max() == 0
+        finally:
+            if old_bmp:
+                gdi32.SelectObject(mem_dc, old_bmp)
+            if bitmap:
+                gdi32.DeleteObject(bitmap)
+            if mem_dc:
+                gdi32.DeleteDC(mem_dc)
+            if hwnd_dc:
+                user32.ReleaseDC(hwnd, hwnd_dc)
 
-        gdi32.SelectObject(mem_dc, old_bmp)
-        gdi32.DeleteObject(bitmap)
-        gdi32.DeleteDC(mem_dc)
-        user32.ReleaseDC(hwnd, hwnd_dc)
-
-        frame = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
-        if frame.max() == 0:
+        if blank:
             return _capture_window_mss_fallback(hwnd, rect["width"], rect["height"], max_w, max_h)
 
+        # Bitmap was already captured at thumbnail size — no further resize needed.
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
-        scale = min(max_w / w, max_h / h)
-        thumb = cv2.resize(frame_rgb, (int(w * scale), int(h * scale)),
-                           interpolation=cv2.INTER_AREA)
-        return thumb
+        return frame_rgb
 
     except Exception:
         return _capture_window_mss_fallback(hwnd, rect["width"], rect["height"], max_w, max_h)
