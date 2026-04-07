@@ -63,6 +63,7 @@ from .widgets.recording_border import RecordingBorderOverlay
 from .icon import create_app_icon
 from .icon_loader import load_icon
 from . import tokens as T
+from .mica import is_mica_supported, enable_mica
 
 
 class _LoadProjectWorker(QThread):
@@ -697,6 +698,28 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setStyleSheet(DARK_THEME)
+        
+        # Enable Mica backdrop on Windows 11 Build 22621+
+        hwnd = int(self.winId())
+        if is_mica_supported():
+            success = enable_mica(hwnd, dark_mode=True)
+            if success:
+                # Set transparent background for Mica to be visible
+                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                logger.info("Mica backdrop enabled with transparent background")
+
+                def _apply_mica_transparency():
+                    self.setObjectName("micaHostWindow")
+                    central = self.centralWidget()
+                    if central:
+                        central.setObjectName("micaCentralWidget")
+                    extra = (
+                        "QMainWindow#micaHostWindow { background-color: transparent; } "
+                        "QWidget#micaCentralWidget { background-color: transparent; }"
+                    )
+                    self.setStyleSheet(self.styleSheet() + extra)
+
+                QTimer.singleShot(0, _apply_mica_transparency)
 
         # ── persistent settings ─────────────────────────────────────
         self._settings = QSettings("FollowCursor", "FollowCursor")
