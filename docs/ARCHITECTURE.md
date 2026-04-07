@@ -142,11 +142,11 @@ The active backend is shown in the status bar (`⚡ WGC` or `🖥 GDI`).
 ```mermaid
 flowchart LR
     WGC["WGC / GDI<br/><i>BGRA frames</i>"] -->|raw bytes| PIPE["ffmpeg stdin pipe"]
-    PIPE --> AVI["H.264 intermediate AVI<br/><i>CRF 18, ultrafast preset</i>"]
+    PIPE --> MP4["H.264 intermediate MP4<br/><i>CRF 18, ultrafast preset</i>"]
 ```
 
 - Frames are piped as raw BGRA bytes directly to ffmpeg's stdin
-- Intermediate format is **H.264** (CRF 18, ultrafast) inside AVI — balances speed and disk usage
+- Intermediate format is **H.264** (CRF 18, ultrafast) inside MP4 — balances speed and disk usage
   - Lossless huffyuv approach: ~50 GB/min for 4K recordings
   - H.264 intermediate: under 1 GB/min for 4K recordings
   - The intermediate video is not your final export — the full pipeline (zoom, pan, cursor, effects) is applied during export with your chosen quality settings
@@ -365,7 +365,7 @@ AI settings are persisted via `QSettings` under the `ai/` prefix:
 ```mermaid
 flowchart TD
     subgraph Phase 1 — Probe
-        SRC["Source AVI<br/><i>H.264 intermediate</i>"] --> PROBE["OpenCV VideoCapture<br/><i>probe FPS, frame count,<br/>recount if metadata/duration mismatch > 10%</i>"]
+        SRC["Source MP4<br/><i>H.264 intermediate</i>"] --> PROBE["OpenCV VideoCapture<br/><i>probe FPS, frame count,<br/>recount if metadata/duration mismatch > 10%</i>"]
     end
 
     subgraph Phase 2 — Precompute
@@ -470,7 +470,18 @@ Two compositor implementations exist for different contexts:
 | `compositor.py` | QPainter (Qt) | Live preview widget |
 | `video_exporter.py` (inline) | NumPy + OpenCV | Video export |
 
-Both produce identical output: gradient background → device bezel (rounded rect with edge highlights) → screen content (zoomed/panned) → cursor + click effects.
+Both produce identical output: gradient background → device bezel (rounded rect with edge highlights) → screen content (zoomed/panned) → annotations → cursor → click effects → keystroke overlay.
+
+### Overlay z-order
+
+Overlays are composited in this order (back to front):
+
+1. **Annotations** (highlight boxes, arrows, text labels)
+2. **Mouse cursor** (arrow shape from recorded track)
+3. **Click effects** (ripple, burst, or highlight style)
+4. **Keystroke badges** (keyboard shortcut display)
+
+This ensures the cursor remains visible on top of annotations, and keystroke badges don't obscure click feedback.
 
 Zoom behavior is **conditional on the active frame preset**:
 
@@ -500,6 +511,36 @@ The preview widget sizes its canvas based on the selected output dimensions. The
 - **Non-auto presets** (e.g., 1:1, 4:3, 9:16): The compositor renders at the target aspect ratio with the device frame fitted and centered within it, giving an accurate preview of the export result.
 
 This replaces the previous scrim-overlay approach where the full scene was rendered at widget size and a semi-transparent dark overlay was drawn over margin areas.
+
+---
+
+## Annotations
+
+`annotation_renderer.py` provides dual QPainter (preview) and OpenCV (export) renderers for three annotation types:
+
+| Type | Visual | Rendering |
+| ---- | ------ | --------- |
+| **HighlightBox** | Filled rectangle with opacity + border | Alpha-blended using single shared overlay per frame |
+| **ArrowAnnotation** | Line with arrowhead | `head_size` controls arrowhead proportions in both renderers |
+| **TextAnnotation** | Text badge with optional background | Font size scaled to frame dimensions |
+
+All annotations use normalized coordinates (0.0–1.0) and are timeline-aware via `start_ms`/`end_ms`. The `opacity` field takes precedence over any alpha channel in the `color` tuple.
+
+## Keystroke Overlay
+
+`keystroke_renderer.py` renders keyboard shortcut badges during playback and export. Events are grouped by temporal proximity and filtered by `filter_mode`:
+
+| Mode | Shows |
+| ---- | ----- |
+| `shortcuts-only` (default) | Only combos involving Ctrl/Alt/Win modifiers |
+| `modifiers-only` | Only modifier key presses |
+| `all` | Every keystroke (security warning in UI) |
+
+The safe default (`shortcuts-only`) prevents accidental exposure of typed passwords in tutorial recordings.
+
+## Scene Chapters
+
+`activity_analyzer.detect_chapters()` uses heuristics (idle gaps ≥ 3 s and major position jumps) to detect scene boundaries. Chapters are rendered as flag markers on the timeline and can be embedded as MP4 chapter metadata for YouTube.
 
 ---
 
@@ -580,7 +621,7 @@ flowchart LR
 | Finalizing a recording | "Processing…" | "Finalizing your recording" |
 | Loading a project file | "Loading project…" | "Extracting and restoring session" |
 
-When loading a `.fcproj` file, the heavy work (ZIP extraction, JSON deserialization, AVI copy) runs on a background `_LoadProjectWorker(QThread)` so the UI stays responsive. The overlay is shown before the worker starts and hidden when it emits its `finished` signal.
+When loading a `.fcproj` file, the heavy work (ZIP extraction, JSON deserialization, MP4 copy) runs on a background `_LoadProjectWorker(QThread)` so the UI stays responsive. The overlay is shown before the worker starts and hidden when it emits its `finished` signal.
 
 ---
 
@@ -615,7 +656,7 @@ block-beta
     columns 2
     block:zip["project.fcproj (ZIP)"]:2
         JSON["project.json\nsession metadata"]
-        AVI["recording.avi\nH.264 intermediate"]
+        MP4["recording.mp4\nH.264 intermediate"]
     end
 ```
 

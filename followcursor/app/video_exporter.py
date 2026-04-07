@@ -38,7 +38,7 @@ import numpy as np
 
 from PySide6.QtCore import QObject, Signal
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT
+from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, KeyEvent, KeystrokeOverlayConfig, Chapter
 from .zoom_engine import ZoomEngine
 from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
 from .keystroke_renderer import draw_keystrokes_cv
@@ -447,7 +447,7 @@ class GeometryComputer:
         src_w: int,
         src_h: int,
         frame_preset: FramePreset,
-    ):
+    ) -> None:
         """Initialize geometry computer with canvas and source dimensions.
         
         Args:
@@ -583,10 +583,10 @@ class VideoExporter(QObject):
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
         video_segments: Optional[List[VideoSegment]] = None,
-        key_events: Optional[List] = None,
-        keystroke_config: Optional = None,
+        key_events: Optional[List[KeyEvent]] = None,
+        keystroke_config: Optional[KeystrokeOverlayConfig] = None,
         annotations = None,
-        chapters: Optional[List] = None,
+        chapters: Optional[List[Chapter]] = None,
     ) -> None:
         """Start export in a background thread.
 
@@ -689,7 +689,13 @@ class VideoExporter(QObject):
 
         # Determine output canvas size
         if output_dim and output_dim != "auto" and isinstance(output_dim, (tuple, list)):
+            if len(output_dim) < 2:
+                self.error.emit("output_dim must have 2 elements (width, height)")
+                return None
             out_w, out_h = int(output_dim[0]), int(output_dim[1])
+            if out_w <= 0 or out_h <= 0:
+                self.error.emit("output_dim width and height must be positive")
+                return None
             # Ensure even dimensions (required by H.264)
             out_w = out_w + (out_w % 2)
             out_h = out_h + (out_h % 2)
@@ -925,26 +931,42 @@ class VideoExporter(QObject):
                     suffix=".txt", prefix="chapters_", dir=output_dir
                 )
                 try:
+                    # Compute trimmed video end time for last chapter's END
+                    if trim_end_ms > 0:
+                        video_end_ms_trimmed = int(trim_end_ms - trim_start_ms)
+                    elif duration_ms > 0:
+                        video_end_ms_trimmed = int(duration_ms - trim_start_ms)
+                    else:
+                        video_end_ms_trimmed = 0
+
+                    # Collect valid chapters with adjusted start times
+                    valid_chapters = []
+                    for chapter in sorted(chapters, key=lambda c: c.timestamp_ms):
+                        chap_ms = chapter.timestamp_ms - trim_start_ms
+                        if chap_ms < 0:
+                            continue  # Chapter is before trim start
+                        if trim_end_ms > 0 and chapter.timestamp_ms > trim_end_ms:
+                            continue  # Chapter is after trim end
+                        valid_chapters.append((int(chap_ms), chapter.name))
+
                     with os.fdopen(fd, "w", encoding="utf-8") as f:
                         f.write(";FFMETADATA1\n")
-                        for chapter in sorted(chapters, key=lambda c: c.timestamp_ms):
-                            # Adjust chapter times for trim offset
-                            chap_ms = chapter.timestamp_ms - trim_start_ms
-                            if chap_ms < 0:
-                                continue  # Chapter is before trim start
-                            if trim_end_ms > 0 and chapter.timestamp_ms > trim_end_ms:
-                                continue  # Chapter is after trim end
-                            # Convert to ffmpeg timebase (milliseconds)
-                            start_ms = int(chap_ms)
-                            # Chapter ends at the next chapter or end of video
-                            # For simplicity, set a nominal 1-second duration
-                            # (ffmpeg will extend to next chapter automatically)
-                            end_ms = start_ms + 1000
+                        for idx, (start_ms, name) in enumerate(valid_chapters):
+                            # END = next chapter's start, or video end for last
+                            if idx + 1 < len(valid_chapters):
+                                end_ms = valid_chapters[idx + 1][0]
+                            elif video_end_ms_trimmed > start_ms:
+                                end_ms = video_end_ms_trimmed
+                            else:
+                                end_ms = start_ms + 1000  # fallback
+                            # Sanitize chapter name for ffmetadata format:
+                            # escape special chars and strip newlines.
+                            safe_name = name.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
                             f.write("[CHAPTER]\n")
                             f.write(f"TIMEBASE=1/1000\n")
                             f.write(f"START={start_ms}\n")
                             f.write(f"END={end_ms}\n")
-                            f.write(f"title={chapter.name}\n")
+                            f.write(f"title={safe_name}\n")
                     logger.info("Chapter metadata file created: %s", _chapters_metadata_path)
                 except Exception as exc:
                     logger.warning("Failed to create chapter metadata: %s", exc)
@@ -997,9 +1019,10 @@ class VideoExporter(QObject):
                         cmd += ["-i", _merged_audio_path]
                     # Add chapter metadata if available
                     if _chapters_metadata_path:
-                        cmd += ["-i", _chapters_metadata_path]
-                        # Map metadata to output
-                        cmd += ["-map_metadata", "2" if _has_audio else "1"]
+                        cmd += ["-f", "ffmetadata", "-i", _chapters_metadata_path]
+                        chap_input_idx = 2 if _has_audio else 1
+                        cmd += ["-map_metadata", str(chap_input_idx)]
+                        cmd += ["-map_chapters", str(chap_input_idx)]
                     cmd += enc_args
                     if _has_audio:
                         cmd += ["-c:a", "aac", "-b:a", "192k"]
@@ -1193,6 +1216,12 @@ class VideoExporter(QObject):
 
                     zoom, px, py = engine.compute_at(t_ms)
 
+                    # Draw annotations BEFORE cursor/clicks (z-order: video → annotations → cursor → clicks → keystrokes)
+                    if annotations:
+                        render_annotations_cv(
+                            frame, annotations, t_ms, m_w, m_h
+                        )
+
                     if _has_cursor:
                         draw_cursor_cv(
                             frame, mouse_track, t_ms,
@@ -1211,12 +1240,6 @@ class VideoExporter(QObject):
                         draw_keystrokes_cv(
                             frame, key_events, t_ms, keystroke_config,
                             m_left, m_top, m_w, m_h,
-                        )
-                    
-                    # Draw annotations if present
-                    if annotations:
-                        render_annotations_cv(
-                            frame, annotations, t_ms, m_w, m_h
                         )
 
                     composed = _compose_cv(
@@ -1252,6 +1275,13 @@ class VideoExporter(QObject):
                             t_ms = video_end_ms + ((ei + 1) / fps) * 1000.0
                             zoom, px, py = engine.compute_at(t_ms)
                             fc = last_f.copy()
+
+                            # Draw annotations BEFORE cursor/clicks (z-order)
+                            if annotations:
+                                render_annotations_cv(
+                                    fc, annotations, t_ms, m_w, m_h
+                                )
+
                             if _has_cursor:
                                 draw_cursor_cv(
                                     fc, mouse_track, t_ms,
@@ -1270,12 +1300,6 @@ class VideoExporter(QObject):
                                 draw_keystrokes_cv(
                                     fc, key_events, t_ms, keystroke_config,
                                     m_left, m_top, m_w, m_h,
-                                )
-                            
-                            # Draw annotations if present
-                            if annotations:
-                                render_annotations_cv(
-                                    fc, annotations, t_ms, m_w, m_h
                                 )
                             
                             composed = _compose_cv(
@@ -1310,9 +1334,12 @@ class VideoExporter(QObject):
                     stderr_out = proc.communicate(timeout=300)[1]
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    stderr_out = proc.communicate()[1]
+                    try:
+                        stderr_out = proc.communicate(timeout=5)[1]
+                    except subprocess.TimeoutExpired:
+                        logger.error("ffmpeg process still alive after kill+5s timeout (pid=%s)", proc.pid)
+                        stderr_out = b""
                 stderr_text = stderr_out.decode(errors="replace") if stderr_out else ""
-                cap.release()
                 if proc.returncode != 0:
                     err_msg = stderr_text.strip()[-800:] if stderr_text else "Unknown ffmpeg error"
                     logger.error("GIF export failed (rc=%s): %s", proc.returncode, err_msg)
@@ -1400,7 +1427,11 @@ class VideoExporter(QObject):
                 stderr_out = proc.communicate(timeout=60)[1]
             except subprocess.TimeoutExpired:
                 proc.kill()
-                stderr_out = proc.communicate()[1]
+                try:
+                    stderr_out = proc.communicate(timeout=5)[1]
+                except subprocess.TimeoutExpired:
+                    logger.error("ffmpeg process still alive after kill+5s timeout (pid=%s)", proc.pid)
+                    stderr_out = b""
 
             stderr_text = stderr_out.decode(errors="replace") if stderr_out else ""
 
@@ -1429,7 +1460,11 @@ class VideoExporter(QObject):
                         stderr_out = proc.communicate(timeout=60)[1]
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                        stderr_out = proc.communicate()[1]
+                        try:
+                            stderr_out = proc.communicate(timeout=5)[1]
+                        except subprocess.TimeoutExpired:
+                            logger.error("ffmpeg process still alive after kill+5s timeout (pid=%s)", proc.pid)
+                            stderr_out = b""
                     stderr_text = stderr_out.decode(errors="replace") if stderr_out else ""
                     if proc.returncode == 0 and pipe_ok:
                         break  # success

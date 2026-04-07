@@ -6,10 +6,16 @@ JSON serialization via ``to_dict()`` / ``from_dict()`` (or ``to_json()``
 / ``from_json()`` for top-level sessions).
 """
 
+import logging
 from dataclasses import dataclass
 from typing import List
 import uuid
 import json
+
+logger = logging.getLogger(__name__)
+
+# Allowed values for KeystrokeOverlayConfig.filter_mode
+VALID_FILTER_MODES = frozenset({"all", "modifiers-only", "shortcuts-only"})
 
 
 @dataclass
@@ -64,7 +70,7 @@ class KeyEvent:
             timestamp=d["timestamp"],
             x=d.get("x"),
             y=d.get("y"),
-            vk_code=d.get("vkCode"),
+            vk_code=d.get("vkCode", d.get("vk_code")),
         )
 
 
@@ -313,8 +319,8 @@ class RecordingSession:
         Tolerates missing optional fields for backward compatibility with
         older .fcproj versions.  Required fields (``id``, ``startTime``,
         ``duration``, ``mouseTrack``) raise ``ValueError`` with a clear
-        message instead of raw ``KeyError``.  ``keyframes`` is optional and
-        defaults to an empty list when absent for backward compatibility.
+        message instead of raw ``KeyError``.  ``keyframes`` is optional
+        (defaults to an empty list when absent) for backward compatibility.
         """
         d = json.loads(s)
         try:
@@ -467,9 +473,14 @@ class ClickEffectPreset:
     @staticmethod
     def from_dict(d: dict) -> "ClickEffectPreset":
         try:
+            raw_color = list(d["color"])
+            # Coerce to 4 RGBA ints clamped to 0-255
+            while len(raw_color) < 4:
+                raw_color.append(255)
+            color = tuple(max(0, min(255, int(c))) for c in raw_color[:4])
             return ClickEffectPreset(
                 name=d["name"],
-                color=tuple(d["color"]),
+                color=color,
                 style=d.get("style", "ripple"),
                 duration_ms=d.get("durationMs", 400),
                 radius=d.get("radius", 24),
@@ -523,12 +534,19 @@ class KeystrokeOverlayConfig:
     @staticmethod
     def from_dict(d: dict) -> "KeystrokeOverlayConfig":
         """Reconstruct from a dict produced by ``to_dict()``."""
+        raw_mode = d.get("filterMode", "shortcuts-only")
+        if raw_mode not in VALID_FILTER_MODES:
+            logger.warning(
+                "Unknown keystroke filter_mode %r, defaulting to 'shortcuts-only'",
+                raw_mode,
+            )
+            raw_mode = "shortcuts-only"
         return KeystrokeOverlayConfig(
             enabled=d.get("enabled", False),
             position=d.get("position", "bottom-center"),
             style=d.get("style", "floating-badge"),
             display_duration_ms=d.get("displayDurationMs", 1500),
-            filter_mode=d.get("filterMode", "shortcuts-only"),
+            filter_mode=raw_mode,
             font_size=d.get("fontSize", 18),
             opacity=d.get("opacity", 0.85),
         )
