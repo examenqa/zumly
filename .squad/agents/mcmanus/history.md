@@ -491,9 +491,9 @@ Restyled all widgets to match official Microsoft Fluent 2 component patterns. Th
   - `BG_LAYER_5` background, 1px border, 8px radius
   - Caption 1 size (12px/16px), 6-8px padding
 - **Focus rings** (keyboard accessibility):
-  - All interactive controls: 2px solid `BRAND` outline with 2px offset
-  - Matches Fluent 2 accessibility spec exactly
-  - Applied to: buttons, inputs, combobox, spinbox, slider, tabs
+  - Visual target is a Fluent 2-style `BRAND` focus indicator for keyboard navigation
+  - Current implementation is mixed: `QPushButton:focus` uses a QSS border/padding workaround, while other widgets still rely on `install_focus_ring()` (`QGraphicsDropShadowEffect`) because QSS `outline`/offset is not reliable across Qt widgets
+  - Applied across interactive controls including buttons, inputs, combobox, spinbox, slider, and tabs, with the exact rendering method varying by widget
 
 **App-Specific Widgets:**
 - Title bar buttons: Subtle transparent style, 40×32px, 4px radius
@@ -512,7 +512,7 @@ Restyled all widgets to match official Microsoft Fluent 2 component patterns. Th
 - Font weights: Regular (400), Medium (500), Semibold (600), Bold (700)
 
 **Design Token References:**
-- All QSS uses tokens from `tokens.py` (no hardcoded values)
+- Theme/design-system QSS uses tokens from `tokens.py`; some widget-local style strings may still contain hardcoded values
 - Spacing: `SPACE_6` (6px), `SPACE_SM` (8px), `SPACE_MD` (12px), `SPACE_LG` (16px), `SPACE_XL` (24px), `SPACE_XXL` (32px)
 - Radii: `RADIUS_SMALL` (4px), `RADIUS_MEDIUM` (8px), `RADIUS_LARGE` (12px)
 - Colors: Fluent 2 neutral ramp (`BG_LAYER_1-5`, `FG_1-4`, `STROKE_1-2`, `STROKE_ACCESSIBLE`)

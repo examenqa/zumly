@@ -174,8 +174,6 @@ Execute the **Run Tests** VS Code task (`Ctrl+Shift+P` > Tasks: Run Task > Run T
 
 All features, bug fixes, and significant changes must be developed on a **dedicated branch** (e.g. `fix/encoder-fallback`, `feat/gif-palette`). Trivial documentation-only edits may go directly on `main`.
 
-An **auto-rebase** workflow (`.github/workflows/auto-rebase.yml`) automatically rebases all open PRs whenever `main` is updated. PRs labeled `no-rebase` are excluded.
-
 ### Adding a New Widget
 
 1. Create `app/widgets/your_widget.py`
