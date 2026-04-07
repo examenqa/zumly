@@ -174,8 +174,6 @@ Execute the **Run Tests** VS Code task (`Ctrl+Shift+P` > Tasks: Run Task > Run T
 
 All features, bug fixes, and significant changes must be developed on a **dedicated branch** (e.g. `fix/encoder-fallback`, `feat/gif-palette`). Trivial documentation-only edits may go directly on `main`.
 
-An **auto-rebase** workflow (`.github/workflows/auto-rebase.yml`) automatically rebases all open PRs whenever `main` is updated. PRs labeled `no-rebase` are excluded.
-
 ### Adding a New Widget
 
 1. Create `app/widgets/your_widget.py`
@@ -207,7 +205,7 @@ FollowCursor uses [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH)
 The version lives in `followcursor/app/version.py`:
 
 ```python
-__version__ = "0.8.0"
+__version__ = "0.10.0"
 ```
 
 ### Releasing
@@ -256,10 +254,10 @@ Produces `dist\FollowCursor\FollowCursor.exe` — a single-folder PyInstaller di
 
 ```powershell
 # Unsigned (local testing)
-.\scripts\Build-Msix.ps1 -Version "0.8.0" -SkipSign
+.\scripts\Build-Msix.ps1 -Version "0.10.0" -SkipSign
 
 # Signed with local PFX
-.\scripts\Build-Msix.ps1 -Version "0.8.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
+.\scripts\Build-Msix.ps1 -Version "0.10.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
 ```
 
 ### CI Pipeline

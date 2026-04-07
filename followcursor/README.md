@@ -113,7 +113,7 @@ All build steps are available as VS Code tasks (`Ctrl+Shift+P` → **Tasks: Run 
 | **Run Tests** | Runs the pytest suite — **always run before merging or releasing** |
 | **Create Dev Signing Certificate** | Creates a self-signed certificate for local MSIX sideloading (no admin required) |
 
-The MSIX tasks depend on **Build** and will run it automatically first. When prompted, enter the version string (e.g. `0.6.0`) and, for signed builds, the certificate subject and `.pfx` path.
+The MSIX tasks depend on **Build** and will run it automatically first. When prompted, enter the version string (e.g. `0.10.0`) and, for signed builds, the certificate subject and `.pfx` path.
 
 ### MSIX Package
 
@@ -122,19 +122,19 @@ PyInstaller output, then run `Build-Msix.ps1` to package and optionally sign it:
 
 ```powershell
 # Unsigned (local testing / sideloading)
-.\scripts\Build-Msix.ps1 -Version "0.5.0" -SkipSign
+.\scripts\Build-Msix.ps1 -Version "0.10.0" -SkipSign
 
 # Sign with a local PFX certificate
-.\scripts\Build-Msix.ps1 -Version "0.5.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
+.\scripts\Build-Msix.ps1 -Version "0.10.0" -LocalPfx ".\cert.pfx" -Publisher "CN=MyName"
 
 # Sign with Azure Trusted Signing (local)
-.\scripts\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." `
+.\scripts\Build-Msix.ps1 -Version "0.10.0" -Publisher "CN=..." `
   -AzureEndpoint "https://eus.codesigning.azure.net/" `
   -AzureCodeSigningAccountName "myacct" `
   -AzureCertificateProfileName "myprofile"
 
 # Sign with Azure Trusted Signing using a custom DLib path
-.\scripts\Build-Msix.ps1 -Version "0.5.0" -Publisher "CN=..." `
+.\scripts\Build-Msix.ps1 -Version "0.10.0" -Publisher "CN=..." `
   -AzureEndpoint "https://eus.codesigning.azure.net/" `
   -AzureCodeSigningAccountName "myacct" `
   -AzureCertificateProfileName "myprofile" `
