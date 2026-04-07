@@ -36,7 +36,8 @@
 				"reveal": "always",
 				"panel": "shared"
 			},
-			"problemMatcher": []
+			"problemMatcher": [],
+			"inSessions": true
 		},
 		{
 			"label": "Build",
