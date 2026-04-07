@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "agents": [
+    {
+      "name": "Fenster",
+      "role": "Backend Dev",
+      "directory": ".squad/agents/fenster/",
+      "status": "active"
+    },
+    {
+      "name": "McManus",
+      "role": "UI Dev",
+      "directory": ".squad/agents/mcmanus/",
+      "status": "active"
+    },
+    {
+      "name": "Ralph",
+      "role": "Work Monitor",
+      "directory": ".squad/agents/ralph/",
+      "status": "active"
+    },
+    {
+      "name": "Scribe",
+      "role": "Session Logger",
+      "directory": ".squad/agents/scribe/",
+      "status": "active"
+    }
+  ]
+}
