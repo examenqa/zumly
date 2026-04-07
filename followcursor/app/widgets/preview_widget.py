@@ -23,6 +23,8 @@ from PySide6.QtWidgets import QWidget, QMenu
 
 from ..models import MousePosition, ClickEvent, ZoomKeyframe
 from ..zoom_engine import speed_at_time
+from ..icon_loader import load_icon
+from .. import tokens as T
 
 
 class PreviewWidget(QWidget):
@@ -438,13 +440,15 @@ class PreviewWidget(QWidget):
 
         if self._zoom > 1.01:
             # Inside a zoom segment — offer pan point
-            act_pan = menu.addAction("📌  Add pan point here")
+            act_pan = menu.addAction("  Add pan point here")
+            act_pan.setIcon(load_icon("location", color=T.FG_PRIMARY))
             act_pan.triggered.connect(
                 lambda: self.pan_point_requested.emit(time_ms, pan_x, pan_y)
             )
         else:
             # Not zoomed — offer zoom
-            act_zoom = menu.addAction("🔍  Add Zoom here")
+            act_zoom = menu.addAction("  Add Zoom here")
+            act_zoom.setIcon(load_icon("search", color=T.FG_PRIMARY))
             act_zoom.triggered.connect(
                 lambda: self.zoom_at_requested.emit(time_ms, 1.5, pan_x, pan_y)
             )
