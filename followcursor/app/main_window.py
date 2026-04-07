@@ -3732,6 +3732,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_icons(self) -> None:
         """Reload all widget icons with colours matching the active theme."""
+        if not hasattr(self, "_title_bar"):
+            return
         self._title_bar.refresh_icons(dark=self._dark_mode)
         fg = T.FG_PRIMARY if self._dark_mode else T.LIGHT_FG_1
         self._btn_edit_view.setIcon(load_icon("play", color=fg))
