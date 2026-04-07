@@ -1,12 +1,12 @@
 name: Squad Docs — Build & Deploy
-# python project — configure documentation build commands below
 
 on:
   workflow_dispatch:
   push:
-    branches: [preview]
+    branches: [main]
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
       - '.github/workflows/squad-docs.yml'
 
 permissions:
@@ -14,14 +14,30 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: pip install mkdocs-material
+      - run: mkdocs build --strict
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
 
-      - name: Build docs
-        run: |
-          # TODO: Add your documentation build commands here
-          # This workflow is optional — remove or customize it for your project
-          echo "No docs build commands configured — update or remove squad-docs.yml"
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
