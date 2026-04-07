@@ -4,6 +4,20 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] — 2026-04-07
+
+### Added
+- **Fluent 2 color system** — adopted Fluent 2 neutral palette with layered backgrounds, foreground tints, and elevation-based shadow tokens
+- **Fluent UI System Icons** — replaced emoji icons throughout the UI with resolution-independent Fluent UI SVG system icons
+- **Fluent 2 typography and spacing** — applied 4px spacing grid, type ramp tokens, and standardized corner radii across all controls
+- **Fluent 2 widget styling** — aligned buttons, inputs, toggles, and panels with Fluent 2 component patterns
+
+### Changed
+- **Documentation rewrite** — comprehensive rewrite of User Guide, Quick Start, Architecture, and Contributing docs
+
+### Removed
+- **Auto-rebase workflow** — removed the auto-rebase GitHub Actions workflow
+
 ## [0.9.0] — 2026-04-07
 
 ### Added
