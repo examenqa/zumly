@@ -427,3 +427,112 @@ This organization ensures maintainability and consistency with the existing code
 - Phase 4 (acrylic/mica materials) can now use MATERIAL_OVERLAY_ALPHA and MATERIAL_CARD_ALPHA tokens
 - Animation helpers (get_entering_curve, get_exiting_curve) ready for fade-in/fade-out widget transitions
 - Type ramp supports future UI scaling/accessibility features
+
+### 2026-04-07: Fluent 2 Component Patterns (Issue #101)
+
+**Task:** Align all PySide6 widget styling with Fluent 2 component patterns  
+**Outcome:** ✅ Complete — PR #107  
+**Branch:** feat/issue-101-fluent2-widgets
+
+Restyled all widgets to match official Microsoft Fluent 2 component patterns. This builds on the previous foundation work (color tokens #98, typography/shapes #100, icons #99) to deliver production-quality Windows 11-style components.
+
+**Implementation:**
+- **Buttons** — Implemented all Fluent 2 button appearances:
+  - Secondary (default): `BG_LAYER_3` background, `STROKE_1` border, `RADIUS_SMALL` (4px) corners
+  - Primary: `BRAND` background, no border, white text (Export, Save, Record buttons)
+  - Subtle: Transparent background, `STROKE_1` border (Discard button)
+  - Transparent: No background or border, hover uses `BG_SUBTLE_HOVER` (title bar, sidebar, skip buttons)
+  - All buttons: 6-16px padding, Semibold/Medium weight, proper hover/pressed/disabled states
+- **Tabs** (source picker):
+  - Applied Fluent 2 TabList pattern: transparent background, 2px bottom border for selection
+  - Selected tab: `BRAND` underline, Semibold weight, `FG_PRIMARY` color
+  - Hover: `BG_SUBTLE_HOVER` background
+  - Min height 40px, proper padding (8-16px horizontal)
+- **Cards** (preview panel, source picker):
+  - Base: `BG_CARD` background, 1px `STROKE_1` border, 8px radius
+  - Hover: `BG_CARD_HOVER` background, `STROKE_ACCESSIBLE` border
+  - Selected: 2px `BRAND` border, `BG_CARD_SELECTED` background
+  - 8px internal padding
+- **Inputs** (QLineEdit, QTextEdit):
+  - `BG_LAYER_2` background, 1px `STROKE_1` border, 4px radius
+  - Hover: `STROKE_ACCESSIBLE` border
+  - Focus: 2px `BRAND` outline with 2px offset (Fluent 2 spec)
+  - Disabled: `BG_LAYER_1` background, `FG_DISABLED` text
+- **Combobox/Dropdown**:
+  - Same styling as inputs for consistency
+  - Dropdown menu: `BG_LAYER_4` with 8px radius, `BG_SUBTLE_HOVER` on item hover
+  - Item padding: 6-12px, min-height 32px
+- **SpinBox**:
+  - Same input styling, transparent up/down buttons with hover state
+- **Slider**:
+  - 4px track height, 16px circular handle with 2px `BRAND` border
+  - Active range uses `BRAND` color
+  - Handle hover/pressed states change to `BRAND_HOVER`/`BRAND_ACTIVE`
+  - Focus: 2px outline with 2px offset
+- **Checkbox**:
+  - 16×16px indicator, 1px border, 4px radius
+  - Checked: `BRAND` background and border
+  - Hover: `STROKE_ACCESSIBLE` border, `BG_LAYER_3` background
+- **Menus**:
+  - `BG_LAYER_4` background, 1px border, 8px radius
+  - Items: transparent background, 6-12px padding, 4px radius, min-height 32px
+  - Hover: `BG_SUBTLE_HOVER`
+  - Separator: 1px `STROKE_2` line with 4px margin
+- **Dialogs**:
+  - `BG_LAYER_3` background, 1px border, 12px radius (RADIUS_LARGE)
+- **Progress bar**:
+  - 4px height, 2px radius
+  - Track: `BG_LAYER_2`, Fill: `BRAND`
+- **Scrollbars**:
+  - Minimal 6px width (expands to 12px on hover)
+  - Handle: `STROKE_1` (rest), `STROKE_ACCESSIBLE` (hover), `FG_2` (pressed)
+  - Transparent background, 4px radius
+- **Tooltips**:
+  - `BG_LAYER_5` background, 1px border, 8px radius
+  - Caption 1 size (12px/16px), 6-8px padding
+- **Focus rings** (keyboard accessibility):
+  - All interactive controls: 2px solid `BRAND` outline with 2px offset
+  - Matches Fluent 2 accessibility spec exactly
+  - Applied to: buttons, inputs, combobox, spinbox, slider, tabs
+
+**App-Specific Widgets:**
+- Title bar buttons: Subtle transparent style, 40×32px, 4px radius
+- Sidebar nav buttons: Transparent with brand translucent active state, 64×64px, 8px radius
+- Control bar buttons: Secondary style, 36px height
+- Record button: Primary danger style, 48px height, 8px radius, 32px horizontal padding
+- Keyframe items: Card style with hover border color change
+- Timeline play button: Secondary style, 44×44px circular
+- Status dots: 6×6px circular indicators
+
+**Typography Updates:**
+- Migrated from legacy font sizes (FONT_SIZE_BODY, FONT_SIZE_CAPTION) to Fluent 2 type ramp
+- Body 1: 14px/20px (primary UI text)
+- Caption 1: 12px/16px (labels, captions)
+- Subtitle 2: 20px/28px (large buttons, headings)
+- Font weights: Regular (400), Medium (500), Semibold (600), Bold (700)
+
+**Design Token References:**
+- All QSS uses tokens from `tokens.py` (no hardcoded values)
+- Spacing: `SPACE_6` (6px), `SPACE_SM` (8px), `SPACE_MD` (12px), `SPACE_LG` (16px), `SPACE_XL` (24px), `SPACE_XXL` (32px)
+- Radii: `RADIUS_SMALL` (4px), `RADIUS_MEDIUM` (8px), `RADIUS_LARGE` (12px)
+- Colors: Fluent 2 neutral ramp (`BG_LAYER_1-5`, `FG_1-4`, `STROKE_1-2`, `STROKE_ACCESSIBLE`)
+- Semantic: `BRAND`, `DANGER`, `SUCCESS`, `WARNING`, `INFO` with full state variants
+
+**Testing:**
+- ✅ All 375 tests pass
+- ✅ No breaking changes — backward-compatible selectors preserved
+- ✅ Verified all interactive states (hover, pressed, focus, disabled)
+
+**Key learnings:**
+- QSS outline property works for focus rings with offset (equivalent to CSS outline-offset)
+- PySide6 QComboBox dropdown menus styled via `QAbstractItemView` child selector
+- Slider handle margins must be negative to center properly on track
+- Tabs need transparent background to avoid visual glitches during selection transition
+- Menu item padding must account for icon space even when no icon present
+- Focus rings should use outline (not border) to avoid layout shift
+- Progress bar chunk styling requires exact same border-radius as container for clean edges
+- Scrollbar handle needs explicit min-height/min-width to prevent collapse
+
+**Reference:**
+- https://fluent2.microsoft.design/components/web/react/
+
