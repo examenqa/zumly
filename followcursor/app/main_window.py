@@ -851,6 +851,7 @@ class MainWindow(QMainWindow):
         self._preview.pan_point_requested.connect(self._on_preview_pan_point)
         self._preview.centroid_picked.connect(self._on_centroid_picked)
         self._preview.centroid_dragged.connect(self._on_centroid_dragged)
+        self._preview.annotation_dragged.connect(self._on_annotation_dragged)
 
         # Keyframe whose centroid is being repositioned via preview click
         self._centroid_target_kf_id: str = ""
@@ -1124,7 +1125,7 @@ class MainWindow(QMainWindow):
         self._btn_change_source.setVisible(False)
 
         self._btn_record = QPushButton("  Record  (Ctrl+Shift+R)")
-        self._btn_record.setIcon(load_icon("record", variant="filled", color=T.DANGER))
+        self._btn_record.setIcon(load_icon("record", variant="filled", color="#ffffff"))
         self._btn_record.setObjectName("RecordBtn")
         self._btn_record.clicked.connect(self._start_recording)
         self._btn_record.setVisible(False)
@@ -1816,6 +1817,46 @@ class MainWindow(QMainWindow):
         self._preview.set_annotations(self._annotations)
         self._mark_dirty()
         logger.info("Annotation updated: %s", annot_type)
+
+    def _on_annotation_dragged(self, annot_type: str, annot_id: str, new_x: float, new_y: float) -> None:
+        """Handle annotation dragged in the preview widget."""
+        if self._annotations is None:
+            return
+
+        if annot_type == "text" and self._annotations.texts:
+            for a in self._annotations.texts:
+                if a.id == annot_id:
+                    a.x = new_x
+                    a.y = new_y
+                    break
+        elif annot_type == "arrow" and self._annotations.arrows:
+            for a in self._annotations.arrows:
+                if a.id == annot_id:
+                    midpoint_x = (a.x1 + a.x2) / 2.0
+                    midpoint_y = (a.y1 + a.y2) / 2.0
+                    dx = new_x - midpoint_x
+                    dy = new_y - midpoint_y
+                    # Constrain so translated endpoints stay within [0, 1]
+                    min_dx = -min(a.x1, a.x2)
+                    max_dx = 1.0 - max(a.x1, a.x2)
+                    min_dy = -min(a.y1, a.y2)
+                    max_dy = 1.0 - max(a.y1, a.y2)
+                    dx = max(min_dx, min(max_dx, dx))
+                    dy = max(min_dy, min(max_dy, dy))
+                    a.x1 += dx
+                    a.y1 += dy
+                    a.x2 += dx
+                    a.y2 += dy
+                    break
+        elif annot_type == "highlight" and self._annotations.highlights:
+            for a in self._annotations.highlights:
+                if a.id == annot_id:
+                    a.x = new_x
+                    a.y = new_y
+                    break
+
+        self._preview.set_annotations(self._annotations)
+        self._mark_dirty()
 
     def _on_auto_detect_chapters(self) -> None:
         """Handle auto-detect chapters request from editor panel."""
