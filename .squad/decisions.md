@@ -477,6 +477,10 @@ Ralph should always trigger a release at the end of milestone work — defined a
 
 ### Directive
 
-Never mix `.squad/` state/history changes with feature or code changes in the same commit or PR. Squad-internal file updates (history.md, decisions.md, orchestration-log/, log/) must be committed separately from any code, documentation, or config changes.
+Never mix `.squad/` state changes with feature or code changes in the same commit or PR — **except** for `.squad/agents/*/history.md` files.
 
-**Rationale:** User request — mixing squad state with feature commits trips up reviewers who can't distinguish squad bookkeeping from real change content. Keeps squad bookkeeping separate and transparent.
+**Exception — agent history files:** `.squad/agents/*/history.md` documents an agent's understanding of the code it worked on. These files are contextually tied to the code changes they accompany and may travel in the same commit or PR as the code they describe.
+
+**Must always be separate:** `decisions.md`, `orchestration-log/`, `log/`, `ceremonies.md`, `team.md`, `routing.md`, and any other squad orchestration/state files must be committed separately from code, documentation, or config changes.
+
+**Rationale:** User request — mixing squad state with feature commits trips up reviewers who can't distinguish squad bookkeeping from real change content. History files are the exception because they are a direct artifact of the code work being reviewed.
