@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 - **Larger font sizes** — bumped legacy font aliases (caption 11→12, body 13→14, subtitle 15→16, title 16→18, header 20→22) and TimeDisplay from 12px to 14px for improved readability
-- **Higher-res window thumbnails** — increased window capture resolution from 400×220 to 800×440 for sharper source picker previews
+- **Higher-res window thumbnails** — further increased window capture resolution to 800×440 for sharper source picker previews
 - **Horizontal keystroke overlay** — keystrokes now render side-by-side instead of stacked vertically, with automatic row wrapping when badges exceed available width
 - **Larger background swatches** — increased swatch sizes (patterns 32→44px, gradients 28→36px, solids 24→28px) and adjusted column counts to eliminate orphan swatches
 
