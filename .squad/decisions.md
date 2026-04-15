@@ -484,3 +484,25 @@ Never mix `.squad/` state changes with feature or code changes in the same commi
 **Must always be separate:** `decisions.md`, `orchestration-log/`, `log/`, `ceremonies.md`, `team.md`, `routing.md`, and any other squad orchestration/state files must be committed separately from code, documentation, or config changes.
 
 **Rationale:** User request — mixing squad state with feature commits trips up reviewers who can't distinguish squad bookkeeping from real change content. History files are the exception because they are a direct artifact of the code work being reviewed.
+
+## Copilot Directive — Squad/History separation (2026-04-07T22:15:03Z)
+
+**By:** Ahmed Sabbour
+**What:** `.squad/agents/*/history.md` changes ARE allowed alongside code changes in the same PR/commit — history files are contextually related to the code work. The rule against mixing squad state with code only applies to orchestration logs, decisions, and other `.squad/` state files (NOT history files).
+**Why:** User request — captured for team memory
+
+## Auto Narration — Architecture Decision (Fenster, 2026-04-15T17:48:11.995Z)
+
+**Decision:** Persist automated narration on the existing voiceover path as a `VoiceoverSegment` with `source="generated"`.
+- Store generated narration markdown in `script_markdown`
+- Keep spoken TTS source text in `text`
+- Keep last exported markdown location in `script_path`
+- Replace prior generated narration while preserving manual voiceover segments
+
+**Why:** Reuses current export mixer, `.fcproj` JSON persistence, and voiceover audio packaging without duplicating timeline or audio logic. Backward compatible (new fields optional).
+
+## Auto Narration — UI/Timeline Decision (McManus, 2026-04-15T17:48:11.995Z)
+
+**Decision:** Automated narration stays on the existing voiceover track as a single generated `VoiceoverSegment`. Editor asks before replacing existing generated narration, preserves manual segments, rewrites markdown sidecar beside the active video after project load.
+**Why:** Keeps export, save/load, and timeline rendering on one proven path instead of duplicating the audio model. Users get first-class narration flow while implementation remains compatible with existing voiceover tooling and `.fcproj` persistence.
+**Affected:** `main_window.py`, `editor_panel.py`, `timeline_widget.py`

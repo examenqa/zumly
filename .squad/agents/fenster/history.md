@@ -154,3 +154,33 @@ Fenster identified and corrected multiple README inaccuracies:
 - README now reflects current complete feature set
 - Maintains user-facing language (no jargon, "you" focus)
 - Tech stack table remains accurate
+
+## Learnings
+
+### 2026-04-15T17:48:11.995Z — Automated narration core
+
+- **Architecture decision** — Automated narration is persisted as a regular `VoiceoverSegment` with `source="generated"`, plain spoken text in `text`, markdown in `script_markdown`, and the last exported markdown location in `script_path`. This keeps export audio muxing and `.fcproj` save/load on the existing voiceover path.
+- **Pattern** — Build narration prompts from two layers: chronological frame samples every 5 seconds plus scored activity moments from typing, clicks, and cursor motion. Feed markdown back through a markdown-to-speech normalization step before TTS so sectioned scripts stay natural when spoken.
+- **User preference** — Ahmed wants a single full-video narration script, one TTS track, a manual editor trigger, `<video_name>_voiceover.md` output, and narration state that survives `.fcproj` save/load.
+- **Key file paths** — `followcursor/app/ai_service.py`, `followcursor/app/models.py`, `followcursor/tests/test_ai_service.py`, `followcursor/tests/test_models.py`, and `followcursor/tests/test_project_file.py`.
+
+## 2026-04-15: Auto Narration Feature Spawn
+
+**Mode:** Background agent spawned by Scribe  
+**Task:** Implement multimodal narration generation worker
+
+### Scope
+- Develop narration generation logic using 5-second frame samples + activity moments
+- Implement `VoiceoverSegment` with `source="generated"` field
+- Persist narration metadata in `.fcproj` (markdown script + TTS audio paths)
+- Expose narration worker contract for UI integration (McManus)
+
+### Coordination
+- **Partner:** McManus (UI Dev) — will integrate worker and add editor action
+- **Decision:** Auto narration persists on existing voiceover track; replaces prior generated narration while preserving manual segments
+- **Backward Compat:** New voiceover fields optional; projects without narration unaffected
+
+### Affected Files
+- `followcursor/app/ai_service.py` — narration worker + generation logic
+- `followcursor/app/models.py` — voiceover metadata for `source` field
+- `followcursor/app/project_file.py` — `.fcproj` narration persistence
