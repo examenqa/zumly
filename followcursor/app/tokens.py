@@ -335,3 +335,36 @@ LIGHT_BRAND_TRANSLUCENT_STRONG: str = "rgba(139, 92, 246, 0.20)" # tinted brand 
 
 # Light theme focus ring
 LIGHT_FOCUS_RING: str = "#8b5cf6"          # same brand purple; legible on light backgrounds
+
+
+# ── Theme-Aware Color Getters ─────────────────────────────────────────────
+# Use these helpers in custom-painted widgets that need to respond to theme changes.
+
+def bg_canvas(dark: bool = True) -> str:
+    """Timeline/control background."""
+    return BG_LAYER_1 if dark else LIGHT_BG_2
+
+
+def bg_track(dark: bool = True) -> str:
+    """Track background inside timeline."""
+    return BG_LAYER_2 if dark else LIGHT_BG_3
+
+
+def bg_track_border(dark: bool = True) -> str:
+    """Track border stroke."""
+    return STROKE_2 if dark else LIGHT_STROKE_2
+
+
+def fg_primary(dark: bool = True) -> str:
+    """Primary foreground (text, icons)."""
+    return FG_1 if dark else LIGHT_FG_1
+
+
+def fg_muted(dark: bool = True) -> str:
+    """Muted/secondary foreground."""
+    return FG_3 if dark else LIGHT_FG_3
+
+
+def fg_dim(dark: bool = True) -> str:
+    """Dim foreground (track labels, tick marks)."""
+    return FG_4 if dark else LIGHT_FG_4

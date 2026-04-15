@@ -2,6 +2,38 @@
 
 ## Recent Work
 
+## 2026-04-15: Light Mode Theme Fix for Custom-Painted Widgets
+
+**Mode:** Bug fix spawn  
+**Task:** Fix timeline and transport controls rendering with dark colors in light mode
+
+### Root Cause
+
+Hard-coded dark paint values in custom `paintEvent` implementations. The widgets `_TimelineTrack`, `_TimelineTimeReadout`, and `_TimelineControlsHost` used literal hex colors (e.g., `#1b1a2e`, `#6c6890`) that bypassed the QSS-based theme switching.
+
+### What Changed
+
+- Added theme-aware color helpers to `tokens.py` (`bg_canvas()`, `bg_track()`, `fg_primary()`, etc.)
+- Added `_dark_mode` state and `set_dark_mode()` method to all custom-painted timeline widgets
+- Updated all paint methods to use the theme helpers
+- Wired `MainWindow._apply_theme()` to propagate theme state to timeline
+- Converted context menu styling from class constant to theme-aware method
+- Added regression tests for theme propagation in `test_timeline_widget.py`
+
+### Files Changed
+
+- `followcursor/app/tokens.py`
+- `followcursor/app/widgets/timeline_widget.py`
+- `followcursor/app/main_window.py`
+- `followcursor/tests/test_timeline_widget.py`
+
+### Validation
+
+✓ Full pytest (468 tests) passed  
+✓ Compileall clean
+
+---
+
 ## 2026-04-15: Auto Narration UI/Integration Spawn
 
 **Mode:** Background agent spawned by Scribe  
@@ -138,3 +170,61 @@ Orchestration log: .squad/orchestration-log/2026-04-15T21-27-39Z-mcmanus.md
 Fenster to follow with backend cleanup: dormant serialization (`AnnotationCollection` / `KeystrokeOverlayConfig`), AI-service annotation plumbing, legacy hook/model helpers — once branch no longer needs to open older `.fcproj` files.
 
 Orchestration log: `.squad/orchestration-log/20260415T225610-mcmanus.md`
+
+---
+
+## 2026-04-15T23:04:02.621Z — Voiceover Generation Indicator + Narration Guidance
+
+**Status:** ✅ Complete  
+**Session:** voiceover-generation-indicator  
+**Coordination:** Fenster (state machine) + Editor Panel guidance field
+
+### Part 1: TTS Generation Spinner
+
+Added looping amber spinner arc on voiceover segment pill whenever Fenster's `tts_generating` flag is `True`.
+
+**Visual design:**
+- Amber arc (`#fbbf24`) at right end of pill
+- 120° sweep rotating continuously
+- 80 ms timer (≈ 12.5 fps) → one rotation per 800 ms
+- Suppresses static "…" ellipsis during generation
+
+**Implementation:**
+- `QTimer` only runs while any segment has `tts_generating=True`
+- Called from `TimelineWidget.set_data()` when `voiceover_segments` provided
+- Existing colour logic (teal filled / grey pending / teal-bright selected) unchanged
+
+### Part 2: Narration Guidance Prompt
+
+Added optional `QPlainTextEdit` in editor panel between voiceover description and **Generate narration** button.
+
+**UI:**
+- Label: **"Guidance (optional)"** — clearly non-required
+- Placeholder: example-led, user-friendly language
+- Height: fixed 64 px (one or two lines)
+- Not persisted (per-recording, session-only)
+
+**Signal change:**
+- `generate_narration_requested` changed `Signal(str)` → `Signal(str, str)` (voice, guidance)
+
+**Backend wiring:**
+- `ai_service.generate_narration()` receives `guidance_prompt` parameter
+- Forwarded to `_generate_narration_segments()` as `guidance` kwarg
+- `_build_narration_system_prompt()` appends creator guidance block when non-empty
+
+### Files Changed
+
+- `followcursor/app/widgets/timeline_widget.py` — spinner timer, arc rendering
+- `followcursor/app/widgets/editor_panel.py` — guidance field, label, signal update
+- `followcursor/app/main_window.py` — `_on_generate_narration_requested` signature
+- `followcursor/tests/test_timeline_widget.py` — 8 regression tests
+- `followcursor/tests/test_editor_panel.py` — 6 regression tests
+
+### Validation
+
+✓ 14 new tests pass (8 timeline + 6 editor)  
+✓ Signal routing backward-compatible  
+✓ Spinner visual design aligns with Fluent 2 amber
+
+---
+

@@ -905,16 +905,17 @@ class _TimelineTrack(QWidget):
                 pp_font.setPixelSize(9)
                 pp_font.setWeight(QFont.Weight.Bold)
                 painter.setFont(pp_font)
+                pan_point_outline = T.bg_canvas(self._dark_mode)
                 for pp_idx, (pp_x, pp_kf) in enumerate(pan_points, start=1):
                     radius = 7
                     cy = top + h / 2
                     # Record for hit-testing
                     self._pan_point_markers.append((pp_x, cy, radius, pp_kf.id, start_id))
                     # Circle background
-                    painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+                    painter.setPen(QPen(QColor(pan_point_outline), 1.5))
                     painter.setBrush(QBrush(QColor("#facc15")))
                     painter.drawEllipse(QPointF(pp_x, cy), radius, radius)
-                    # Number label
+                    # Number label — dark text on yellow
                     painter.setPen(QPen(QColor("#1b1a2e")))
                     num_rect = QRectF(pp_x - radius, cy - radius, radius * 2, radius * 2)
                     painter.drawText(num_rect, Qt.AlignmentFlag.AlignCenter, str(pp_idx))
@@ -1168,7 +1169,8 @@ class _TimelineTrack(QWidget):
         # Handle bars — always at the edges of the visible viewport
         handle_w = 4
         handle_color = QColor("#facc15")  # yellow accent
-        snap_color = QColor("#ffffff")    # white highlight when snapped to playhead
+        snap_color = QColor(T.fg_primary(self._dark_mode))  # white (dark) / black (light) when snapped
+        handle_grip = QColor(T.bg_canvas(self._dark_mode))  # grip lines match background
         snapped_start = self._trim_snapped and self._drag_mode == "trim_start"
         snapped_end = self._trim_snapped and self._drag_mode == "trim_end"
         painter.setPen(Qt.PenStyle.NoPen)
@@ -1177,7 +1179,7 @@ class _TimelineTrack(QWidget):
         sx = 0
         painter.setBrush(QBrush(snap_color if snapped_start else handle_color))
         painter.drawRoundedRect(QRectF(sx, 0, handle_w, h), 2, 2)
-        painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+        painter.setPen(QPen(handle_grip, 1.5))
         mid_y = h / 2
         painter.drawLine(int(sx) + 1, int(mid_y) - 6, int(sx) + 1, int(mid_y) + 6)
         painter.drawLine(int(sx) + 3, int(mid_y) - 6, int(sx) + 3, int(mid_y) + 6)
@@ -1187,7 +1189,7 @@ class _TimelineTrack(QWidget):
         ex = w
         painter.setBrush(QBrush(snap_color if snapped_end else handle_color))
         painter.drawRoundedRect(QRectF(ex - handle_w, 0, handle_w, h), 2, 2)
-        painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+        painter.setPen(QPen(handle_grip, 1.5))
         painter.drawLine(int(ex) - 3, int(mid_y) - 6, int(ex) - 3, int(mid_y) + 6)
         painter.drawLine(int(ex) - 1, int(mid_y) - 6, int(ex) - 1, int(mid_y) + 6)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -1816,6 +1818,12 @@ class TimelineWidget(QWidget):
     def _on_click(self, time_ms: float) -> None:
         """Handle click on timeline track — time_ms is the absolute timestamp."""
         self.seek_requested.emit(time_ms)
+
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint all custom-painted children."""
+        self._controls_host.set_dark_mode(dark)
+        self._time_display.set_dark_mode(dark)
+        self._track.set_dark_mode(dark)
 
     @property
     def chapters(self) -> List[Chapter]:

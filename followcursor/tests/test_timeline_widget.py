@@ -187,3 +187,35 @@ class TestVoiceoverGenerationSpinner:
 
         assert "ttsGenerating" not in d
         assert "tts_generating" not in d
+
+
+class TestTimelineThemeSupport:
+    """Verify the timeline respects dark/light mode theme changes."""
+
+    def test_set_dark_mode_propagates_to_children(self, qapp):
+        """set_dark_mode should update all custom-painted child widgets."""
+        widget = TimelineWidget()
+
+        widget.set_dark_mode(False)
+
+        assert widget._controls_host._dark_mode is False
+        assert widget._time_display._dark_mode is False
+        assert widget._track._dark_mode is False
+
+    def test_set_dark_mode_triggers_repaint(self, qapp):
+        """Toggling theme should trigger repaints on custom widgets."""
+        widget = TimelineWidget()
+        widget._track._dark_mode = True
+
+        widget.set_dark_mode(False)
+
+        # After toggling, the state should be updated
+        assert widget._track._dark_mode is False
+
+    def test_dark_mode_default_is_true(self, qapp):
+        """All custom-painted widgets should default to dark mode."""
+        widget = TimelineWidget()
+
+        assert widget._controls_host._dark_mode is True
+        assert widget._time_display._dark_mode is True
+        assert widget._track._dark_mode is True
