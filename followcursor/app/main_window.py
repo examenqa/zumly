@@ -2424,7 +2424,7 @@ class MainWindow(QMainWindow):
 
     # ── Voiceover segments ──────────────────────────────────────────
 
-    def _on_generate_narration_requested(self, voice: str) -> None:
+    def _on_generate_narration_requested(self, voice: str, guidance: str) -> None:
         """Generate presentation-style voiceover segments for the current recording."""
         if not self._video_path or not os.path.isfile(self._video_path):
             self._editor.set_narration_status(
@@ -2483,6 +2483,7 @@ class MainWindow(QMainWindow):
             script_output_path=script_output_path,
             audio_output_path=audio_output_path,
             synthesize_audio=False,
+            guidance_prompt=guidance or None,
         )
         self._editor.set_narration_status(
             f"Drafting GPT-5.4 voiceover segments with {selected_voice}. "
@@ -4625,6 +4626,9 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(theme_stylesheet)
         clear_icon_cache()
         self._refresh_icons()
+        # Propagate theme to custom-painted widgets
+        if hasattr(self, "_timeline"):
+            self._timeline.set_dark_mode(self._dark_mode)
         logger.info(f"Applied {'dark' if self._dark_mode else 'light'} theme")
 
     def _refresh_icons(self) -> None:
