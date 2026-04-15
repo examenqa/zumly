@@ -1,32 +1,5 @@
 # Decisions Archive
 
-## PR Review Fixes — Backend (Fenster, 2026-01-20)
-
-**Status:** Applied | **Items:** 6 fixes + 12 prior resolutions
-
-### Key Architectural Choices
-
-1. **Modifier VKs now recorded**
-   - Removed modifier VK codes (Shift/Ctrl/Alt/Win) from `_IGNORE_VKS` in keyboard_tracker
-   - Trade-off: correct shortcut detection vs. slightly larger project files and broader privacy surface
-   - Documented privacy implications in module docstring
-
-2. **Chapter END time computation**
-   - Changed from hardcoded `START + 1000` to computing END from next chapter's start time
-   - Added `-f ffmetadata` and `-map_chapters` flags so ffmpeg interprets metadata correctly
-   - Last chapter's END uses trimmed video duration
-
-3. **Z-order change**
-   - Moved annotation rendering BEFORE cursor/click rendering in main frame loop and extra-frames loop
-   - New order: video → annotations → cursor → click effects → keystrokes
-
-4. **Near-cursor keystroke placement**
-   - Implemented actual cursor-relative positioning using `KeyEvent.x`/`KeyEvent.y` data
-   - Falls back to bottom-center with debug log when no cursor data available
-
-5. **JSON decoding error handling**
-   - Confirmed `json.loads()` in `project_file.py` already inside try/except with `JSONDecodeError`
-   - No change needed — already robust
 
 ## PR Review Fixes — UI & Docs (McManus, 2026-04-06)
 
@@ -56,6 +29,7 @@
 
 ---
 *All decisions applied as of 2026-04-07T01:30:06Z*
+
 
 ## Fluent 2 Design Research (McManus, 2026-04-07)
 
@@ -92,6 +66,7 @@ Comprehensive analysis of Windows 11 Fluent 2 design system and PySide6 implemen
     - Unify corner radius (4px elements, 8px containers)
     - Add semantic color tokens
 
+
 ## User Directive (Ahmed Sabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow
@@ -103,6 +78,7 @@ Create branches and worktrees before major work. All significant changes should 
 **Rationale:** User request — established to maintain clean main branch and enable parallel development.
 
 *Updated: 2026-04-07T07:33:49Z*
+
 
 ## Fluent 2 Phase 1 — Design Token Architecture (McManus, 2026-04-07)
 
@@ -133,6 +109,7 @@ FollowCursor's theme.py used hardcoded hex colors, inconsistent spacing (2–28p
 
 ---
 *All decisions applied as of 2026-04-07T07:49:22Z*
+
 
 ## Fluent 2 Color System & Elevation Adoption (McManus, 2026-07-23)
 
@@ -434,6 +411,7 @@ FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color
 
 ---
 *Applied as of 2026-04-07, PR #105*
+
 ## User Directives (Ahmed Sabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow — PR Review & Issue Management
@@ -456,6 +434,7 @@ FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color
 
 **Rationale:** User requests — these are workflow policies to prevent missed PR review feedback, ensure release planning visibility, and avoid duplicate work across parallel agent spawns.
 
+
 ## Release Trigger Policy (asabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow — Release Management
@@ -470,6 +449,7 @@ Ralph should always trigger a release at the end of milestone work — defined a
 - This ensures milestone work naturally concludes with a versioned release for users
 
 **Rationale:** User request — provides a clear handoff point between milestone completion and release, enabling automated release workflow.
+
 
 ## User Directive: Squad State Separation (asabbour, 2026-04-07)
 
@@ -491,6 +471,7 @@ Never mix `.squad/` state changes with feature or code changes in the same commi
 **What:** `.squad/agents/*/history.md` changes ARE allowed alongside code changes in the same PR/commit — history files are contextually related to the code work. The rule against mixing squad state with code only applies to orchestration logs, decisions, and other `.squad/` state files (NOT history files).
 **Why:** User request — captured for team memory
 
+
 ## Auto Narration — Architecture Decision (Fenster, 2026-04-15T17:48:11.995Z)
 
 **Decision:** Persist automated narration on the existing voiceover path as a `VoiceoverSegment` with `source="generated"`.
@@ -501,8 +482,55 @@ Never mix `.squad/` state changes with feature or code changes in the same commi
 
 **Why:** Reuses current export mixer, `.fcproj` JSON persistence, and voiceover audio packaging without duplicating timeline or audio logic. Backward compatible (new fields optional).
 
+
 ## Auto Narration — UI/Timeline Decision (McManus, 2026-04-15T17:48:11.995Z)
 
 **Decision:** Automated narration stays on the existing voiceover track as a single generated `VoiceoverSegment`. Editor asks before replacing existing generated narration, preserves manual segments, rewrites markdown sidecar beside the active video after project load.
 **Why:** Keeps export, save/load, and timeline rendering on one proven path instead of duplicating the audio model. Users get first-class narration flow while implementation remains compatible with existing voiceover tooling and `.fcproj` persistence.
 **Affected:** `main_window.py`, `editor_panel.py`, `timeline_widget.py`
+
+## User Directive: AI Narration Batching (Ahmed Sabbour, 2026-04-15)
+
+**Status:** Captured | **Type:** Feature Request
+
+### Directive
+
+For AI narration, consider batching multiple requests instead of hard-capping at 50 images, but do it in a way that avoids rate limiting.
+
+**Rationale:** User request — captured for team memory to guide AI narration improvements.
+
+*Captured: 2026-04-15T19:11:54.918Z*
+
+## User Directive: AI Narration Multi-Modal (Ahmed Sabbour, 2026-04-15)
+
+**Status:** Captured | **Type:** Feature Request
+
+### Directive
+
+AI narration should account for zooms and annotations too, not just mouse, clicks, and keystrokes.
+
+**Rationale:** User request — captured for team memory to guide narration generation strategy.
+
+*Captured: 2026-04-15T19:16:47.060Z*
+
+## Fenster: Narration Image Cap Handling (2026-04-15)
+
+**Status:** Implementation Spec | **Agent:** Fenster | **Module:** `ai_service.py`
+
+### Design
+
+Handle long automated narration runs in shared `ai_service.py` with sequential multimodal batching instead of a single global trim:
+- Keep the full 5-second-plus-cues frame plan
+- Split extracted frames into batches below the provider's 50-image cap
+- Pause between requests to reduce burst rate-limiting risk
+- Synthesize final narration from batch notes
+- Pass both authoritative zoom keyframes and structured annotations into narration generation
+- Convert annotations into explicit cue moments
+- Include annotation summaries in both slice-analysis and final synthesis prompts
+- Preserve manual voiceover/project persistence behavior unchanged
+
+### Rationale
+
+This fixes the provider 400 at the core narration path without throwing away later parts of the recording, preserves narration quality on long videos, and makes narration reflect deliberate zoom emphasis plus explicit text/arrow/highlight callouts in addition to mouse, clicks, and keystrokes.
+
+*Captured: 2026-04-15T19:11:54.918Z*

@@ -164,6 +164,24 @@ Fenster identified and corrected multiple README inaccuracies:
 - **User preference** — Ahmed wants a single full-video narration script, one TTS track, a manual editor trigger, `<video_name>_voiceover.md` output, and narration state that survives `.fcproj` save/load.
 - **Key file paths** — `followcursor/app/ai_service.py`, `followcursor/app/models.py`, `followcursor/tests/test_ai_service.py`, `followcursor/tests/test_models.py`, and `followcursor/tests/test_project_file.py`.
 
+### 2026-04-15T19:11:54.918Z — Narration image budgeting
+
+- **Root cause** — A strict 5-second timeline cadence already hits 51 screenshots at around 250 seconds once the final frame is included, so long narration runs can exceed the provider's 50-image multimodal cap even before extra activity cues are added.
+- **Fix pattern** — Build the full candidate plan first, then in shared `ai_service.py` dedupe same-time cues, always keep the opening/closing frames and non-timeline activity moments, and spend the remaining image budget on evenly spread timeline samples. Apply the cap again right before payload assembly as a defensive guard so the prompt never drifts over the limit.
+- **Regression anchor** — `followcursor/tests/test_ai_service.py` now proves the capped plan preserves activity moments, keeps broad temporal coverage, and never emits more than 50 narration images.
+
+### 2026-04-15T19:11:54.918Z — Narration batching + zoom cues
+
+- **Design update** — The better long-run fix is multi-pass narration analysis, not a single global trim. `generate_narration()` now keeps the full 5-second-plus-cues plan, splits extracted frames into sequential multimodal batches under the provider image cap, pauses between calls to avoid burst rate limiting, then synthesizes the final script from the batch notes.
+- **Signal update** — Automated narration now uses mouse movement, keystrokes, clicks, sampled frames, and explicit zoom keyframes. Zoom-ins are converted into `zoom cue` narration moments, fed into prompt moments, and inserted into the frame plan so editorial emphasis informs the script directly instead of only showing up indirectly through screenshots.
+- **Regression anchor** — `followcursor/tests/test_ai_service.py` now verifies the over-cap path makes multiple provider-safe multimodal calls, carries zoom cues into the synthesis prompt, and still returns the full sampled timeline metadata.
+
+### 2026-04-15T19:11:54.918Z — Narration annotation cues
+
+- **Authoritative sources** — The narration path should read editorial intent from the same live state the editor/export path uses: `main_window.py` passes `self._zoom_engine.keyframes` as the authoritative zoom source and `self._annotations` as structured annotation data.
+- **Pattern** — Treat annotations like first-class narration inputs instead of hoping screenshots capture them. Convert text/arrow/highlight annotations into `annotation cue` moments, include structured annotation summaries in both batch prompts and the final synthesis prompt, and still use sampled frames as visual evidence.
+- **Regression anchor** — `followcursor/tests/test_ai_service.py` now checks that single-pass narration includes annotation text directly in the prompt and that batched narration carries annotation metadata through both slice-analysis requests and final synthesis.
+
 ## 2026-04-15: Auto Narration Feature Spawn
 
 **Mode:** Background agent spawned by Scribe  
@@ -184,3 +202,25 @@ Fenster identified and corrected multiple README inaccuracies:
 - `followcursor/app/ai_service.py` — narration worker + generation logic
 - `followcursor/app/models.py` — voiceover metadata for `source` field
 - `followcursor/app/project_file.py` — `.fcproj` narration persistence
+
+## Spawned Work — In Progress
+
+### 2026-04-15 — Narration Image Cap Handling & Multi-Modal Inputs
+**Branch:** `feat/fenster-narration-batching` (to be created)
+**Context:** User (Ahmed Sabbour) requested batching and multi-modal narration inputs to fix long-run 400 errors from AI provider image limits
+
+**Scope:**
+- Replace hard 50-image trim in `ai_service.py` with sequential provider-safe batching
+- Add pause between requests to mitigate rate limiting
+- Expand narration inputs: mouse movement, clicks, keystrokes, frames, timestamps, zoom keyframes, annotations
+- Convert annotations into explicit narrative cues
+- Preserve manual voiceover and project persistence
+
+**Affected modules:**
+- `followcursor/app/ai_service.py` — Core narration generation
+- `followcursor/app/models.py` — Enhanced narration input structures
+- `followcursor/app/main_window.py` — Workflow integration
+- `followcursor/app/project_file.py` — Persistence
+- Tests: `test_ai_service.py`, `test_models.py`, `test_project_file.py`
+
+**Status:** Spawned in background mode — awaiting implementation results
