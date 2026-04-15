@@ -20,9 +20,9 @@ MainWindow
 ScreenRecorder
  |-- MouseTracker (60 Hz QTimer poll)
  |-- ClickTracker (Win32 WH_MOUSE_LL)
- +-- KeyboardTracker (Win32 WH_KEYBOARD_LL)
+ +-- KeyboardTracker (legacy no-op compatibility stub)
 
-All trackers + ZoomEngine --> VideoExporter (ffmpeg H.264 pipe)
+Mouse/click trackers + ZoomEngine --> VideoExporter (ffmpeg H.264 pipe)
 ```
 
 ---
@@ -37,6 +37,10 @@ The app operates in two modes, switchable via the sidebar:
 2. **Edit mode** — Video playback, timeline, zoom keyframe editing, visual customization, export
 
 `MainWindow._set_view()` manages mode transitions, showing/hiding widgets and loading video when entering edit mode.
+
+### Startup Flow
+
+`main.py` creates the `QApplication`, applies the app icon/palette, and shows a lightweight splash screen before constructing `MainWindow`. `MainWindow._deferred_init()` then performs post-show work such as tray setup, encoder label refresh, and optional TTS voice preloading; when that first deferred pass completes, it emits `startup_ready` on the next event-loop turn so the splash can close without blocking startup on background voice loading.
 
 ### Recording Flow
 
@@ -60,7 +64,7 @@ User presses Ctrl+Shift+R (stop)
 
 ### Shared Epoch
 
-All four data streams (video frames, mouse positions, keyboard events, click events) share a single `time.time()` epoch set at the start of recording. This ensures timestamps are perfectly aligned without post-hoc synchronization.
+Video frames, mouse positions, clicks, and related activity signals share a single `time.time()` epoch set at the start of recording. This ensures timestamps are perfectly aligned without post-hoc synchronization.
 
 ---
 
@@ -73,18 +77,12 @@ All data classes live in `app/models.py`.
 | Class | Fields | Purpose |
 | ----- | ------ | ------- |
 | `MousePosition` | `x, y, timestamp` | Absolute screen coords at ~60 Hz |
-| `KeyEvent` | `timestamp, x, y, vk_code` | Keystroke time + cursor position + virtual key code |
 | `ClickEvent` | `x, y, timestamp` | Mouse click position + time |
 | `ZoomKeyframe` | `id, timestamp, zoom, x, y, duration, reason, speed` | Zoom instruction with playback speed |
 | `VideoSegment` | `id, start_ms, end_ms, speed` | Contiguous time range with speed multiplier |
-| `VoiceoverSegment` | `id, timestamp, text, voice, audio_path, duration_ms, rate, volume` | TTS narration segment |
+| `VoiceoverSegment` | `id, timestamp, text, voice, audio_path, duration_ms, rate, volume, source, script_markdown, script_path` | Manual voiceover or generated voiceover segment |
 | `Chapter` | `timestamp_ms, name, auto_detected` | Scene boundary marker |
 | `ClickEffectPreset` | `name, color, style, duration_ms, radius` | Click visual effect configuration |
-| `KeystrokeOverlayConfig` | `enabled, position, style, filter_mode, ...` | Keystroke display settings |
-| `TextAnnotation` | `id, start_ms, end_ms, x, y, text, ...` | Text overlay |
-| `ArrowAnnotation` | `id, start_ms, end_ms, x1, y1, x2, y2, ...` | Directional arrow |
-| `HighlightBox` | `id, start_ms, end_ms, x, y, width, height, ...` | Highlight rectangle |
-| `AnnotationCollection` | Container for all annotation types | Aggregates text, arrows, highlights |
 | `RecordingSession` | All of the above bundled | Serializable session data |
 
 ### ZoomKeyframe Anatomy
@@ -161,7 +159,7 @@ Snapshot-based stacks (max depth 50). Each snapshot captures zoom keyframes, cli
 
 ### Signal Detection
 
-**Typing zones** — mouse stationary + keys pressed. Score = KPS. Keystroke cursor position used when available.
+**Low-motion activity zones** — mouse stationary during a burst of interaction. Score = activity density in the window.
 
 **Click clusters** — 1+ clicks in 3-second window. Score = count x 1.2 (highest weighted). Even single clicks trigger zoom.
 
@@ -173,9 +171,9 @@ Peaks clustered by time AND spatial proximity. Same-type peaks close in position
 
 Consecutive clusters within 1500 ms grouped into chains (max 4). Camera stays zoomed and pans between clusters. Pan duration scales with distance (400-700 ms).
 
-### Scene Chapters
+### AI Chapters
 
-`detect_chapters()` detects scene boundaries via idle gaps (>= 3s) and major position jumps. Chapter markers on timeline, embeddable as MP4 metadata.
+Chapter generation now runs through `AIService.generate_chapters()`. It reuses the same shared recording knowledge as narration — frame samples, activity summary, click beats, zoom edits, and provider-safe batch notes — so chapter markers stay aligned with the presentation beats already visible to narration. Generated chapter markers can replace prior generated markers while preserving any manual chapters on the timeline, and the merged set is embeddable as MP4 metadata.
 
 ---
 
@@ -187,9 +185,13 @@ Consecutive clusters within 1500 ms grouped into chains (max 4). Camera stays zo
 
 Activity summarized into per-second text, sent to LLM. Returns JSON array of zoom sections (max 50). Applied same as local auto-zoom.
 
+### Automated narration
+
+The narration path builds a `SharedRecordingKnowledge` artifact from steady frame samples plus mouse activity, clicks, and authoritative zoom keyframes. When the full frame pack would exceed the provider image cap, FollowCursor sends multimodal batches to **GPT-5.4**, saves the batch notes, and reuses those notes for both narration and chapter generation. Narration synthesizes that shared evidence into five timed voiceover drafts with **Context**, **Background**, **Prompt / Action**, **Walkthrough**, and **Result**. If the draft is too short or too long for the recording, a text-only pacing polish rewrites the same five sections against their timing windows before TTS. The final prompt steers the model toward a peer presentation or pitch instead of cursor-by-cursor recap prose, and the polish pass rewrites literal click/zoom/camera phrasing into action- or outcome-focused language when needed. FollowCursor saves the combined markdown beside the recording as `<video_name>_voiceover.md`, creates generated `VoiceoverSegment` entries, and then hands those segments to the same TTS path used by **Add voiceover** so each segment becomes a normal timeline WAV clip. Ripple clip deletes trim and retime overlapping generated narration segments, rewrite the markdown sidecar, and re-synthesize only the affected generated clips so narration stays aligned with the edited cut. TTS can retry each segment with a small speech-rate nudge (within ±12%) so the combined narration stays within about 1.5 seconds or 1.5% of the video duration, whichever is larger, without obvious silence padding.
+
 ### Voiceover (TTS)
 
-Segment-based: users create `VoiceoverSegment` at timeline positions, synthesize via Azure TTS. Export merges audio with ffmpeg `adelay` + `amix`, muxed as AAC (192 kbps).
+Segment-based: users can create manual `VoiceoverSegment` entries at timeline positions, and generated narration is stored as timed generated `VoiceoverSegment` entries. Export merges all synthesized audio with ffmpeg `adelay` + `amix`, muxed as AAC (192 kbps).
 
 ### Credential Security
 
@@ -209,17 +211,15 @@ Phase 2: Build background + bezel layers
 Phase 3: Merge voiceover audio (if any)
 Phase 4: For each output timestamp:
   - Pick source frame (binary search)
-  - Compose (zoom + annotations + cursor + clicks + keystrokes)
+  - Compose (zoom + cursor + clicks)
   - Enqueue to bounded queue (depth 16)
 Phase 5: Writer thread drains queue --> ffmpeg --> MP4/GIF
 ```
 
 ### Overlay Z-Order (back to front)
 
-1. Annotations (highlights, arrows, text)
-2. Mouse cursor
-3. Click effects (ripple/burst/highlight)
-4. Keystroke badges
+1. Mouse cursor
+2. Click effects (ripple/burst/highlight)
 
 ### Encoder Fallback
 
@@ -279,10 +279,10 @@ Comprehensive QSS stylesheet using token references. All styling via QSS, not QP
 | Tracker | Method | Details |
 | ------- | ------ | ------- |
 | **Mouse** | QTimer at 60 Hz | Polls `QCursor.pos()` |
-| **Keyboard** | Win32 WH_KEYBOARD_LL | Records timestamp + cursor position + VK code. Uses `WINFUNCTYPE` for 64-bit |
 | **Click** | Win32 WH_MOUSE_LL | Left/right click detection with position |
+| **Keyboard (legacy)** | Compatibility stub | No hook is installed. Retained for ABI tests and older controller paths while removed keystroke data is ignored. |
 
-All hooks run in dedicated threads with Win32 message loops. `CallNextHookEx` always called. Events appended to shared lists (CPython GIL thread-safe). Callbacks wrapped in try/except.
+Only mouse and click activity feed the current product UI and automation. The legacy keyboard tracker remains import-compatible but does not install a hook or emit keystrokes. Legacy annotation payloads are also ignored during project load, so export, narration, and chapter generation only consume mouse, click, frame, and zoom context.
 
 ---
 
@@ -312,7 +312,6 @@ PreviewWidget.zoom_at_requested --> MainWindow --> _add_keyframe
 | ------ | ------- |
 | Main (GUI) | Qt widgets, painting, events |
 | Recording | WGC/GDI --> ffmpeg pipe |
-| Keyboard hook | Win32 WH_KEYBOARD_LL |
 | Click hook | Win32 WH_MOUSE_LL |
 | Export | Frame render + ffmpeg pipe |
 | Writer | Queue --> stdin (overlaps compositing with encoding) |
@@ -328,10 +327,12 @@ PreviewWidget.zoom_at_requested --> MainWindow --> _add_keyframe
 
 ```text
 project.fcproj (ZIP)
-  |-- project.json     -- session metadata
+  |-- project.json     -- session metadata + generated narration markdown
   |-- recording.mp4    -- H.264 intermediate video
   +-- voiceover_*.wav  -- synthesized audio files
 ```
+
+When you load a project, `MainWindow` recombines generated voiceover segment markdown into a fresh `<video_name>_voiceover.md` sidecar beside the extracted recording.
 
 ### Incremental Save
 
@@ -375,14 +376,12 @@ Python `logging` module. Format: `%(name)s | %(levelname)s | %(message)s`. `Rota
 | `app/utils.py` | Helper functions for video/image processing |
 | `app/zoom_engine.py` | Keyframe interpolation + undo/redo |
 | `app/activity_analyzer.py` | Auto-zoom from activity |
-| `app/ai_service.py` | AI zoom + TTS voiceover |
+| `app/ai_service.py` | AI zoom, multimodal narration, and TTS voiceover |
 | `app/credentials.py` | DPAPI credential encryption |
 | `app/mouse_tracker.py` | 60 Hz cursor polling |
-| `app/keyboard_tracker.py` | Win32 keyboard hook |
+| `app/keyboard_tracker.py` | Legacy no-op compatibility stub for removed keystrokes |
 | `app/click_tracker.py` | Win32 mouse click hook |
 | `app/cursor_renderer.py` | Arrow cursor + click effects |
-| `app/keystroke_renderer.py` | Keystroke badge overlay |
-| `app/annotation_renderer.py` | Text, arrow, highlight rendering |
 | `app/global_hotkeys.py` | Win32 RegisterHotKey |
 | `app/window_utils.py` | Win32 window enumeration |
 | `app/backgrounds.py` | 84 background presets |
@@ -392,12 +391,13 @@ Python `logging` module. Format: `%(name)s | %(levelname)s | %(message)s`. `Rota
 | `app/fluent_effects.py` | Shadows, animations, focus rings |
 | `app/theme.py` | QSS dark theme stylesheet |
 | `app/icon.py` | QPainter-generated app icon |
+| `app/splash_screen.py` | Runtime startup splash rendering and dismissal helpers |
 | `app/widgets/title_bar.py` | Custom frameless title bar |
 | `app/widgets/source_picker.py` | Screen/Window selection dialog |
 | `app/widgets/preview_widget.py` | Live/playback preview |
 | `app/widgets/timeline_widget.py` | QPainter timeline with heatmap |
 | `app/widgets/timeline_math.py` | Pixel-time conversion helpers |
-| `app/widgets/editor_panel.py` | Collapsible editor sections |
+| `app/widgets/editor_panel.py` | Collapsible editor sections, narration, and voiceover controls |
 | `app/widgets/countdown_overlay.py` | 3-2-1 countdown animation |
 | `app/widgets/processing_overlay.py` | Pulsing banner overlay |
 | `app/widgets/recording_border.py` | Red border during recording |

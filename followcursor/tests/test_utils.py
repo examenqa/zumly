@@ -85,8 +85,17 @@ class TestBuildEncoderArgs:
     def test_args_always_end_with_pix_fmt(self) -> None:
         for enc_id in ENCODER_PROFILES:
             args = build_encoder_args(enc_id)
-            # Last two should be -pix_fmt yuv420p
-            assert args[-2:] == ["-pix_fmt", "yuv420p"]
+            # Must contain -pix_fmt yuv420p
+            assert "-pix_fmt" in args
+            idx = args.index("-pix_fmt")
+            assert args[idx + 1] == "yuv420p"
+
+    def test_args_contain_movflags_faststart(self) -> None:
+        for enc_id in ENCODER_PROFILES:
+            args = build_encoder_args(enc_id)
+            assert "-movflags" in args
+            idx = args.index("-movflags")
+            assert args[idx + 1] == "+faststart"
 
 
 # ── encoder_display_name ────────────────────────────────────────────

@@ -8,6 +8,8 @@ cards, inputs, menus, dialogs, sliders, and progress indicators.
 Reference: https://fluent2.microsoft.design/components/web/react/
 """
 
+from PySide6.QtGui import QColor, QPalette
+
 from . import tokens as T
 
 
@@ -815,7 +817,7 @@ QPushButton#SaveBtn:disabled {{
     border-top: 1px solid {T.STROKE_2};
 }}
 #PlaybackControls {{
-    background: transparent;
+    background-color: {T.BG_LAYER_1};
 }}
 /* Play button — secondary */
 #PlayBtn {{
@@ -985,6 +987,43 @@ QLabel#Secondary {{ color: {T.FG_2}; font-size: {T.FONT_SIZE_CAPTION_1}px; }}
 # ══════════════════════════════════════════════════════════════════════════
 
 LIGHT_THEME = _build_light_theme()
+
+
+def get_base_palette(dark: bool = True) -> QPalette:
+    """Return the base ``QPalette`` for the active theme.
+
+    Qt uses this palette before the full QSS is applied and for a few native
+    surfaces that are not fully styled by the stylesheet alone.
+    """
+    palette = QPalette()
+    if dark:
+        palette.setColor(QPalette.ColorRole.Window, QColor(T.BG_LAYER_1))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(T.FG_PRIMARY))
+        palette.setColor(QPalette.ColorRole.Base, QColor(T.BG_LAYER_2))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(T.BG_LAYER_3))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(T.BG_LAYER_4))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(T.FG_PRIMARY))
+        palette.setColor(QPalette.ColorRole.Text, QColor(T.FG_PRIMARY))
+        palette.setColor(QPalette.ColorRole.Button, QColor(T.BG_LAYER_3))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(T.FG_PRIMARY))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(T.BRAND))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(T.FG_3))
+        return palette
+
+    palette.setColor(QPalette.ColorRole.Window, QColor(T.LIGHT_BG_2))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(T.LIGHT_FG_1))
+    palette.setColor(QPalette.ColorRole.Base, QColor(T.LIGHT_BG_1))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(T.LIGHT_BG_3))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(T.LIGHT_BG_1))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(T.LIGHT_FG_1))
+    palette.setColor(QPalette.ColorRole.Text, QColor(T.LIGHT_FG_1))
+    palette.setColor(QPalette.ColorRole.Button, QColor(T.LIGHT_BG_3))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(T.LIGHT_FG_1))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(T.LIGHT_BRAND_BG))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(T.LIGHT_FG_3))
+    return palette
 
 
 def get_theme(dark: bool = True) -> str:

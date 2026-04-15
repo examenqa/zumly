@@ -30,7 +30,7 @@ cd followcursor
 .\scripts\Start-Dev.ps1
 ```
 
-This creates a virtual environment, installs all dependencies, and launches the app.
+This creates a virtual environment, installs all dependencies, and launches the app. A brief startup splash stays visible while the recorder, tray icon, and editor shell finish initialising.
 
 **Manual setup:**
 
@@ -69,7 +69,7 @@ Click the red **Start Recording** button. A **3-second countdown** (3, 2, 1) giv
 
 - The app minimizes to the **system tray**
 - A subtle **red border** pulses around the captured area
-- **Mouse position** (60 Hz), **keyboard events**, and **clicks** are tracked
+- **Mouse position** (60 Hz) and **clicks** are tracked
 
 !!! tip "Live zoom hotkeys"
     Press **Ctrl+Shift+=** during recording to zoom in at the cursor, or **Ctrl+Shift+-** to zoom back out. These are global hotkeys — they work from any app.
@@ -92,7 +92,7 @@ The app restores and switches to the **Edit** view with your recording loaded.
 
 The analyzer detects:
 
-- **Typing bursts** — mouse is still while keys are pressed, zooms into the typing area
+- **Activity bursts** — when the pointer stays settled during a dense patch of interaction, the camera zooms into that area
 - **Click clusters** — clicks in a short window, zooms into the click region (highest priority)
 
 Spatially close activity is merged into sustained zooms, and consecutive clusters are chained — the camera pans between them instead of zooming out and back in.
@@ -116,6 +116,23 @@ Spatially close activity is merged into sustained zooms, and consecutive cluster
 
 While viewing a zoom segment, right-click the preview and select **Add pan point here** to create smooth panning within the zoomed view. Pan points show as numbered yellow markers on the timeline.
 
+### Generate narration
+
+1. In the **NARRATION & VOICEOVER** section, click **Generate narration**
+2. FollowCursor uses **GPT-5.4** to draft five presentation-style, timestamped voiceover segments — **Context**, **Background**, **Prompt / Action**, **Walkthrough**, and **Result** — from frame samples plus activity and zoom cues. The wording stays focused on the point of the work rather than on-screen mechanics
+3. The combined script is saved as `<video_name>_voiceover.md` beside the recording, then speech starts automatically with the current default TTS voice from **AI Settings**, using timing-aware pacing so the narration stays close to the recording length without obvious silence padding
+4. The generated segments appear on the timeline's **Voice** track with short labels such as **Context** and **Result**. Double-click or right-click a segment to review the spoken line, drag it to retime it, or delete it with confirmation
+5. If you generate narration again, FollowCursor replaces only the previous generated voiceover segments and leaves manual voiceover segments alone
+6. If you also add manual voiceover segments, they stay separate and are mixed into the same MP4 audio track during export
+
+### Generate chapters
+
+1. In the **CHAPTERS** section, click **Generate chapters**
+2. FollowCursor reuses the same shared recording understanding as narration — frame samples, activity, and zoom beats — to suggest timeline-friendly chapter markers with **GPT-5.4**
+3. Hover a chapter flag to review its name, left-click it to jump there, or right-click it to delete the marker
+4. Regenerating chapters replaces the previous generated chapter markers but keeps any manual chapter markers you added
+5. Exported MP4 files include those chapter markers as metadata for players that support navigation
+
 ---
 
 ## 4. Customize the Look
@@ -126,8 +143,6 @@ While viewing a zoom segment, right-click the preview and select **Add pan point
 | **Device Frame** | Wide Bezel, Slim Bezel, Thin Border, Shadow Only, No Frame |
 | **Output Size** | Auto, 16:9, 3:2, 4:3, 1:1, 9:16 |
 | **Click Effects** | 8 presets — Subtle Purple, Bold Red, Neon Cyan, and more |
-| **Keystroke Overlay** | Show keyboard shortcuts during playback (3 filter modes) |
-| **Annotations** | Add text labels, arrows, and highlight boxes |
 
 ### Trim the recording
 
@@ -152,13 +167,13 @@ Click **Export** in the title bar.
 - **MP4** — H.264 at CRF 18 quality. GPU-accelerated encoding (NVENC, QuickSync, AMF) is auto-detected with software fallback.
 - **GIF** — 15 fps, 256-color palette with Bayer dithering for smooth color transitions.
 
-Export renders every frame with zoom, cursor, click effects, keystroke overlay, annotations, device bezel, and background.
+Export renders every frame with zoom, cursor, click effects, device bezel, and background.
 
 ---
 
 ## 6. Save & Resume
 
-- **Ctrl+S** — saves a .fcproj file (ZIP bundle with raw video + all metadata + voiceover audio)
+- **Ctrl+S** — saves a .fcproj file (ZIP bundle with raw video, narration script metadata, and voiceover audio)
 - Re-saving is near-instant — only metadata is updated, the video is never re-copied
 - The title bar shows the project name and a dot indicator for unsaved changes
 - Closing with unsaved changes prompts **Save / Don't Save / Cancel**
@@ -181,7 +196,7 @@ Export renders every frame with zoom, cursor, click effects, keystroke overlay, 
 | -------- | ------ |
 | Space | Play / Pause |
 | Z | Insert zoom keyframe at playhead |
-| Delete | Remove selected zoom segment, video segment, or click event |
+| Delete | Remove the selected zoom section, voiceover segment, clip, or click event |
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z / Ctrl+Y | Redo |
 | Ctrl+S | Save project |
@@ -192,12 +207,17 @@ Export renders every frame with zoom, cursor, click effects, keystroke overlay, 
 | ----------- | ----- | ------ |
 | Left-click | Timeline | Seek to that time |
 | Left-click | Zoom segment | Select segment |
+| Left-click | Voiceover segment | Select segment for drag or Delete |
 | Left-click | Click event dot | Select click event |
+| Double-click | Voiceover segment | Review or edit the segment |
 | Right-click | Preview | Add zoom at click position |
-| Right-click | Timeline (empty) | Add zoom or voiceover |
+| Right-click | Timeline (empty) | Split a clip, add zoom, or add voiceover |
 | Right-click | Zoom segment | Depth / centroid / delete |
+| Right-click | Voiceover segment | Review or delete the segment |
+| Right-click | Clip segment | Delete the clip with ripple retiming |
 | Drag edge | Zoom segment | Resize duration |
 | Drag body | Zoom segment | Move in time |
+| Drag body | Voiceover segment | Move the segment in time |
 | Drag handle | Timeline edge | Set trim start/end |
 
 ---

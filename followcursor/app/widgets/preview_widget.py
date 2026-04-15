@@ -866,9 +866,6 @@ class PreviewWidget(QWidget):
             frame_preset=self._frame_preset,
             click_events=self._click_events or None,
             click_preset=self._click_preset,
-            annotations=self._annotations,
-            key_events=self._key_events or None,
-            keystroke_config=self._keystroke_config,
         )
 
         painter.setClipping(False)

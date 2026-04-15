@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import wave
 import zipfile
 
 import pytest
@@ -14,6 +15,7 @@ from app.models import (
     ClickEvent,
     ZoomKeyframe,
     RecordingSession,
+    VoiceoverSegment,
 )
 from app.backgrounds import BackgroundPreset
 from app.frames import FramePreset, DEFAULT_FRAME
@@ -97,6 +99,9 @@ class TestSaveProject:
         assert data["duration"] == 5000.0
         assert len(data["mouseTrack"]) == 3
         assert len(data["keyframes"]) == 2
+        assert "keyEvents" not in data
+        assert "keystrokeConfig" not in data
+        assert "annotations" not in data
 
     def test_includes_monitor_rect(self, tmp_dir, dummy_video, full_session) -> None:
         mon = {"left": 0, "top": 0, "width": 1920, "height": 1080}
@@ -172,15 +177,41 @@ class TestLoadProject:
         assert result["session"].trim_start_ms == 100
         assert result["session"].trim_end_ms == 4500
 
-    def test_key_events_preserved(self, tmp_dir, dummy_video, full_session) -> None:
+    def test_key_events_removed_on_roundtrip(self, tmp_dir, dummy_video, full_session) -> None:
         out = save_project(str(tmp_dir / "rt"), dummy_video, full_session)
         result = load_project(out)
-        assert len(result["session"].key_events) == 1
+        assert result["session"].key_events is None
+        assert result["keystroke_config"] is None
+        assert result["annotations"] is None
 
     def test_click_events_preserved(self, tmp_dir, dummy_video, full_session) -> None:
         out = save_project(str(tmp_dir / "rt"), dummy_video, full_session)
         result = load_project(out)
         assert len(result["session"].click_events) == 1
+
+    def test_legacy_removed_payloads_load_safely(self, tmp_dir) -> None:
+        legacy_path = tmp_dir / "legacy.fcproj"
+        legacy_data = {
+            "id": "legacy-project",
+            "startTime": 0.0,
+            "duration": 5000.0,
+            "mouseTrack": [{"x": 100, "y": 200, "timestamp": 0.0}],
+            "keyframes": [],
+            "keyEvents": [{"timestamp": 500.0}],
+            "clickEvents": [{"x": 105, "y": 205, "timestamp": 600.0}],
+            "keystrokeConfig": {"enabled": True},
+            "annotations": {"texts": [{}], "arrows": [{}], "highlights": []},
+        }
+        with zipfile.ZipFile(legacy_path, "w") as zf:
+            zf.writestr(_JSON_NAME, json.dumps(legacy_data))
+
+        result = load_project(str(legacy_path))
+
+        assert result["session"].id == "legacy-project"
+        assert result["session"].key_events is None
+        assert len(result["session"].click_events) == 1
+        assert result["keystroke_config"] is None
+        assert result["annotations"] is None
 
     def test_invalid_file_raises(self, tmp_dir) -> None:
         bad = str(tmp_dir / "bad.fcproj")
@@ -213,6 +244,59 @@ class TestLoadProject:
         out = save_project(str(tmp_dir / "nofr"), dummy_video, full_session)
         result = load_project(out)
         assert result["frame_preset"] is None
+
+    def test_generated_narration_roundtrip(self, tmp_dir, dummy_video, full_session) -> None:
+        audio_paths = []
+        for name in ("generated_01_context.wav", "generated_02_result.wav"):
+            audio_path = tmp_dir / name
+            with wave.open(str(audio_path), "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16000)
+                wav_file.writeframes(b"\x00\x00" * 160)
+            audio_paths.append(audio_path)
+
+        seg_one = VoiceoverSegment.create(
+            timestamp=0.0,
+            text="Context narration",
+            voice="nova",
+            rate=0.94,
+            source="generated",
+            script_markdown="## Context\nContext narration",
+            script_path="C:/videos/demo_voiceover.md",
+        )
+        seg_one.audio_path = str(audio_paths[0])
+        seg_one.duration_ms = 10.0
+
+        seg_two = VoiceoverSegment.create(
+            timestamp=3200.0,
+            text="Result narration",
+            voice="alloy",
+            rate=1.08,
+            source="generated",
+            script_markdown="## Result\nResult narration",
+            script_path="C:/videos/demo_voiceover.md",
+        )
+        seg_two.audio_path = str(audio_paths[1])
+        seg_two.duration_ms = 10.0
+        full_session.voiceover_segments = [seg_one, seg_two]
+
+        out = save_project(str(tmp_dir / "generated"), dummy_video, full_session)
+        result = load_project(out)
+        loaded_segments = result["session"].voiceover_segments
+        assert len(loaded_segments) == 2
+        assert loaded_segments[0].source == "generated"
+        assert loaded_segments[0].script_markdown == "## Context\nContext narration"
+        assert loaded_segments[0].script_path == "C:/videos/demo_voiceover.md"
+        assert loaded_segments[0].duration_ms == 10.0
+        assert loaded_segments[0].rate == 0.94
+        assert loaded_segments[0].voice == "nova"
+        assert loaded_segments[0].audio_path.endswith(".wav")
+        assert os.path.isfile(loaded_segments[0].audio_path)
+        assert loaded_segments[1].script_markdown == "## Result\nResult narration"
+        assert loaded_segments[1].rate == 1.08
+        assert loaded_segments[1].voice == "alloy"
+        assert os.path.isfile(loaded_segments[1].audio_path)
 
     def test_zip_slip_rejected(self, tmp_dir) -> None:
         """A crafted ZIP with path-traversal entries must be rejected."""

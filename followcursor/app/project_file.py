@@ -1,8 +1,8 @@
 """Project file management — save / load .fcproj bundles.
 
 A .fcproj file is a ZIP archive containing:
-  - project.json   — session metadata (mouse track, keyframes, key events,
-                      voiceover segments, etc.)
+  - project.json   — session metadata (mouse track, keyframes, click events,
+                      voiceover segments, generated narration scripts, etc.)
   - recording.mp4  — the raw H.264 intermediate video
   - voiceover_*.wav — synthesized voiceover audio files (one per segment)
 
@@ -48,6 +48,16 @@ _JSON_NAME = "project.json"
 _VIDEO_NAME = "recording.mp4"
 
 
+def _annotation_count(annotations: Optional[AnnotationCollection]) -> int:
+    """Return the number of legacy annotations carried by *annotations*."""
+    if not annotations:
+        return 0
+    return sum(
+        len(items or [])
+        for items in (annotations.texts, annotations.arrows, annotations.highlights)
+    )
+
+
 def save_project(
     output_path: str,
     video_path: str,
@@ -83,6 +93,12 @@ def save_project(
 
     # Build project JSON (session data + extras)
     data = json.loads(session.to_json())
+    if session.key_events:
+        logger.info(
+            "Ignoring %d removed keystroke event(s) during project save",
+            len(session.key_events),
+        )
+    data.pop("keyEvents", None)
     if monitor_rect:
         data["monitorRect"] = monitor_rect
     data["actualFps"] = actual_fps
@@ -92,10 +108,14 @@ def save_project(
         data["framePreset"] = frame_preset.to_dict()
     if click_preset:
         data["clickPreset"] = click_preset.to_dict()
-    if keystroke_config:
-        data["keystrokeConfig"] = keystroke_config.to_dict()
-    if annotations:
-        data["annotations"] = annotations.to_dict()
+    if keystroke_config and getattr(keystroke_config, "enabled", False):
+        logger.info("Ignoring removed keystroke overlay settings during project save")
+    annotation_count = _annotation_count(annotations)
+    if annotation_count:
+        logger.info(
+            "Ignoring %d removed annotation(s) during project save",
+            annotation_count,
+        )
 
     json_str = json.dumps(data, indent=2)
 
@@ -337,19 +357,20 @@ def load_project(input_path: str) -> dict:
         except Exception:
             pass
 
-    keystroke_config = None
+    if data.get("keyEvents"):
+        logger.info("Ignoring %d legacy keystroke event(s) in project file", len(data["keyEvents"]))
     if "keystrokeConfig" in data:
-        try:
-            keystroke_config = KeystrokeOverlayConfig.from_dict(data["keystrokeConfig"])
-        except Exception:
-            pass
-
-    annotations = None
+        logger.info("Ignoring removed keystroke overlay settings in project file")
     if "annotations" in data:
-        try:
-            annotations = AnnotationCollection.from_dict(data["annotations"])
-        except Exception:
-            pass
+        raw_annotations = data.get("annotations") or {}
+        legacy_annotation_count = sum(
+            len(raw_annotations.get(key) or [])
+            for key in ("texts", "arrows", "highlights")
+        )
+        logger.info(
+            "Ignoring %d legacy annotation(s) in project file",
+            legacy_annotation_count,
+        )
 
     return {
         "session": session,
@@ -359,6 +380,6 @@ def load_project(input_path: str) -> dict:
         "bg_preset": bg_preset,
         "frame_preset": frame_preset,
         "click_preset": click_preset,
-        "keystroke_config": keystroke_config,
-        "annotations": annotations,
+        "keystroke_config": None,
+        "annotations": None,
     }

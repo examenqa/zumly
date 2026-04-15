@@ -23,17 +23,20 @@ Record your screen or any individual window, then export a polished MP4 video wh
 ## Features
 
 - **Screen & Window Recording** — Capture any monitor (hardware-accelerated via Windows Graphics Capture) or individual windows
-- **Smart Auto-Zoom** — Automatically detects typing bursts and click clusters to generate zoom keyframes with configurable sensitivity (Low / Medium / High). Spatial-aware clustering merges nearby same-area events into sustained zooms, and consecutive clusters are chained together (up to 4 per chain) — the camera stays zoomed in and pans smoothly between them instead of zooming out and back in
+- **Smart Auto-Zoom** — Automatically detects mouse settlements and click clusters to generate zoom keyframes with configurable sensitivity (Low / Medium / High). Spatial-aware clustering merges nearby same-area events into sustained zooms, and consecutive clusters are chained together (up to 4 per chain) — the camera stays zoomed in and pans smoothly between them instead of zooming out and back in
 - **AI Smart Zoom** — Use Azure AI Foundry chat models to analyze your recording and generate intelligent zoom-and-pan keyframes. The AI acts like a professional cameraman — identifying significant activity, creating smooth sustained zooms with panning when action moves across the screen, and maintaining calm, deliberate pacing. Bring your own Azure OpenAI API key
+- **AI Narration** — Use GPT-5.4 to turn a recording into a five-part presentation script backed by frame samples, activity, and zoom edits. FollowCursor saves the combined markdown sidecar, creates timestamped generated voiceover segments, and starts speech automatically through the normal voiceover flow so the timeline keeps short section labels while the editor shows clean spoken lines you can review, drag, delete, or ripple-edit. The wording stays presenter-style and focused on the takeaway rather than on-screen mechanics
+- **AI Chapters** — Generate chapter markers from the same shared recording analysis used by narration so chapter beats, zoom emphasis, and presentation flow stay aligned without a second independent analysis pass
 - **AI Voiceover (TTS)** — Add text-to-speech voiceover segments at specific timeline positions via right-click or the editor panel. Enter text, pick from 6 voices (alloy, echo, fable, onyx, nova, shimmer), preview synthesized speech, or add it directly. Multiple segments are merged and muxed into the exported MP4. Voiceover audio is saved in .fcproj project files
 - **Manual Zoom Keyframes** — Right-click the timeline or preview to add zoom points; drag segments to reposition them
 - **Pan Path Points** — Add intermediate pan waypoints within a zoomed segment to create a smooth panning path through the zoomed view. Numbered markers show the order; drag, reorder, or delete them from the context menu
 - **Zoom Depth Control** — Right-click a zoom segment to set depth (Subtle 1.25×, Medium 1.5×, Close 2×, Detail 2.5×)
 - **Centroid Editing** — Reposition the pan center of any zoom keyframe by clicking "Set centroid" on a zoom segment, then clicking the target point on the preview
 - **Live Zoom Shortcuts** — `Ctrl+Shift+=` / `Ctrl+Shift+-` to zoom in/out during recording (global hotkeys)
-- **Mouse & Click Tracking** — Records cursor position at 60 Hz, keyboard events, and click events with visual markers
+- **Mouse & Click Tracking** — Records cursor position at 60 Hz alongside click events with visual markers
 - **Click Selection & Deletion** — Select individual click events on the timeline and delete unwanted ones
-- **Timeline Editor** — Visual timeline with mouse-speed heatmap, gradient-styled zoom segments, draggable edges, and click-to-seek
+- **Timeline Editor** — Visual timeline with mouse-speed heatmap, gradient-styled zoom segments, clip splitting, draggable voiceover blocks, and click-to-seek
+- **Startup Splash** — Shows a brief themed splash while the recorder, tray icon, and editor shell finish their first startup pass, then hands off cleanly to the main window without waiting on background TTS voice loading
 - **Trimming** — Drag trim handles on the timeline edges to cut unwanted content from the start or end of your recording; export respects the trimmed range
 - **Undo & Redo** — Full undo/redo for all zoom keyframe and click event changes (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y), up to 50 levels deep
 - **Cinematic Export** — H.264 MP4 via ffmpeg with ease-out easing, cursor rendering, click ripple effects, and device frame overlays. Supports GPU-accelerated encoding (NVENC, QuickSync, AMF) with automatic detection and fallback to software x264. Status bar shows active encoder name during export
@@ -57,7 +60,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 | Recording Pipe | ffmpeg via imageio-ffmpeg | H.264 intermediate codec (CRF 18, ultrafast) piped via stdin; reduces temp file size from ~50 GB/min to under 1 GB/min for 4K recordings |
 | Video Export | ffmpeg (libx264 / HW accel) | H.264 MP4 encoding (CRF 18 equivalent) with zoom/cursor baked in; auto-detects NVENC, QuickSync, AMF |
 | Image Processing | OpenCV + NumPy | Frame manipulation, thumbnails, cursor rendering |
-| Input Tracking | Win32 Hooks (ctypes) | Low-level mouse, keyboard, and click tracking |
+| Input Tracking | Win32 Hooks (ctypes) | Low-level mouse and click tracking |
 | Zoom Engine | Pure Python | Ease-out-eased keyframe interpolation |
 | AI Features | azure-ai-inference | Optional AI zoom analysis (with panning), TTS voiceover via Azure AI Foundry |
 
@@ -233,10 +236,15 @@ Recording and export operations create temporary files in your system's temp dir
 | `Ctrl+Z` | Undo last zoom/click change |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo last undone change |
 | Right-click zoom segment | Edit depth / centroid / delete |
-| Right-click preview | Add zoom at click position |\n| Right-click timeline (empty) | Add zoom or voiceover at position |
+| Right-click preview | Add zoom at click position |
+| Right-click timeline (empty) | Split a clip, add zoom, or add voiceover at that position |
+| Right-click voiceover segment | Review or delete that segment |
+| Right-click clip segment | Delete the clip with ripple retiming |
 | Drag zoom segment edge | Reposition zoom in timeline |
+| Drag voiceover segment | Move that voiceover in the timeline |
+| Double-click voiceover segment | Review or edit that segment |
 | Left-click event dot | Select click event |
-| `Delete` | Remove selected click event |
+| `Delete` | Remove the selected zoom section, voiceover segment, clip, or click event |
 | Drag timeline edge handles | Set trim start/end point |
 
 ## Project Structure
@@ -271,17 +279,15 @@ followcursor/
 │   ├── utils.py                     # Shared helpers (ffmpeg path, encoder detection, subprocess, time formatting)
 │   ├── zoom_engine.py               # Ease-out keyframe interpolation
 │   ├── mouse_tracker.py             # QTimer-based cursor polling (60 Hz)
-│   ├── keyboard_tracker.py          # Win32 keyboard hook
+│   ├── keyboard_tracker.py          # Legacy no-op keystroke compatibility stub
 │   ├── click_tracker.py             # Win32 mouse click hook
-│   ├── activity_analyzer.py         # Auto-zoom from mouse/keyboard/click activity
+│   ├── activity_analyzer.py         # Auto-zoom from activity and click patterns
 │   ├── ai_service.py                # AI zoom+pan analysis, TTS voiceover (Azure AI Foundry)
 │   ├── screen_recorder.py           # WGC + ffmpeg pipe in background thread
 │   ├── window_utils.py              # Win32 window enumeration & PrintWindow
 │   ├── video_exporter.py            # H.264 MP4 export with zoom & cursor
 │   ├── compositor.py                # QPainter compositing (frame + background)
 │   ├── cursor_renderer.py           # Arrow cursor + click effect rendering (ripple/burst/highlight)
-│   ├── annotation_renderer.py       # Text, arrow, and highlight annotation rendering
-│   ├── keystroke_renderer.py        # Keystroke badge overlay for preview and export
 │   ├── global_hotkeys.py            # Win32 RegisterHotKey via QThread
 │   ├── backgrounds.py               # 84 background presets (solids, gradients, patterns)
 │   ├── frames.py                    # 5 device frame presets
@@ -295,7 +301,7 @@ followcursor/
 │       ├── preview_widget.py        # Live / playback preview with zoom/pan
 │       ├── timeline_widget.py       # QPainter timeline with heatmap, keyframes, & chapters
 │       ├── timeline_math.py        # Pixel↔time conversion helpers for timeline
-│       ├── editor_panel.py          # Collapsible sections: zoom, voiceover, background, frame, click effects, keystroke overlay, annotations, chapters, output
+│       ├── editor_panel.py          # Collapsible sections: zoom, voiceover, background, frame, click effects, chapters, output
 │       ├── countdown_overlay.py     # 3-2-1 countdown animation
 │       ├── processing_overlay.py    # Pulsing banner while finishing recording
 │       └── recording_border.py      # Red border during recording

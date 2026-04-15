@@ -703,6 +703,8 @@ class MainWindow(QMainWindow):
     via ``QSettings``.
     """
 
+    startup_ready = CoreSignal()
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("FollowCursor")
@@ -711,10 +713,16 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 
+        # ── persistent settings ─────────────────────────────────────
+        self._settings = QSettings("FollowCursor", "FollowCursor")
+        self._dark_mode: bool = self._settings.value(
+            "appearance/darkMode", True, type=bool,
+        )
+
         # Enable Mica backdrop on Windows 11 Build 22621+
         hwnd = int(self.winId())
         if is_mica_supported():
-            success = enable_mica(hwnd, dark_mode=True)
+            success = enable_mica(hwnd, dark_mode=self._dark_mode)
             if success:
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
                 logger.info("Mica backdrop enabled with transparent background")
@@ -732,9 +740,6 @@ class MainWindow(QMainWindow):
 
                 QTimer.singleShot(0, _apply_mica_transparency)
 
-        # ── persistent settings ─────────────────────────────────────
-        self._settings = QSettings("FollowCursor", "FollowCursor")
-        self._dark_mode: bool = self._settings.value("appearance/darkMode", True, type=bool)
         self._apply_theme()
         
         self._last_export_dir: str = self._settings.value("lastExportDir", "")
@@ -766,6 +771,7 @@ class MainWindow(QMainWindow):
         self._video_segments: List[VideoSegment] = []  # timeline video segments
         self._vo_played_ids: set = set()  # track which voiceovers have played this playback
         self._vo_lock = threading.Lock()  # protect _vo_played_ids access
+        self._startup_ready_emitted = False
 
         self._recording = False
         self._selected_monitor: int = 0  # 0 = none selected
@@ -1010,19 +1016,32 @@ class MainWindow(QMainWindow):
         immediately.  Creates the system tray icon, updates the encoder
         label, and pre-loads TTS voices if configured.
         """
-        self._ensure_tray_icon()
-        self._update_encoder_label(self._editor.encoder_id)
-        # Auto-load TTS voices in background if AI settings are already configured
-        ai = self._load_ai_settings()
-        if ai.tts_configured:
-            self._status_text.setText("Loading TTS voices\u2026")
-            self._editor._load_tts_voices(ai.endpoint, ai.api_key)
-            # Clear status after a delay (voices load on background thread)
-            QTimer.singleShot(5000, lambda: (
-                self._status_text.setText("Ready")
-                if self._status_text.text() == "Loading TTS voices\u2026"
-                else None
-            ))
+        try:
+            self._ensure_tray_icon()
+            self._update_encoder_label(self._editor.encoder_id)
+            # Auto-load TTS voices in background if AI settings are already configured
+            ai = self._load_ai_settings()
+            if ai.tts_configured:
+                self._status_text.setText("Loading TTS voices\u2026")
+                self._editor._load_tts_voices(ai.endpoint, ai.api_key)
+                # Clear status after a delay (voices load on background thread)
+                QTimer.singleShot(5000, lambda: (
+                    self._status_text.setText("Ready")
+                    if self._status_text.text() == "Loading TTS voices\u2026"
+                    else None
+                ))
+            self.startup_ready.emit()
+        except Exception:
+            logger.exception("Deferred startup initialization failed")
+        finally:
+            QTimer.singleShot(0, self._emit_startup_ready)
+
+    def _emit_startup_ready(self) -> None:
+        """Emit the startup-ready signal once the first deferred pass finishes."""
+        if self._startup_ready_emitted:
+            return
+        self._startup_ready_emitted = True
+        self.startup_ready.emit()
 
     def _ensure_tray_icon(self) -> None:
         """Create the system tray icon on first use."""
@@ -4622,6 +4641,8 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         """Apply the current theme (dark or light) to the application."""
+        if is_mica_supported():
+            enable_mica(int(self.winId()), dark_mode=self._dark_mode)
         theme_stylesheet = get_theme(dark=self._dark_mode)
         self.setStyleSheet(theme_stylesheet)
         clear_icon_cache()

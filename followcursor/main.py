@@ -5,11 +5,14 @@ import os
 import sys
 import tempfile
 from logging.handlers import RotatingFileHandler
+
+from PySide6.QtCore import QAbstractNativeEventFilter, QtMsgType, qInstallMessageHandler
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QPalette, QColor, QIcon
-from PySide6.QtCore import QAbstractNativeEventFilter, qInstallMessageHandler, QtMsgType
-from app.main_window import MainWindow
+
 from app.icon import create_app_icon, get_ico_path
+from app.main_window import MainWindow
+from app.splash_screen import finish_startup_splash, show_startup_splash
 from app.version import __version__
 
 # ── Log file path ───────────────────────────────────────────────────
@@ -133,7 +136,17 @@ def main() -> None:
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     app.setPalette(palette)
 
-    window = MainWindow()
+    splash = show_startup_splash(app, icon, __version__)
+    try:
+        window = MainWindow()
+    except Exception:
+        splash.close()
+        splash.deleteLater()
+        raise
+
+    window.startup_ready.connect(
+        lambda: finish_startup_splash(splash, window)
+    )
     window.show()
 
     # Merge the .ico file AFTER the window is visible (saves ~78ms from startup)
