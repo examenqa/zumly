@@ -1,6 +1,37 @@
 # Fenster — Work History
 
-## Current Focus: Auto Narration Implementation
+## Current Focus: Narration Guidance Prompt
+
+### 2026-04-15T23:04:02.621Z — Optional Narration Guidance Prompt
+
+**Status:** ✅ Complete
+**Validation:** 468 pytest tests passed
+
+#### What Was Done
+
+Added backend support for an optional user-entered narration guidance prompt that influences what the AI-generated script focuses on.
+
+**New helper:** `_build_narration_system_prompt(guidance: str = "") -> str`
+- Returns `_NARRATION_SYSTEM_PROMPT` unchanged when guidance is empty/whitespace
+- Appends a "Creator guidance" block when non-empty
+- Applied to all three AI call sites that can write or rewrite narration text:
+  - `_generate_narration_segments` (single-pass and batch-synthesis paths)
+  - `_polish_narration_segments_for_timing` (pacing/style rewrite pass)
+
+**Persistence:** Session-only. Guidance is a generation-time parameter (same pattern as voice), not project content. Not written to `.fcproj`.
+
+**Existing plumbing (already in branch):**
+- `generate_narration(guidance_prompt: Optional[str] = None)` was already present
+- `main_window._on_generate_narration_requested(voice, guidance)` was already present
+- McManus had already wired the `Signal(str, str)` and `QPlainTextEdit` in `editor_panel.py`
+
+#### Files Changed
+
+- `followcursor/app/ai_service.py` — added `_build_narration_system_prompt`; updated `_generate_narration_segments` and `_polish_narration_segments_for_timing`
+- `followcursor/tests/test_ai_service.py` — added `TestNarrationGuidancePrompt` (6 tests)
+- `.squad/decisions/inbox/fenster-narration-guidance.md` — decision record
+
+---
 
 ### 2026-04-15 — Narration Feature Spawn & Completion
 
@@ -95,3 +126,40 @@ Orchestration log: `.squad/orchestration-log/20260415T225610-fenster.md`
 ---
 
 **For archived work history, see:** `history-archive.md`
+
+---
+
+## 2026-04-15T23:04:02.621Z — Voiceover Generation State Machine
+
+**Status:** ✅ Complete  
+**Session:** voiceover-generation-indicator  
+**Coordination:** McManus (UI spinner + guidance field)
+
+### What Was Done
+
+Added `VoiceoverSegment.tts_generating` runtime-only flag to signal TTS synthesis in progress. State machine:
+- Created segments: `False`
+- Handed to `AIWorker.run_tts`: **`True`**
+- `_on_ai_tts_result` completes: `False`
+- `_on_ai_error` fires: `False` on all segments
+
+**Persistence:** Never serialized. Segments loaded from `.fcproj` always start `False`.
+
+**Equality:** `compare=False` — two segments differing only in synthesis state are equal (same authored content).
+
+### Files Changed
+
+- `followcursor/app/models.py` — `tts_generating` field with `compare=False`
+- `followcursor/app/main_window.py` — toggle around synthesis workflow
+- `followcursor/tests/test_models.py` — 5 regression tests
+
+### Integration Point
+
+McManus timeline renderer reads `tts_generating` flag to draw looping spinner overlay while synthesis is in flight.
+
+### Validation
+
+✓ 5 tests pass (default, equality, persistence, toggle, error handling)
+
+---
+

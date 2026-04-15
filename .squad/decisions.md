@@ -598,3 +598,105 @@ Handle long automated narration runs in shared `ai_service.py` with sequential m
 This fixes the provider 400 at the core narration path without throwing away later parts of the recording, preserves narration quality on long videos, and makes narration reflect deliberate zoom emphasis plus explicit text/arrow/highlight callouts in addition to mouse, clicks, and keystrokes.
 
 *Captured: 2026-04-15T19:11:54.918Z*
+
+## Voiceover TTS Generation State (Fenster, 2026-04-15T23:01:28.412Z)
+
+**Status:** Implemented | **Type:** Backend State Signal
+
+### Context
+
+When the AI narration pipeline generates voiceover segments, those segments land on the timeline immediately while TTS audio synthesis runs in a sequential background batch. During that gap, a segment exists on the voice track with no audio but no first-class signal that synthesis was *actively in progress* versus *not yet requested* or *permanently unsynthesized*.
+
+### Decision
+
+Added a **runtime-only boolean field** `tts_generating: bool` to `VoiceoverSegment`.
+
+**Rules:**
+- Segment just created (manual or generated narration): `False`
+- `_synthesize_voiceover` hands the segment ID to `AIWorker.run_tts`: **`True`**
+- `_on_ai_tts_result` receives the completed audio path: `False`
+- `_on_ai_error` fires for any task: `False` on all segments
+
+**Persistence:** Never serialized (`to_dict` omits it; `from_dict` ignores it). Segments loaded from `.fcproj` always start `False`.
+
+**Equality:** Carries `compare=False` — two segments that differ only in synthesis state are considered equal.
+
+**Files changed:**
+- `followcursor/app/models.py` — `tts_generating` field on `VoiceoverSegment`
+- `followcursor/app/main_window.py` — set/clear around `_synthesize_voiceover` and in `_on_ai_tts_result` / `_on_ai_error`
+- `followcursor/tests/test_models.py` — 5 focused regression tests
+
+
+## Voiceover Generation UI Indicator (McManus, 2026-04-15T23:01:28.412Z)
+
+**Status:** Implemented | **Type:** Timeline Widget Visual Feedback
+
+### Context
+
+Users need visual feedback while TTS audio is being synthesized for a voiceover segment. Without an indicator, the segment appears identical to a completed one, leaving uncertainty about whether the app is working.
+
+### Decision
+
+### Spinner animation in `_TimelineTrack`
+
+- A `QTimer` at 80 ms (≈ 12.5 fps) advances `_spinner_phase` by 36° per tick → one full rotation every 800 ms.
+- Timer only runs while at least one segment has `tts_generating=True`; idle otherwise.
+- Called from `TimelineWidget.set_data()` whenever `voiceover_segments` is provided.
+
+### Visual treatment
+
+- Amber arc (`#fbbf24`) drawn at the right end of the pill, 120° sweep rotating continuously.
+- Suppresses the static "…" ellipsis icon during generation (same slot).
+- Existing colour logic (teal filled / grey pending / teal-bright selected) unchanged.
+
+**Files changed:**
+- `followcursor/app/widgets/timeline_widget.py` — spinner timer, arc rendering
+- `followcursor/tests/test_timeline_widget.py` — 8 regression tests
+
+
+## Narration Guidance Prompt UI (McManus, 2026-04-15T23:04:02.621Z)
+
+**Status:** Implemented | **Type:** Editor Panel Feature
+
+### Context
+
+Users requested an optional per-recording guidance prompt in the Narration Voiceover panel to steer what a generated narration focuses on — without making the UI noisy.
+
+### Decision
+
+### UI placement
+
+A `QPlainTextEdit` named `_narration_guidance` is placed between the voiceover description label and the **Generate narration** button, inside the existing Voiceover collapsible section. Label reads **"Guidance (optional)"** so the field is unambiguously non-required.
+
+Placeholder text example:
+> *"Steer what the narration focuses on — e.g. "lead with the time saved" or "emphasize this is a one-click flow"."*
+
+Height fixed at 64 px.
+
+### Signal change
+
+`generate_narration_requested` changed from `Signal(str)` (voice only) to `Signal(str, str)` (voice, guidance). Minimal change carrying text to main_window.
+
+### Backend wiring
+
+`generate_narration()` in `ai_service.py` receives `guidance_prompt` parameter, forwarded as `guidance` keyword argument to `_generate_narration_segments()`, which passes it to `_build_narration_system_prompt()`. System prompt appends creator guidance block when non-empty.
+
+**Files changed:**
+- `followcursor/app/widgets/editor_panel.py` — guidance field, label, signal update
+- `followcursor/app/main_window.py` — `_on_generate_narration_requested` signature, `guidance_prompt` kwarg forwarded
+- `followcursor/app/ai_service.py` — `guidance_prompt` param on `generate_narration`
+- `followcursor/tests/test_editor_panel.py` — 6 regression tests
+
+
+## User Directive: Narration Prompt Enrichment (Ahmed Sabbour, 2026-04-15T23:04:02.621Z)
+
+**Status:** Captured | **Type:** Feature Guidance
+
+### Directive
+
+Update narration prompting so it captures the feature, end-user benefit, and meta takeaway — especially how easy something is — instead of narrating literal on-screen steps.
+
+**Rationale:** User request — captured for team memory to guide narration generation strategy.
+
+*Captured: 2026-04-15T23:04:02.621Z*
+
