@@ -1,6 +1,45 @@
 # Decisions Archive
 
 
+## Narration Redesign — Backend & UI Alignment (2026-04-15)
+
+**Status:** Complete | **Implementation:** Fenster & McManus
+
+### Fenster: Backend Redesign
+
+Automated narration now uses a dedicated `gpt-5.4` runtime path with:
+- Provider-safe multimodal batching (respects 50-image caps via sequential chunking)
+- Presentation structure: Context, Background, Prompt/Action, Walkthrough, Result (five beats)
+- Timing-aware polish pass for badly-drifting first drafts
+- Handoff to existing Add voiceover flow: each beat becomes a `VoiceoverSegment`, synthesized via normal TTS pipeline
+- Combined markdown sidecar preserves full narration history
+
+**Key rationale:** Previous single-track narration remained too close to closed-caption recap. Multiple section-level assets preserve presentation arc, keep edits safer, fit existing persistence paths, and reuse proven export/rendering/manual-edit flows. Per-segment TTS rate nudges handle duration drift within the standard voiceover pipeline.
+
+### McManus: UI & Docs Alignment
+
+Generated narration is treated as **five presentation-style voiceover segments** on the existing voice lane:
+
+1. **Section naming:** Context, Background, Prompt/Action, Walkthrough, Result (not generic Segment 1/2/3)
+2. **Text rendering:** Show plain spoken narration line; keep section label as UI metadata (avoid leaking markdown headings into edit boxes)
+3. **Synthesized copy:** Narration status says speech auto-starts when segments land on Voice track; calm fallback when TTS unconfigured or another AI task running
+4. **Voice style:** Presenter-style that explains the point — explicitly avoid play-by-play narration of clicks, cursor motions, or camera moves
+5. **Documentation:** Updated USER_GUIDE.md, QUICKSTART.md, and copilot-instructions.md to describe GPT-5.4 narration generation, one combined sidecar, and normal voiceover synthesis
+
+**Validation:** Full pytest (435 tests) passed | compileall clean
+
+### User Directives Consolidated (2026-04-15)
+
+1. **2026-04-15T19:43:15.109Z:** AI narration should run on GPT-5.4, produce multiple WAV segments, and adopt presentation voice (not closed-caption style)
+2. **2026-04-15T19:43:15.109Z:** Narration segments integrate with existing Add voiceover flow for TTS synthesis
+3. **2026-04-15T20:58:42.932Z:** Keep spoken narration free of headings/dividers; auto-synthesize TTS as segments land on timeline; authentic, concise voice avoiding AI-isms
+4. **2026-04-15T21:06:05.876Z:** Avoid literal narration of clicks/zooms; no "zooming in on" phrasing
+5. **2026-04-15T21:27:39Z:** Update documentation when work is done
+
+*All directives applied as of 2026-04-15T21:27:39Z*
+
+---
+
 ## PR Review Fixes — UI & Docs (McManus, 2026-04-06)
 
 **Status:** Applied | **Items:** 25 fixes + 2 prior resolutions + 1 new test
