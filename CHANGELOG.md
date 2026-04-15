@@ -4,6 +4,21 @@ All notable changes to FollowCursor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] — 2026-04-15
+
+### Added
+- **Startup splash screen** — branded splash shown during app initialization, respects light/dark mode preference
+- **Narration guidance prompt** — optional free-text field in the voiceover panel to steer AI script generation toward specific focus areas or key messages
+- **Voiceover generation indicator** — animated amber spinner on voiceover timeline segments while TTS synthesis is in progress
+
+### Changed
+- **AI narration prompt** — reframed toward product benefit and ease-of-use storytelling; narrator now captures the meta-level value (what's easy, what's impressive) rather than literal on-screen mechanics
+- **Light mode theming** — improved coverage for custom-painted timeline and voiceover widgets
+
+### Removed
+- **Annotations feature** — text, arrow, and highlight overlays removed from recording and export
+- **Key strokes overlay** — keystroke recording and rendering removed from recording and export
+
 ## [0.12.0] — 2026-04-08
 
 ### Added
