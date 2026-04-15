@@ -90,10 +90,10 @@ class TestTimelineTrackChapters:
         assert track._chapter_hit_test(5.0, 20.0) is None
 
 
-def _make_vo_seg(is_generating: bool = False, audio_path: str = "") -> VoiceoverSegment:
+def _make_vo_seg(tts_generating: bool = False, audio_path: str = "") -> VoiceoverSegment:
     """Helper to create a minimal VoiceoverSegment for tests."""
     seg = VoiceoverSegment.create(timestamp=1000.0, text="Hello world")
-    seg.is_generating = is_generating
+    seg.tts_generating = tts_generating
     seg.audio_path = audio_path
     return seg
 
@@ -103,7 +103,7 @@ class TestVoiceoverGenerationSpinner:
 
     def test_spinner_timer_starts_when_segment_is_generating(self, qapp):
         track = _TimelineTrack()
-        track.voiceover_segments = [_make_vo_seg(is_generating=True)]
+        track.voiceover_segments = [_make_vo_seg(tts_generating=True)]
 
         track._update_spinner_timer()
 
@@ -111,10 +111,10 @@ class TestVoiceoverGenerationSpinner:
 
     def test_spinner_timer_stops_when_no_generating_segments(self, qapp):
         track = _TimelineTrack()
-        track.voiceover_segments = [_make_vo_seg(is_generating=True)]
+        track.voiceover_segments = [_make_vo_seg(tts_generating=True)]
         track._update_spinner_timer()
         # now all segments are done
-        track.voiceover_segments = [_make_vo_seg(is_generating=False)]
+        track.voiceover_segments = [_make_vo_seg(tts_generating=False)]
 
         track._update_spinner_timer()
 
@@ -122,7 +122,7 @@ class TestVoiceoverGenerationSpinner:
 
     def test_spinner_timer_not_started_with_no_generating_segments(self, qapp):
         track = _TimelineTrack()
-        track.voiceover_segments = [_make_vo_seg(is_generating=False)]
+        track.voiceover_segments = [_make_vo_seg(tts_generating=False)]
 
         track._update_spinner_timer()
 
@@ -146,7 +146,7 @@ class TestVoiceoverGenerationSpinner:
 
     def test_set_data_starts_spinner_timer_for_generating_segment(self, qapp):
         widget = TimelineWidget()
-        seg = _make_vo_seg(is_generating=True)
+        seg = _make_vo_seg(tts_generating=True)
 
         widget.set_data(
             duration=5000.0,
@@ -160,7 +160,7 @@ class TestVoiceoverGenerationSpinner:
 
     def test_set_data_stops_spinner_timer_when_generation_done(self, qapp):
         widget = TimelineWidget()
-        generating_seg = _make_vo_seg(is_generating=True)
+        generating_seg = _make_vo_seg(tts_generating=True)
         widget.set_data(
             duration=5000.0,
             current_time=0.0,
@@ -168,7 +168,7 @@ class TestVoiceoverGenerationSpinner:
             mouse_track=[],
             voiceover_segments=[generating_seg],
         )
-        done_seg = _make_vo_seg(is_generating=False, audio_path="/tmp/vo.wav")
+        done_seg = _make_vo_seg(tts_generating=False, audio_path="/fake/vo.wav")
 
         widget.set_data(
             duration=5000.0,
@@ -180,10 +180,10 @@ class TestVoiceoverGenerationSpinner:
 
         assert not widget._track._spinner_timer.isActive()
 
-    def test_is_generating_not_serialized(self, qapp):
-        """is_generating is a transient flag and must not appear in the saved dict."""
-        seg = _make_vo_seg(is_generating=True)
+    def test_tts_generating_not_serialized(self, qapp):
+        """tts_generating is a transient flag and must not appear in the saved dict."""
+        seg = _make_vo_seg(tts_generating=True)
         d = seg.to_dict()
 
-        assert "isGenerating" not in d
-        assert "is_generating" not in d
+        assert "ttsGenerating" not in d
+        assert "tts_generating" not in d

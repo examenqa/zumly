@@ -389,7 +389,6 @@ class VoiceoverSegment:
     # Runtime-only: True while TTS synthesis is actively in progress.
     # Never persisted — loaded segments always start with False.
     tts_generating: bool = field(default=False, compare=False, repr=False)
-    is_generating: bool = False  # transient — True while TTS synthesis is in flight; never serialized
 
     @staticmethod
     def create(

@@ -60,6 +60,7 @@ class _TimelineTimeReadout(QWidget):
         self._total_text = "0:00.00"
         self._separator_text = " / "
         self._horizontal_padding = 2
+        self._dark_mode = True
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
@@ -73,6 +74,12 @@ class _TimelineTimeReadout(QWidget):
         )
         self.setFont(font)
         self._update_size()
+
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint."""
+        if self._dark_mode != dark:
+            self._dark_mode = dark
+            self.update()
 
     @property
     def current_text(self) -> str:
@@ -106,18 +113,18 @@ class _TimelineTimeReadout(QWidget):
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        painter.fillRect(self.rect(), QColor(T.BG_LAYER_1))
+        painter.fillRect(self.rect(), QColor(T.bg_canvas(self._dark_mode)))
         painter.setFont(self.font())
 
         metrics = painter.fontMetrics()
         baseline = int((self.height() + metrics.ascent() - metrics.descent()) / 2)
         x = self._horizontal_padding
 
-        painter.setPen(QColor(T.FG_PRIMARY))
+        painter.setPen(QColor(T.fg_primary(self._dark_mode)))
         painter.drawText(x, baseline, self._current_text)
         x += metrics.horizontalAdvance(self._current_text)
 
-        painter.setPen(QColor(T.FG_3))
+        painter.setPen(QColor(T.fg_muted(self._dark_mode)))
         painter.drawText(x, baseline, self._separator_text)
         x += metrics.horizontalAdvance(self._separator_text)
         painter.drawText(x, baseline, self._total_text)
@@ -130,12 +137,19 @@ class _TimelineControlsHost(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("PlaybackControls")
+        self._dark_mode = True
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint."""
+        if self._dark_mode != dark:
+            self._dark_mode = dark
+            self.update()
+
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
-        painter.fillRect(event.rect(), QColor(T.BG_LAYER_1))
+        painter.fillRect(event.rect(), QColor(T.bg_canvas(self._dark_mode)))
         painter.end()
 
 
@@ -182,6 +196,8 @@ class _TimelineTrack(QWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_right_click)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+
+        self._dark_mode = True  # Theme state for custom painting
 
         self.duration: float = 0
         self.current_time: float = 0
@@ -252,6 +268,12 @@ class _TimelineTrack(QWidget):
         self._spinner_timer.setInterval(80)  # ~12.5 fps → full rotation ≈ 0.8 s
         self._spinner_timer.timeout.connect(self._on_spinner_tick)
 
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint."""
+        if self._dark_mode != dark:
+            self._dark_mode = dark
+            self.update()
+
     # ── trim-aware coordinate helpers ─────────────────────────────────
 
     @property
@@ -269,14 +291,26 @@ class _TimelineTrack(QWidget):
         """Effective visible duration (ms)."""
         return trim_eff_dur(self.trim_start_ms, self.trim_end_ms, self.duration)
 
-    _MENU_STYLE = (
-        "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
-        "        border-radius: 6px; padding: 4px 0; }"
-        "QMenu::item { padding: 6px 16px; }"
-        "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
-        "QMenu::item:disabled { color: #9c99b6; }"
-        "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
-    )
+    def _menu_style(self) -> str:
+        """Return the context menu stylesheet based on the current theme."""
+        if self._dark_mode:
+            return (
+                "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+                "        border-radius: 6px; padding: 4px 0; }"
+                "QMenu::item { padding: 6px 16px; }"
+                "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
+                "QMenu::item:disabled { color: #9c99b6; }"
+                "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
+            )
+        else:
+            return (
+                f"QMenu {{ background: {T.LIGHT_BG_1}; color: {T.LIGHT_FG_1}; border: 1px solid {T.LIGHT_STROKE_1};"
+                "        border-radius: 6px; padding: 4px 0; }"
+                "QMenu::item { padding: 6px 16px; }"
+                f"QMenu::item:selected {{ background: {T.BRAND}; color: white; border-radius: 4px; margin: 0 4px; }}"
+                f"QMenu::item:disabled {{ color: {T.LIGHT_FG_4}; }}"
+                f"QMenu::separator {{ height: 1px; background: {T.LIGHT_STROKE_2}; margin: 4px 8px; }}"
+            )
 
     # ── coordinate mapping helpers ────────────────────────────────
 
@@ -384,7 +418,7 @@ class _TimelineTrack(QWidget):
             )
             if is_trimmed:
                 menu = QMenu(self)
-                menu.setStyleSheet(self._MENU_STYLE)
+                menu.setStyleSheet(self._menu_style())
                 reset_act = menu.addAction("↩  Reset trim")
                 reset_act.triggered.connect(self._reset_trim)
                 menu.exec(self.mapToGlobal(pos))
@@ -410,7 +444,7 @@ class _TimelineTrack(QWidget):
             self._selected_click_idx = click_idx
             self.update()
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
+            menu.setStyleSheet(self._menu_style())
             del_act = menu.addAction("  Delete click event")
             del_act.setIcon(load_icon("delete", color=T.DANGER))
             del_act.triggered.connect(lambda: self._delete_selected_click())
@@ -425,7 +459,7 @@ class _TimelineTrack(QWidget):
             self._selected_vo_id = vo_id
             self.update()
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
+            menu.setStyleSheet(self._menu_style())
             seg = next((s for s in self.voiceover_segments if s.id == vo_id), None)
             header_text = "Voiceover segment"
             if seg and seg.is_generated_narration:
@@ -455,7 +489,7 @@ class _TimelineTrack(QWidget):
         chapter = self._chapter_hit_test(mx, my)
         if chapter is not None:
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
+            menu.setStyleSheet(self._menu_style())
             header = menu.addAction(f"  {chapter.name}")
             header.setEnabled(False)
             menu.addSeparator()
@@ -483,7 +517,7 @@ class _TimelineTrack(QWidget):
             # Only show delete if more than 1 segment remains
             if len(self.video_segments) > 1:
                 menu = QMenu(self)
-                menu.setStyleSheet(self._MENU_STYLE)
+                menu.setStyleSheet(self._menu_style())
                 header = menu.addAction("  Clip segment")
                 header.setEnabled(False)
                 menu.addSeparator()
@@ -496,7 +530,7 @@ class _TimelineTrack(QWidget):
         if self._eff_dur > 0 and self.width() > 0:
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
+            menu.setStyleSheet(self._menu_style())
             act_split = menu.addAction("Split clip here")
             act_split.setIcon(load_icon("cut", color=T.FG_PRIMARY))
             act_split.triggered.connect(
@@ -522,12 +556,15 @@ class _TimelineTrack(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # background
-        painter.fillRect(0, 0, w, h, QColor("#1b1a2e"))
+        # background — theme-aware
+        bg_color = T.bg_canvas(self._dark_mode)
+        track_bg = T.bg_track(self._dark_mode)
+        track_border = T.bg_track_border(self._dark_mode)
+        painter.fillRect(0, 0, w, h, QColor(bg_color))
 
         # track bg (rounded)
-        painter.setBrush(QBrush(QColor("#201f34")))
-        painter.setPen(QPen(QColor("#2d2b45"), 1))
+        painter.setBrush(QBrush(QColor(track_bg)))
+        painter.setPen(QPen(QColor(track_border), 1))
         painter.drawRoundedRect(0, 0, w - 1, h - 1, 6, 6)
 
         if self.duration <= 0:
@@ -570,7 +607,7 @@ class _TimelineTrack(QWidget):
 
         # playhead
         px = self._ms_to_x(self.current_time, w)
-        playhead_color = QColor("#facc15") if self._trim_snapped else QColor("#ffffff")
+        playhead_color = QColor("#facc15") if self._trim_snapped else QColor(T.fg_primary(self._dark_mode))
         painter.setPen(QPen(playhead_color, 2))
         painter.drawLine(int(px), 0, int(px), h)
         # playhead handle
@@ -600,7 +637,7 @@ class _TimelineTrack(QWidget):
         font.setFamily("Segoe UI Variable")
         font.setPixelSize(11)
         painter.setFont(font)
-        painter.setPen(QPen(QColor("#5a5873"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
 
         eff_start = self._eff_start
         eff_end = self._eff_end
@@ -625,7 +662,7 @@ class _TimelineTrack(QWidget):
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
         painter.drawText(4, top + h - 3, "Mouse")
 
         eff_start = self._eff_start
@@ -670,7 +707,7 @@ class _TimelineTrack(QWidget):
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
         painter.drawText(4, top + h - 2, "Clicks")
 
         eff_start = self._eff_start
@@ -701,7 +738,7 @@ class _TimelineTrack(QWidget):
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
         painter.drawText(4, top + h - 3, "Zoom")
 
         if not self.keyframes or self._eff_dur <= 0:
@@ -905,10 +942,10 @@ class _TimelineTrack(QWidget):
         """Start or stop the spinner animation timer based on generating segments.
 
         Call this whenever voiceover_segments changes.  The timer only runs
-        while at least one segment has ``is_generating=True``, keeping the
+        while at least one segment has ``tts_generating=True``, keeping the
         widget idle when no generation is in progress.
         """
-        has_generating = any(s.is_generating for s in self.voiceover_segments)
+        has_generating = any(s.tts_generating for s in self.voiceover_segments)
         if has_generating and not self._spinner_timer.isActive():
             self._spinner_phase = 0
             self._spinner_timer.start()
@@ -1003,12 +1040,12 @@ class _TimelineTrack(QWidget):
             painter.drawText(clip_rect, Qt.AlignmentFlag.AlignVCenter, text)
 
             # Mic icon if no audio yet (skip when generating — spinner takes that slot)
-            if not seg.audio_path and not seg.is_generating:
+            if not seg.audio_path and not seg.tts_generating:
                 painter.setPen(QPen(QColor("#94a3b8"), 1))
                 painter.drawText(int(sx + seg_w - 12), top + h - 3, "\u2026")
 
             # Generation spinner overlay
-            if seg.is_generating:
+            if seg.tts_generating:
                 self._draw_spinner(painter, sx, top, seg_w, h)
 
             self._vo_rects.append((sx, seg_w, seg.id))
