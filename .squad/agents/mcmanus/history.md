@@ -228,3 +228,24 @@ Added optional `QPlainTextEdit` in editor panel between voiceover description an
 
 ---
 
+
+---
+
+## 2026-04-15T23:04:02.621Z — Narration Guidance Prompt UI (Background Session)
+
+**Status:** ✅ Complete | **Validation:** 435+ pytest tests passed
+
+### Outcome
+
+Added a `Guidance (optional)` field in `followcursor/app/widgets/editor_panel.py` to let users steer narration generation. Guidance is session-only (not persisted).
+
+### Changes
+
+- **editor_panel.py:** New guidance QPlainTextEdit in voice section, optional flow
+- **main_window.py:** Updated wiring to collect and pass guidance to AI service
+- **test_editor_panel.py:** Regression tests for UI control
+
+### Coordination
+
+Fenster completed backend guidance threading in ai_service.py. Feature works end-to-end: users can emphasize what narration focuses on.
+

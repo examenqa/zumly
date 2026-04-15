@@ -700,3 +700,31 @@ Update narration prompting so it captures the feature, end-user benefit, and met
 
 *Captured: 2026-04-15T23:04:02.621Z*
 
+
+---
+
+## Light Mode Theme Support for Custom-Painted Widgets (McManus, 2026-04-15)
+
+**Status:** Implemented
+
+### Context
+
+The timeline widget and transport controls were rendering with dark-mode colors even when the app was switched to light mode. Custom `paintEvent` methods had hard-coded dark color values instead of using design tokens.
+
+### Solution
+
+1. Added theme-aware color helpers to `tokens.py` (bg_canvas, bg_track, fg_primary, etc.)
+2. Added `_dark_mode` state and `set_dark_mode()` methods to custom-painted widgets
+3. Wired `TimelineWidget.set_dark_mode()` to propagate to all children
+4. Updated `MainWindow._apply_theme()` to call `self._timeline.set_dark_mode()`
+
+### Files Changed
+
+- `followcursor/app/tokens.py` — theme-aware color helpers
+- `followcursor/app/widgets/timeline_widget.py` — custom widget theme propagation
+- `followcursor/app/main_window.py` — theme propagation wiring
+- `followcursor/tests/test_timeline_widget.py` — regression tests
+
+**Rationale:** Custom-painted widgets must follow theme propagation pattern for light/dark mode consistency.
+
+*Captured: 2026-04-15T23:04:02.621Z*

@@ -163,3 +163,27 @@ McManus timeline renderer reads `tts_generating` flag to draw looping spinner ov
 
 ---
 
+
+---
+
+## 2026-04-15T23:04:02.621Z — Narration Guidance Prompt Backend (Background Session)
+
+**Status:** ✅ Complete | **Validation:** 468 pytest tests passed
+
+### Outcome
+
+Confirmed and completed guidance plumbing in ai_service.py. Guidance is injected into main narration generation pass, synthesis/batch pass, and timing-polish rewrite pass.
+
+### Implementation
+
+- **ai_service.py:** Guidance threaded through all three narration generation phases
+- **test_ai_service.py:** Focused regression tests for guidance-aware narration
+
+### Key Behavior
+
+Guidance is optional, session-only (not persisted to `.fcproj`). Reuses existing `_build_narration_system_prompt()` pattern.
+
+### Coordination
+
+McManus built the UI field. Feature complete and working end-to-end.
+
