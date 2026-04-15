@@ -7,7 +7,7 @@ JSON serialization via ``to_dict()`` / ``from_dict()`` (or ``to_json()``
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 import uuid
 import json
@@ -43,11 +43,10 @@ class MousePosition:
 
 @dataclass
 class KeyEvent:
-    """A single keystroke timestamp with optional cursor position.
+    """Legacy keystroke payload retained for old project compatibility.
 
-    Coordinates are in **physical screen pixels** (not DPI-scaled).
-    Position is captured via ``GetCursorPos`` at keystroke time and
-    indicates *where* the user is typing.
+    New recordings no longer capture or persist keystrokes, but older
+    ``.fcproj`` files may still contain this data and should load safely.
     """
     timestamp: float  # ms since recording start
     x: float | None = None  # cursor x at keystroke time (physical px)
@@ -174,12 +173,12 @@ class Chapter:
     """A chapter marker for navigation within a recording.
 
     Chapters help users navigate long recordings by marking scene boundaries.
-    They can be auto-detected based on activity patterns or manually created.
+    They can be AI-generated from shared recording context or manually created.
     """
 
     timestamp_ms: int  # start time of this chapter
     name: str  # display name (e.g., "Chapter 1", "Scene 2", or custom name)
-    auto_detected: bool = True  # True if heuristic-generated, False if manual
+    auto_detected: bool = True  # True if generated, False if manual
 
     def to_dict(self) -> dict:
         """Serialize to a plain dict for JSON storage."""
@@ -266,9 +265,10 @@ class VideoSegment:
 class RecordingSession:
     """Top-level container for everything captured in one recording.
 
-    Includes mouse track, key/click events, zoom keyframes, trim
-    points, and per-frame timestamps.  Serialized to/from JSON for
-    ``.fcproj`` project files.
+    Includes mouse track, click events, zoom keyframes, trim points,
+    and per-frame timestamps. Legacy keystroke data may still be held in
+    ``key_events`` while older project files are being loaded, but it is
+    no longer serialized back out.
     """
 
     id: str
@@ -276,7 +276,7 @@ class RecordingSession:
     duration: float
     mouse_track: List[MousePosition]
     keyframes: List[ZoomKeyframe]
-    key_events: List[KeyEvent] | None = None
+    key_events: List[KeyEvent] | None = None  # legacy load-only data
     click_events: List[ClickEvent] | None = None
     frame_timestamps: List[float] | None = None
     trim_start_ms: float = 0.0
@@ -294,8 +294,6 @@ class RecordingSession:
             "mouseTrack": [m.to_dict() for m in self.mouse_track],
             "keyframes": [k.to_dict() for k in self.keyframes],
         }
-        if self.key_events:
-            data["keyEvents"] = [k.to_dict() for k in self.key_events]
         if self.click_events:
             data["clickEvents"] = [c.to_dict() for c in self.click_events]
         if self.frame_timestamps:
@@ -336,7 +334,7 @@ class RecordingSession:
 
         key_events = None
         if "keyEvents" in d:
-            key_events = [KeyEvent.from_dict(k) for k in d["keyEvents"]]
+            logger.debug("Ignoring legacy keyEvents during RecordingSession load")
         click_events = None
         if "clickEvents" in d:
             click_events = [ClickEvent.from_dict(c) for c in d["clickEvents"]]
@@ -371,8 +369,10 @@ class RecordingSession:
 class VoiceoverSegment:
     """A single voiceover segment with text, position, and audio.
 
-    Users create these at specific timeline positions.  TTS synthesis
-    converts the text to speech and stores the audio file path.
+    Segments can be user-authored (manual) or AI-generated narration.
+    TTS synthesis converts the spoken text to speech and stores the
+    audio file path.  Generated narration may also keep a markdown
+    script for save/load roundtrips and file export.
     """
 
     id: str
@@ -383,6 +383,13 @@ class VoiceoverSegment:
     duration_ms: float = 0.0  # audio duration in ms (0 = unknown/not synthesized)
     rate: float = 1.0  # speech rate multiplier (0.0–3.0, 1.0 = normal)
     volume: float = 1.0  # volume multiplier (0.0–3.0, 1.0 = normal)
+    source: str = "manual"  # "manual" | "generated"
+    script_markdown: str = ""  # markdown script for generated narration
+    script_path: str = ""  # last exported markdown path on disk
+    # Runtime-only: True while TTS synthesis is actively in progress.
+    # Never persisted — loaded segments always start with False.
+    tts_generating: bool = field(default=False, compare=False, repr=False)
+    is_generating: bool = False  # transient — True while TTS synthesis is in flight; never serialized
 
     @staticmethod
     def create(
@@ -391,6 +398,9 @@ class VoiceoverSegment:
         voice: str = "en-US-Ava:DragonHDLatestNeural",
         rate: float = 1.0,
         volume: float = 1.0,
+        source: str = "manual",
+        script_markdown: str = "",
+        script_path: str = "",
     ) -> "VoiceoverSegment":
         """Factory that auto-generates a UUID."""
         return VoiceoverSegment(
@@ -400,6 +410,9 @@ class VoiceoverSegment:
             voice=voice,
             rate=rate,
             volume=volume,
+            source=source,
+            script_markdown=script_markdown,
+            script_path=script_path,
         )
 
     def to_dict(self) -> dict:
@@ -415,7 +428,43 @@ class VoiceoverSegment:
             d["rate"] = self.rate
         if self.volume != 1.0:
             d["volume"] = self.volume
+        if self.source != "manual":
+            d["source"] = self.source
+        if self.script_markdown:
+            d["scriptMarkdown"] = self.script_markdown
+        if self.script_path:
+            d["scriptPath"] = self.script_path
         return d
+
+    @property
+    def is_generated_narration(self) -> bool:
+        """True when this segment came from the AI narration pipeline."""
+        return self.source == "generated"
+
+    @property
+    def generated_narration_label(self) -> str:
+        """Return the section label for a generated narration segment."""
+        if not self.script_markdown:
+            return "AI narration"
+
+        mapping = {
+            "context": "Context",
+            "background": "Background",
+            "prompt / action": "Prompt / Action",
+            "prompt/action": "Prompt / Action",
+            "action": "Prompt / Action",
+            "walkthrough": "Walkthrough",
+            "result": "Result",
+        }
+        for raw_line in self.script_markdown.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                heading = " ".join(stripped.lstrip("#").strip().replace("/", " / ").split())
+                return mapping.get(heading.lower(), heading or "AI narration")
+            break
+        return "AI narration"
 
     @staticmethod
     def from_dict(d: dict) -> "VoiceoverSegment":
@@ -443,6 +492,9 @@ class VoiceoverSegment:
                 duration_ms=d.get("durationMs", 0.0),
                 rate=rate,
                 volume=volume,
+                source=str(d.get("source", "manual") or "manual"),
+                script_markdown=d.get("scriptMarkdown", ""),
+                script_path=d.get("scriptPath", ""),
             )
         except KeyError as exc:
             raise ValueError(f"VoiceoverSegment missing required field: {exc}") from exc

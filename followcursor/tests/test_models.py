@@ -218,11 +218,10 @@ class TestRecordingSession:
         assert len(s2.mouse_track) == len(sample_session.mouse_track)
         assert len(s2.keyframes) == len(sample_session.keyframes)
 
-    def test_json_includes_key_events(self, sample_session: RecordingSession) -> None:
+    def test_json_omits_removed_key_events(self, sample_session: RecordingSession) -> None:
         s = sample_session.to_json()
         d = json.loads(s)
-        assert "keyEvents" in d
-        assert len(d["keyEvents"]) == 2
+        assert "keyEvents" not in d
 
     def test_json_includes_click_events(self, sample_session: RecordingSession) -> None:
         s = sample_session.to_json()
@@ -258,6 +257,23 @@ class TestRecordingSession:
         assert "trimStartMs" not in d
         assert "trimEndMs" not in d
 
+    def test_from_json_ignores_legacy_key_events(self) -> None:
+        payload = json.dumps(
+            {
+                "id": "legacy-keys",
+                "startTime": 0,
+                "duration": 1000,
+                "mouseTrack": [{"x": 0, "y": 0, "timestamp": 0}],
+                "keyframes": [],
+                "keyEvents": [{"timestamp": 250}],
+            }
+        )
+
+        session = RecordingSession.from_json(payload)
+
+        assert session.id == "legacy-keys"
+        assert session.key_events is None
+
     def test_roundtrip_preserves_mouse_positions(self, sample_session: RecordingSession) -> None:
         s2 = RecordingSession.from_json(sample_session.to_json())
         for orig, loaded in zip(sample_session.mouse_track, s2.mouse_track):
@@ -290,7 +306,14 @@ class TestRecordingSession:
         assert d["voiceoverSegments"][0]["text"] == "Hello world"
 
     def test_json_roundtrip_voiceover(self) -> None:
-        seg = VoiceoverSegment.create(timestamp=2000, text="Test narration", voice="nova")
+        seg = VoiceoverSegment.create(
+            timestamp=2000,
+            text="Test narration",
+            voice="nova",
+            source="generated",
+            script_markdown="## Context\nTest narration",
+            script_path="C:/videos/demo_voiceover.md",
+        )
         session = RecordingSession(
             id="vo2", start_time=0, duration=5000,
             mouse_track=[MousePosition(0, 0, 0)],
@@ -303,6 +326,9 @@ class TestRecordingSession:
         assert s2.voiceover_segments[0].text == "Test narration"
         assert s2.voiceover_segments[0].voice == "nova"
         assert s2.voiceover_segments[0].timestamp == 2000
+        assert s2.voiceover_segments[0].source == "generated"
+        assert s2.voiceover_segments[0].script_markdown == "## Context\nTest narration"
+        assert s2.voiceover_segments[0].script_path == "C:/videos/demo_voiceover.md"
 
     def test_json_omits_voiceover_when_empty(self) -> None:
         session = RecordingSession(
@@ -330,6 +356,9 @@ class TestVoiceoverSegment:
         assert seg.duration_ms == 0.0
         assert seg.rate == 1.0
         assert seg.volume == 1.0
+        assert seg.source == "manual"
+        assert seg.script_markdown == ""
+        assert seg.script_path == ""
 
     def test_roundtrip(self) -> None:
         seg = VoiceoverSegment.create(timestamp=1500, text="Test text", voice="echo")
@@ -339,6 +368,22 @@ class TestVoiceoverSegment:
         assert seg2.timestamp == seg.timestamp
         assert seg2.text == seg.text
         assert seg2.voice == seg.voice
+
+    def test_generated_metadata_roundtrip(self) -> None:
+        seg = VoiceoverSegment.create(
+            timestamp=0,
+            text="Spoken text",
+            source="generated",
+            script_markdown="## Context\nSpoken text",
+            script_path="C:/videos/demo_voiceover.md",
+        )
+        d = seg.to_dict()
+        seg2 = VoiceoverSegment.from_dict(d)
+        assert seg2.source == "generated"
+        assert seg2.script_markdown == "## Context\nSpoken text"
+        assert seg2.script_path == "C:/videos/demo_voiceover.md"
+        assert seg2.is_generated_narration
+        assert seg2.generated_narration_label == "Context"
 
     def test_dict_omits_zero_duration(self) -> None:
         seg = VoiceoverSegment.create(timestamp=0, text="Test")
@@ -395,6 +440,56 @@ class TestVoiceoverSegment:
             assert seg.volume == expected, (
                 f"volume={vol_in!r} should become {expected}, got {seg.volume}"
             )
+
+    # ── tts_generating field ─────────────────────────────────────────
+
+    def test_tts_generating_defaults_false(self) -> None:
+        """New segments start with tts_generating=False."""
+        seg = VoiceoverSegment.create(timestamp=0, text="Hello")
+        assert seg.tts_generating is False
+
+    def test_tts_generating_not_persisted(self) -> None:
+        """tts_generating must never appear in the serialized dict."""
+        seg = VoiceoverSegment.create(timestamp=0, text="Hello")
+        seg.tts_generating = True
+        d = seg.to_dict()
+        assert "tts_generating" not in d
+        assert "ttsGenerating" not in d
+
+    def test_tts_generating_not_loaded_from_dict(self) -> None:
+        """Loading from dict always yields tts_generating=False, even if the
+        dict somehow contained the key."""
+        d = {"id": "abc", "timestamp": 100, "text": "Hi", "ttsGenerating": True}
+        seg = VoiceoverSegment.from_dict(d)
+        assert seg.tts_generating is False
+
+    def test_tts_generating_not_included_in_equality(self) -> None:
+        """tts_generating is a runtime flag and must not affect segment equality."""
+        a = VoiceoverSegment.create(timestamp=0, text="Hello")
+        b = VoiceoverSegment(
+            id=a.id,
+            timestamp=a.timestamp,
+            text=a.text,
+            voice=a.voice,
+            audio_path=a.audio_path,
+            duration_ms=a.duration_ms,
+            rate=a.rate,
+            volume=a.volume,
+            source=a.source,
+            script_markdown=a.script_markdown,
+            script_path=a.script_path,
+            tts_generating=True,
+        )
+        assert a == b
+
+    def test_tts_generating_can_be_toggled(self) -> None:
+        """Verify the flag can be set and cleared on a live segment object."""
+        seg = VoiceoverSegment.create(timestamp=500, text="Test")
+        assert not seg.tts_generating
+        seg.tts_generating = True
+        assert seg.tts_generating
+        seg.tts_generating = False
+        assert not seg.tts_generating
 
 
 # ── VideoSegment ────────────────────────────────────────────────────
