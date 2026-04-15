@@ -83,3 +83,58 @@ Narration UI/docs alignment complete. Decision archived in .squad/decisions.md c
 - Documentation updated: USER_GUIDE.md, QUICKSTART.md, copilot-instructions.md
 
 Orchestration log: .squad/orchestration-log/2026-04-15T21-27-39Z-mcmanus.md
+
+## 2026-04-15T22:56:10.313Z — Consolidated UI Spawns: Timeline, Chapters, Annotations Removal
+
+**Mode:** Background agent spawned by Scribe; concurrent work with Fenster
+**Task:** Three concurrent UI sub-tasks: playback time readout ghosting, AI chapters alignment, annotations/keystrokes removal
+
+### Scope Completed
+
+1. **Playback Time Readout Ghosting Fix**
+   - Changed from multiple transparent `QLabel`s to single opaque custom-painted widget with grayscale antialiasing
+   - Rapidly updating text on Windows composited surfaces was causing fringing artifacts
+   - Regression test added to `followcursor/tests/test_timeline_widget.py`
+   - Verified: timeline repaint ghost is compositing artifact in UI layer, not duplicate widgets
+
+2. **AI Chapters & Timeline Integration**
+   - Chapter generation now reuses `SharedRecordingKnowledge` from narration pipeline (same frame samples, activity cues, zoom beats, batch notes)
+   - Chapters replace only prior generated markers; manual markers stay in place
+   - Timeline chapter flags reviewable in-place: hover → show name, left-click → seek, right-click → jump/delete actions
+   - Keeps chapters and narration aligned on same evidence instead of drifting from separate AI passes
+
+3. **Annotations & Keystroke Overlays Removal (UI)**
+   - Editor sections deleted (no annotation or keystroke editing)
+   - Timeline Keys lane removed
+   - Preview and export never render annotation or keystroke overlay data
+   - Project loading stays backward-compatible: clears saved annotation/keystroke state on load and save
+   - Legacy `.fcproj` files still load without crashing but removed data is normalized away
+
+### Coordination Notes
+
+- **Partner:** Fenster (Backend) — retiming voiceover segments, consolidating chapter knowledge, removing backend keystroke/annotation plumbing
+- **Decision entries (now merged to decisions.md):**
+  - `.squad/decisions/inbox/mcmanus-overlap-ui.md`
+  - `.squad/decisions/inbox/mcmanus-ai-chapters.md`
+  - `.squad/decisions/inbox/mcmanus-remove-annotations-keystrokes.md`
+- Timeline widget updates handle opaque custom paint, chapter flag rendering, and Keys lane removal
+- Editor panel updates remove annotation and keystroke sections
+- Project file loading normalizes away legacy keystroke_config and annotations on load/save
+
+### Validation
+
+✓ Full pytest (435 tests) passed
+✓ Compileall clean
+✓ VS Code Run Tests task verified
+
+### Learnings
+
+- Custom-painted opaque widget stabilizes rapidly-updating text rendering on Windows composited surfaces (single paintable region beats multiple transparent labels)
+- Shared recording knowledge artifact (frame samples + activity + batch notes) aligns chapters and narration naturally; separate analysis passes caused temporal drift
+- Backward-compatibility on legacy project files (load-ok, clear-on-save) lets UI safely remove features without crashing old workflows
+
+### Handoff
+
+Fenster to follow with backend cleanup: dormant serialization (`AnnotationCollection` / `KeystrokeOverlayConfig`), AI-service annotation plumbing, legacy hook/model helpers — once branch no longer needs to open older `.fcproj` files.
+
+Orchestration log: `.squad/orchestration-log/20260415T225610-mcmanus.md`

@@ -1,5 +1,30 @@
-# Decisions Archive
 
+
+## UI & Voiceover Timing Fixes — Playback, Chapters, & Annotations (2026-04-15)
+
+**Status:** Complete | **Implementation:** McManus (UI) & Fenster (Backend)
+
+### McManus: Playback Time Readout & Timeline Glyphs
+
+**Playback time display:** Changed from multiple transparent `QLabel`s to a single opaque, custom-painted widget with grayscale antialiasing. Rapidly updating text on composited Windows surfaces was ghosting/fringing; consolidating to one paintable region stabilizes the visual without changing backend timing logic.
+
+**AI Chapters & Timeline:** Chapter generation now reuses the same `SharedRecordingKnowledge` as AI narration, keeping frame samples, activity cues, zoom beats, and batch notes aligned. Chapters replace only prior generated markers; manual markers are preserved. Timeline chapter flags stay reviewable in-place (hover for name, click to seek, right-click for actions).
+
+**Annotations & Keystroke Removal:** UI now treats annotations and keystroke overlays as removed product features. Editor sections deleted, timeline Keys lane gone, preview/export never render these data. Project loading remains backward-compatible (clears saved state on load/save for legacy `.fcproj` files).
+
+### Fenster: Voiceover Timing Alignment & Voice Consistency
+
+**Narration retiming:** Generated segments must be retimed after actual TTS WAV durations are known. Draft timestamps are created before speech synthesis; the fix now pushes later segments forward with measured durations (and inferred placeholders for unsynthesized later beats) to prevent overlap on the voice track.
+
+**Auto-TTS batch continuity:** After AI worker finishes each segment, auto-TTS batch waits fully before queuing the next retry or clip. Original planned timing windows are preserved for one bounded retry even after later clips are retimed forward, maintaining subtle narration rate-correction behavior.
+
+**Voice consistency:** Batch-selected/generated segment voice stays pinned through auto-synthesis and retries. Set Azure Speech's `speech_synthesis_voice_name` before constructing the synthesizer to avoid SDK/default fallback on plain-text TTS calls.
+
+**Shared chapter knowledge:** AI chapters reuse the cached `SharedRecordingKnowledge` instead of a separate heuristic pass. Avoids paying twice for frame extraction/batch analysis and keeps exported chapter beats aligned with narration story arc. Chapter titles remain short, navigation-friendly, and outcome-focused (no literal click/zoom narration).
+
+**Backend contract:** `RecordingSession.key_events` is legacy-load-only; new sessions have no keystroke stream. `load_project()` returns `keystroke_config = None` and `annotations = None`. UI can remove controls and docs without waiting for further backend work. Legacy project files still load but dropped on save.
+
+---
 
 ## Narration Redesign — Backend & UI Alignment (2026-04-15)
 
