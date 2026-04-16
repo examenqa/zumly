@@ -1,32 +1,69 @@
-# Decisions Archive
 
-## PR Review Fixes — Backend (Fenster, 2026-01-20)
 
-**Status:** Applied | **Items:** 6 fixes + 12 prior resolutions
+## UI & Voiceover Timing Fixes — Playback, Chapters, & Annotations (2026-04-15)
 
-### Key Architectural Choices
+**Status:** Complete | **Implementation:** McManus (UI) & Fenster (Backend)
 
-1. **Modifier VKs now recorded**
-   - Removed modifier VK codes (Shift/Ctrl/Alt/Win) from `_IGNORE_VKS` in keyboard_tracker
-   - Trade-off: correct shortcut detection vs. slightly larger project files and broader privacy surface
-   - Documented privacy implications in module docstring
+### McManus: Playback Time Readout & Timeline Glyphs
 
-2. **Chapter END time computation**
-   - Changed from hardcoded `START + 1000` to computing END from next chapter's start time
-   - Added `-f ffmetadata` and `-map_chapters` flags so ffmpeg interprets metadata correctly
-   - Last chapter's END uses trimmed video duration
+**Playback time display:** Changed from multiple transparent `QLabel`s to a single opaque, custom-painted widget with grayscale antialiasing. Rapidly updating text on composited Windows surfaces was ghosting/fringing; consolidating to one paintable region stabilizes the visual without changing backend timing logic.
 
-3. **Z-order change**
-   - Moved annotation rendering BEFORE cursor/click rendering in main frame loop and extra-frames loop
-   - New order: video → annotations → cursor → click effects → keystrokes
+**AI Chapters & Timeline:** Chapter generation now reuses the same `SharedRecordingKnowledge` as AI narration, keeping frame samples, activity cues, zoom beats, and batch notes aligned. Chapters replace only prior generated markers; manual markers are preserved. Timeline chapter flags stay reviewable in-place (hover for name, click to seek, right-click for actions).
 
-4. **Near-cursor keystroke placement**
-   - Implemented actual cursor-relative positioning using `KeyEvent.x`/`KeyEvent.y` data
-   - Falls back to bottom-center with debug log when no cursor data available
+**Annotations & Keystroke Removal:** UI now treats annotations and keystroke overlays as removed product features. Editor sections deleted, timeline Keys lane gone, preview/export never render these data. Project loading remains backward-compatible (clears saved state on load/save for legacy `.fcproj` files).
 
-5. **JSON decoding error handling**
-   - Confirmed `json.loads()` in `project_file.py` already inside try/except with `JSONDecodeError`
-   - No change needed — already robust
+### Fenster: Voiceover Timing Alignment & Voice Consistency
+
+**Narration retiming:** Generated segments must be retimed after actual TTS WAV durations are known. Draft timestamps are created before speech synthesis; the fix now pushes later segments forward with measured durations (and inferred placeholders for unsynthesized later beats) to prevent overlap on the voice track.
+
+**Auto-TTS batch continuity:** After AI worker finishes each segment, auto-TTS batch waits fully before queuing the next retry or clip. Original planned timing windows are preserved for one bounded retry even after later clips are retimed forward, maintaining subtle narration rate-correction behavior.
+
+**Voice consistency:** Batch-selected/generated segment voice stays pinned through auto-synthesis and retries. Set Azure Speech's `speech_synthesis_voice_name` before constructing the synthesizer to avoid SDK/default fallback on plain-text TTS calls.
+
+**Shared chapter knowledge:** AI chapters reuse the cached `SharedRecordingKnowledge` instead of a separate heuristic pass. Avoids paying twice for frame extraction/batch analysis and keeps exported chapter beats aligned with narration story arc. Chapter titles remain short, navigation-friendly, and outcome-focused (no literal click/zoom narration).
+
+**Backend contract:** `RecordingSession.key_events` is legacy-load-only; new sessions have no keystroke stream. `load_project()` returns `keystroke_config = None` and `annotations = None`. UI can remove controls and docs without waiting for further backend work. Legacy project files still load but dropped on save.
+
+---
+
+## Narration Redesign — Backend & UI Alignment (2026-04-15)
+
+**Status:** Complete | **Implementation:** Fenster & McManus
+
+### Fenster: Backend Redesign
+
+Automated narration now uses a dedicated `gpt-5.4` runtime path with:
+- Provider-safe multimodal batching (respects 50-image caps via sequential chunking)
+- Presentation structure: Context, Background, Prompt/Action, Walkthrough, Result (five beats)
+- Timing-aware polish pass for badly-drifting first drafts
+- Handoff to existing Add voiceover flow: each beat becomes a `VoiceoverSegment`, synthesized via normal TTS pipeline
+- Combined markdown sidecar preserves full narration history
+
+**Key rationale:** Previous single-track narration remained too close to closed-caption recap. Multiple section-level assets preserve presentation arc, keep edits safer, fit existing persistence paths, and reuse proven export/rendering/manual-edit flows. Per-segment TTS rate nudges handle duration drift within the standard voiceover pipeline.
+
+### McManus: UI & Docs Alignment
+
+Generated narration is treated as **five presentation-style voiceover segments** on the existing voice lane:
+
+1. **Section naming:** Context, Background, Prompt/Action, Walkthrough, Result (not generic Segment 1/2/3)
+2. **Text rendering:** Show plain spoken narration line; keep section label as UI metadata (avoid leaking markdown headings into edit boxes)
+3. **Synthesized copy:** Narration status says speech auto-starts when segments land on Voice track; calm fallback when TTS unconfigured or another AI task running
+4. **Voice style:** Presenter-style that explains the point — explicitly avoid play-by-play narration of clicks, cursor motions, or camera moves
+5. **Documentation:** Updated USER_GUIDE.md, QUICKSTART.md, and copilot-instructions.md to describe GPT-5.4 narration generation, one combined sidecar, and normal voiceover synthesis
+
+**Validation:** Full pytest (435 tests) passed | compileall clean
+
+### User Directives Consolidated (2026-04-15)
+
+1. **2026-04-15T19:43:15.109Z:** AI narration should run on GPT-5.4, produce multiple WAV segments, and adopt presentation voice (not closed-caption style)
+2. **2026-04-15T19:43:15.109Z:** Narration segments integrate with existing Add voiceover flow for TTS synthesis
+3. **2026-04-15T20:58:42.932Z:** Keep spoken narration free of headings/dividers; auto-synthesize TTS as segments land on timeline; authentic, concise voice avoiding AI-isms
+4. **2026-04-15T21:06:05.876Z:** Avoid literal narration of clicks/zooms; no "zooming in on" phrasing
+5. **2026-04-15T21:27:39Z:** Update documentation when work is done
+
+*All directives applied as of 2026-04-15T21:27:39Z*
+
+---
 
 ## PR Review Fixes — UI & Docs (McManus, 2026-04-06)
 
@@ -56,6 +93,7 @@
 
 ---
 *All decisions applied as of 2026-04-07T01:30:06Z*
+
 
 ## Fluent 2 Design Research (McManus, 2026-04-07)
 
@@ -92,6 +130,7 @@ Comprehensive analysis of Windows 11 Fluent 2 design system and PySide6 implemen
     - Unify corner radius (4px elements, 8px containers)
     - Add semantic color tokens
 
+
 ## User Directive (Ahmed Sabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow
@@ -103,6 +142,7 @@ Create branches and worktrees before major work. All significant changes should 
 **Rationale:** User request — established to maintain clean main branch and enable parallel development.
 
 *Updated: 2026-04-07T07:33:49Z*
+
 
 ## Fluent 2 Phase 1 — Design Token Architecture (McManus, 2026-04-07)
 
@@ -133,6 +173,7 @@ FollowCursor's theme.py used hardcoded hex colors, inconsistent spacing (2–28p
 
 ---
 *All decisions applied as of 2026-04-07T07:49:22Z*
+
 
 ## Fluent 2 Color System & Elevation Adoption (McManus, 2026-07-23)
 
@@ -434,6 +475,7 @@ FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color
 
 ---
 *Applied as of 2026-04-07, PR #105*
+
 ## User Directives (Ahmed Sabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow — PR Review & Issue Management
@@ -456,6 +498,7 @@ FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color
 
 **Rationale:** User requests — these are workflow policies to prevent missed PR review feedback, ensure release planning visibility, and avoid duplicate work across parallel agent spawns.
 
+
 ## Release Trigger Policy (asabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow — Release Management
@@ -471,6 +514,7 @@ Ralph should always trigger a release at the end of milestone work — defined a
 
 **Rationale:** User request — provides a clear handoff point between milestone completion and release, enabling automated release workflow.
 
+
 ## User Directive: Squad State Separation (asabbour, 2026-04-07)
 
 **Status:** Captured | **Type:** Development Workflow — Commit Organization
@@ -484,3 +528,203 @@ Never mix `.squad/` state changes with feature or code changes in the same commi
 **Must always be separate:** `decisions.md`, `orchestration-log/`, `log/`, `ceremonies.md`, `team.md`, `routing.md`, and any other squad orchestration/state files must be committed separately from code, documentation, or config changes.
 
 **Rationale:** User request — mixing squad state with feature commits trips up reviewers who can't distinguish squad bookkeeping from real change content. History files are the exception because they are a direct artifact of the code work being reviewed.
+
+## Copilot Directive — Squad/History separation (2026-04-07T22:15:03Z)
+
+**By:** Ahmed Sabbour
+**What:** `.squad/agents/*/history.md` changes ARE allowed alongside code changes in the same PR/commit — history files are contextually related to the code work. The rule against mixing squad state with code only applies to orchestration logs, decisions, and other `.squad/` state files (NOT history files).
+**Why:** User request — captured for team memory
+
+
+## Auto Narration — Architecture Decision (Fenster, 2026-04-15T17:48:11.995Z)
+
+**Decision:** Persist automated narration on the existing voiceover path as a `VoiceoverSegment` with `source="generated"`.
+- Store generated narration markdown in `script_markdown`
+- Keep spoken TTS source text in `text`
+- Keep last exported markdown location in `script_path`
+- Replace prior generated narration while preserving manual voiceover segments
+
+**Why:** Reuses current export mixer, `.fcproj` JSON persistence, and voiceover audio packaging without duplicating timeline or audio logic. Backward compatible (new fields optional).
+
+
+## Auto Narration — UI/Timeline Decision (McManus, 2026-04-15T17:48:11.995Z)
+
+**Decision:** Automated narration stays on the existing voiceover track as a single generated `VoiceoverSegment`. Editor asks before replacing existing generated narration, preserves manual segments, rewrites markdown sidecar beside the active video after project load.
+**Why:** Keeps export, save/load, and timeline rendering on one proven path instead of duplicating the audio model. Users get first-class narration flow while implementation remains compatible with existing voiceover tooling and `.fcproj` persistence.
+**Affected:** `main_window.py`, `editor_panel.py`, `timeline_widget.py`
+
+## User Directive: AI Narration Batching (Ahmed Sabbour, 2026-04-15)
+
+**Status:** Captured | **Type:** Feature Request
+
+### Directive
+
+For AI narration, consider batching multiple requests instead of hard-capping at 50 images, but do it in a way that avoids rate limiting.
+
+**Rationale:** User request — captured for team memory to guide AI narration improvements.
+
+*Captured: 2026-04-15T19:11:54.918Z*
+
+## User Directive: AI Narration Multi-Modal (Ahmed Sabbour, 2026-04-15)
+
+**Status:** Captured | **Type:** Feature Request
+
+### Directive
+
+AI narration should account for zooms and annotations too, not just mouse, clicks, and keystrokes.
+
+**Rationale:** User request — captured for team memory to guide narration generation strategy.
+
+*Captured: 2026-04-15T19:16:47.060Z*
+
+## Fenster: Narration Image Cap Handling (2026-04-15)
+
+**Status:** Implementation Spec | **Agent:** Fenster | **Module:** `ai_service.py`
+
+### Design
+
+Handle long automated narration runs in shared `ai_service.py` with sequential multimodal batching instead of a single global trim:
+- Keep the full 5-second-plus-cues frame plan
+- Split extracted frames into batches below the provider's 50-image cap
+- Pause between requests to reduce burst rate-limiting risk
+- Synthesize final narration from batch notes
+- Pass both authoritative zoom keyframes and structured annotations into narration generation
+- Convert annotations into explicit cue moments
+- Include annotation summaries in both slice-analysis and final synthesis prompts
+- Preserve manual voiceover/project persistence behavior unchanged
+
+### Rationale
+
+This fixes the provider 400 at the core narration path without throwing away later parts of the recording, preserves narration quality on long videos, and makes narration reflect deliberate zoom emphasis plus explicit text/arrow/highlight callouts in addition to mouse, clicks, and keystrokes.
+
+*Captured: 2026-04-15T19:11:54.918Z*
+
+## Voiceover TTS Generation State (Fenster, 2026-04-15T23:01:28.412Z)
+
+**Status:** Implemented | **Type:** Backend State Signal
+
+### Context
+
+When the AI narration pipeline generates voiceover segments, those segments land on the timeline immediately while TTS audio synthesis runs in a sequential background batch. During that gap, a segment exists on the voice track with no audio but no first-class signal that synthesis was *actively in progress* versus *not yet requested* or *permanently unsynthesized*.
+
+### Decision
+
+Added a **runtime-only boolean field** `tts_generating: bool` to `VoiceoverSegment`.
+
+**Rules:**
+- Segment just created (manual or generated narration): `False`
+- `_synthesize_voiceover` hands the segment ID to `AIWorker.run_tts`: **`True`**
+- `_on_ai_tts_result` receives the completed audio path: `False`
+- `_on_ai_error` fires for any task: `False` on all segments
+
+**Persistence:** Never serialized (`to_dict` omits it; `from_dict` ignores it). Segments loaded from `.fcproj` always start `False`.
+
+**Equality:** Carries `compare=False` — two segments that differ only in synthesis state are considered equal.
+
+**Files changed:**
+- `followcursor/app/models.py` — `tts_generating` field on `VoiceoverSegment`
+- `followcursor/app/main_window.py` — set/clear around `_synthesize_voiceover` and in `_on_ai_tts_result` / `_on_ai_error`
+- `followcursor/tests/test_models.py` — 5 focused regression tests
+
+
+## Voiceover Generation UI Indicator (McManus, 2026-04-15T23:01:28.412Z)
+
+**Status:** Implemented | **Type:** Timeline Widget Visual Feedback
+
+### Context
+
+Users need visual feedback while TTS audio is being synthesized for a voiceover segment. Without an indicator, the segment appears identical to a completed one, leaving uncertainty about whether the app is working.
+
+### Decision
+
+### Spinner animation in `_TimelineTrack`
+
+- A `QTimer` at 80 ms (≈ 12.5 fps) advances `_spinner_phase` by 36° per tick → one full rotation every 800 ms.
+- Timer only runs while at least one segment has `tts_generating=True`; idle otherwise.
+- Called from `TimelineWidget.set_data()` whenever `voiceover_segments` is provided.
+
+### Visual treatment
+
+- Amber arc (`#fbbf24`) drawn at the right end of the pill, 120° sweep rotating continuously.
+- Suppresses the static "…" ellipsis icon during generation (same slot).
+- Existing colour logic (teal filled / grey pending / teal-bright selected) unchanged.
+
+**Files changed:**
+- `followcursor/app/widgets/timeline_widget.py` — spinner timer, arc rendering
+- `followcursor/tests/test_timeline_widget.py` — 8 regression tests
+
+
+## Narration Guidance Prompt UI (McManus, 2026-04-15T23:04:02.621Z)
+
+**Status:** Implemented | **Type:** Editor Panel Feature
+
+### Context
+
+Users requested an optional per-recording guidance prompt in the Narration Voiceover panel to steer what a generated narration focuses on — without making the UI noisy.
+
+### Decision
+
+### UI placement
+
+A `QPlainTextEdit` named `_narration_guidance` is placed between the voiceover description label and the **Generate narration** button, inside the existing Voiceover collapsible section. Label reads **"Guidance (optional)"** so the field is unambiguously non-required.
+
+Placeholder text example:
+> *"Steer what the narration focuses on — e.g. "lead with the time saved" or "emphasize this is a one-click flow"."*
+
+Height fixed at 64 px.
+
+### Signal change
+
+`generate_narration_requested` changed from `Signal(str)` (voice only) to `Signal(str, str)` (voice, guidance). Minimal change carrying text to main_window.
+
+### Backend wiring
+
+`generate_narration()` in `ai_service.py` receives `guidance_prompt` parameter, forwarded as `guidance` keyword argument to `_generate_narration_segments()`, which passes it to `_build_narration_system_prompt()`. System prompt appends creator guidance block when non-empty.
+
+**Files changed:**
+- `followcursor/app/widgets/editor_panel.py` — guidance field, label, signal update
+- `followcursor/app/main_window.py` — `_on_generate_narration_requested` signature, `guidance_prompt` kwarg forwarded
+- `followcursor/app/ai_service.py` — `guidance_prompt` param on `generate_narration`
+- `followcursor/tests/test_editor_panel.py` — 6 regression tests
+
+
+## User Directive: Narration Prompt Enrichment (Ahmed Sabbour, 2026-04-15T23:04:02.621Z)
+
+**Status:** Captured | **Type:** Feature Guidance
+
+### Directive
+
+Update narration prompting so it captures the feature, end-user benefit, and meta takeaway — especially how easy something is — instead of narrating literal on-screen steps.
+
+**Rationale:** User request — captured for team memory to guide narration generation strategy.
+
+*Captured: 2026-04-15T23:04:02.621Z*
+
+
+---
+
+## Light Mode Theme Support for Custom-Painted Widgets (McManus, 2026-04-15)
+
+**Status:** Implemented
+
+### Context
+
+The timeline widget and transport controls were rendering with dark-mode colors even when the app was switched to light mode. Custom `paintEvent` methods had hard-coded dark color values instead of using design tokens.
+
+### Solution
+
+1. Added theme-aware color helpers to `tokens.py` (bg_canvas, bg_track, fg_primary, etc.)
+2. Added `_dark_mode` state and `set_dark_mode()` methods to custom-painted widgets
+3. Wired `TimelineWidget.set_dark_mode()` to propagate to all children
+4. Updated `MainWindow._apply_theme()` to call `self._timeline.set_dark_mode()`
+
+### Files Changed
+
+- `followcursor/app/tokens.py` — theme-aware color helpers
+- `followcursor/app/widgets/timeline_widget.py` — custom widget theme propagation
+- `followcursor/app/main_window.py` — theme propagation wiring
+- `followcursor/tests/test_timeline_widget.py` — regression tests
+
+**Rationale:** Custom-painted widgets must follow theme propagation pattern for light/dark mode consistency.
+
+*Captured: 2026-04-15T23:04:02.621Z*

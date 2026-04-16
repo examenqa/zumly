@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFrame,
     QComboBox,
-    QCheckBox,
     QLineEdit,
+    QPlainTextEdit,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from .. import tokens as T
 from ..fluent_effects import apply_shadow, install_focus_ring
 from ..icon_loader import load_icon
-from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, ClickEffectPreset, CLICK_EFFECT_PRESETS, DEFAULT_CLICK_EFFECT, KeystrokeOverlayConfig
+from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, ClickEffectPreset, CLICK_EFFECT_PRESETS, DEFAULT_CLICK_EFFECT
 from ..activity_analyzer import analyze_activity
 from ..backgrounds import (
     PRESETS, DEFAULT_PRESET, BackgroundPreset,
@@ -145,7 +145,8 @@ class _AISettingsDialog(QDialog):
 
         info = QLabel(
             "Configure your Azure AI Foundry credentials.\n"
-            "Chat model is used for AI zoom analysis.\n"
+            "Chat model is used for AI Smart Zoom.\n"
+            "Automated narration always runs on GPT-5.4 and feeds the normal voiceover flow.\n"
             "TTS uses Azure Speech Service with the same key."
         )
         info.setWordWrap(True)
@@ -165,7 +166,7 @@ class _AISettingsDialog(QDialog):
         form.addRow("API Key:", self._api_key)
 
         self._chat_model = QLineEdit(current_settings.chat_model)
-        self._chat_model.setPlaceholderText("e.g. gpt-4o-mini")
+        self._chat_model.setPlaceholderText("e.g. gpt-4o-mini (Smart Zoom)")
         form.addRow("Chat Model:", self._chat_model)
 
         layout.addLayout(form)
@@ -187,6 +188,7 @@ class _AISettingsDialog(QDialog):
             endpoint=self._endpoint.text().strip(),
             api_key=self._api_key.text().strip(),
             chat_model=self._chat_model.text().strip(),
+            narration_model="gpt-5.4",
         )
 
 
@@ -212,13 +214,11 @@ class EditorPanel(QWidget):
     encoder_changed = Signal(str)            # encoder_id (e.g. "h264_nvenc")
     # AI feature signals
     ai_zoom_requested = Signal(int, float, int)  # max_clusters, zoom_level, min_gap_ms
+    generate_narration_requested = Signal(str, str)  # default voice name, guidance prompt
     add_voiceover_requested = Signal(float, str)  # timestamp_ms, voice
     ai_settings_changed = Signal()               # settings were updated
-    keystroke_config_changed = Signal(object)    # KeystrokeOverlayConfig
-    annotation_added = Signal(str, object)       # type ("text"|"arrow"|"highlight"), annotation object
-    annotation_removed = Signal(str, str)        # type, annotation id
-    annotation_updated = Signal(str, object)     # type, annotation object
-    auto_detect_chapters_requested = Signal()   # request auto-detection
+    auto_detect_chapters_requested = Signal()   # deprecated compatibility signal
+    generate_chapters_requested = Signal()      # request AI chapter generation
     chapter_added = Signal(object)               # Chapter object
     chapter_removed = Signal(int)                # chapter timestamp_ms
 
@@ -250,7 +250,6 @@ class EditorPanel(QWidget):
         self._trim_start_ms: float = 0.0
         self._trim_end_ms: float = 0.0
         self._duration: float = 0.0
-        self._current_time_ms: float = 0.0  # For annotation placement
 
         # ── Smart Zoom (collapsible) ─────────────────────────────────
         zoom_body = QWidget()
@@ -313,7 +312,8 @@ class EditorPanel(QWidget):
         or_row.addWidget(or_line_r, 1)
         zoom_lay.addLayout(or_row)
 
-        ai_zoom_btn = QPushButton("\U0001f916 Auto-generate zoom (AI)")
+        ai_zoom_btn = QPushButton("  Auto-generate zoom (AI)")
+        ai_zoom_btn.setIcon(load_icon("search", color=T.FG_PRIMARY))
         ai_zoom_btn.setObjectName("CtrlBtn")
         ai_zoom_btn.setFixedHeight(36)
         ai_zoom_btn.setToolTip("Use AI (Azure AI Foundry) to analyze activity\nand generate zoom keyframes.")
@@ -335,18 +335,24 @@ class EditorPanel(QWidget):
         chapters_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
         chapters_lay.setSpacing(T.SPACE_SM)
 
-        chapters_desc = QLabel("Add chapter markers for navigation\nin long recordings.")
+        chapters_desc = QLabel(
+            "Generate AI chapter markers for navigation in long recordings.\n"
+            "Chapters reuse the same recording understanding as narration — shared frame samples, cursor activity, click beats, and zoom edits."
+        )
         chapters_desc.setObjectName("Secondary")
         chapters_desc.setWordWrap(True)
         chapters_lay.addWidget(chapters_desc)
 
-        self._btn_auto_detect_chapters = QPushButton("  Auto-detect chapters")
-        self._btn_auto_detect_chapters.setIcon(load_icon("video", color=T.FG_PRIMARY))
-        self._btn_auto_detect_chapters.setObjectName("CtrlBtn")
-        self._btn_auto_detect_chapters.setFixedHeight(32)
-        self._btn_auto_detect_chapters.setToolTip("Automatically detect scene boundaries based on activity patterns.")
-        self._btn_auto_detect_chapters.clicked.connect(self._on_auto_detect_chapters)
-        chapters_lay.addWidget(self._btn_auto_detect_chapters)
+        self._btn_generate_chapters = QPushButton("  Generate chapters")
+        self._btn_generate_chapters.setIcon(load_icon("video", color=T.FG_PRIMARY))
+        self._btn_generate_chapters.setObjectName("CtrlBtn")
+        self._btn_generate_chapters.setFixedHeight(32)
+        self._btn_generate_chapters.setToolTip(
+            "Use GPT-5.4 to suggest chapter markers from the same shared recording context\n"
+            "as narration. Re-running replaces only generated chapters and keeps manual markers."
+        )
+        self._btn_generate_chapters.clicked.connect(self._on_generate_chapters)
+        chapters_lay.addWidget(self._btn_generate_chapters)
 
         self._btn_add_chapter = QPushButton("+ Add chapter manually")
         self._btn_add_chapter.setObjectName("CtrlBtn")
@@ -354,6 +360,13 @@ class EditorPanel(QWidget):
         self._btn_add_chapter.setToolTip("Add a chapter marker at the current playback position.")
         self._btn_add_chapter.clicked.connect(self._on_add_chapter)
         chapters_lay.addWidget(self._btn_add_chapter)
+
+        chapters_hint = QLabel(
+            "Generated chapters refresh only the AI markers. Manual chapter markers stay where you place them."
+        )
+        chapters_hint.setObjectName("Secondary")
+        chapters_hint.setWordWrap(True)
+        chapters_lay.addWidget(chapters_hint)
 
         self._chapters_status = QLabel("")
         self._chapters_status.setObjectName("Secondary")
@@ -369,15 +382,93 @@ class EditorPanel(QWidget):
         vo_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
         vo_lay.setSpacing(T.SPACE_SM)
 
-        vo_desc = QLabel("Add text-to-speech voiceover segments\nat specific points in the timeline.")
+        vo_desc = QLabel(
+            "Draft five presentation-style voiceover segments for the full recording and\n"
+            "let FollowCursor voice them automatically. Narration reuses the same recording\n"
+            "understanding as AI chapters, while the script stays focused on the takeaway rather than on-screen mechanics."
+        )
         vo_desc.setObjectName("Secondary")
         vo_desc.setWordWrap(True)
         vo_lay.addWidget(vo_desc)
 
-        self._btn_add_voiceover = QPushButton("\U0001f399 Add voiceover (AI)")
+        vo_guidance_label = QLabel("Guidance (optional)")
+        vo_guidance_label.setObjectName("Secondary")
+        vo_guidance_label.setStyleSheet(
+            f"color: {T.FG_MUTED}; font-size: {T.FONT_SIZE_CAPTION}px;"
+        )
+        vo_lay.addWidget(vo_guidance_label)
+
+        self._narration_guidance = QPlainTextEdit()
+        self._narration_guidance.setObjectName("NarrationGuidance")
+        self._narration_guidance.setPlaceholderText(
+            "Steer what the narration focuses on - e.g. 'lead with the time saved' "
+            "or 'emphasize this is a one-click flow'."
+        )
+        self._narration_guidance.setFixedHeight(64)
+        self._narration_guidance.setStyleSheet(
+            f"QPlainTextEdit#NarrationGuidance {{"
+            f"  background-color: {T.BG_ELEVATED};"
+            f"  color: {T.FG_PRIMARY};"
+            f"  border: 1px solid {T.BORDER_SUBTLE};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 6px;"
+            f"  font-size: {T.FONT_SIZE_BODY}px;"
+            f"}}"
+            f"QPlainTextEdit#NarrationGuidance:focus {{"
+            f"  border-color: {T.BRAND};"
+            f"}}"
+        )
+        vo_lay.addWidget(self._narration_guidance)
+
+        self._btn_generate_narration = QPushButton("  Generate narration")
+        self._btn_generate_narration.setIcon(load_icon("edit", color=T.FG_PRIMARY))
+        self._btn_generate_narration.setObjectName("CtrlBtn")
+        self._btn_generate_narration.setFixedHeight(32)
+        self._btn_generate_narration.setToolTip(
+            "Use GPT-5.4 to draft five presentation-style voiceover segments,\n"
+            "keep the wording focused on what matters rather than on-screen mechanics,\n"
+            "save the combined script beside the recording, then start speech automatically through the normal voiceover flow.\n"
+            "Open any generated segment to review the spoken line, then drag or delete it like any other voiceover."
+        )
+        self._btn_generate_narration.clicked.connect(self._on_generate_narration)
+        vo_lay.addWidget(self._btn_generate_narration)
+
+        self._narration_status = QLabel("")
+        self._narration_status.setObjectName("Secondary")
+        self._narration_status.setWordWrap(True)
+        self._narration_status.setVisible(False)
+        vo_lay.addWidget(self._narration_status)
+
+        vo_or_row = QHBoxLayout()
+        vo_or_row.setSpacing(T.SPACE_SM)
+        vo_or_line_l = QFrame()
+        vo_or_line_l.setFrameShape(QFrame.Shape.HLine)
+        vo_or_line_l.setStyleSheet(
+            f"background-color: {T.BORDER_SUBTLE}; max-height: 1px;"
+        )
+        vo_or_row.addWidget(vo_or_line_l, 1)
+        vo_or_label = QLabel("or")
+        vo_or_label.setObjectName("Secondary")
+        vo_or_label.setStyleSheet(
+            f"color: {T.FG_MUTED}; font-size: {T.FONT_SIZE_CAPTION}px;"
+        )
+        vo_or_row.addWidget(vo_or_label)
+        vo_or_line_r = QFrame()
+        vo_or_line_r.setFrameShape(QFrame.Shape.HLine)
+        vo_or_line_r.setStyleSheet(
+            f"background-color: {T.BORDER_SUBTLE}; max-height: 1px;"
+        )
+        vo_or_row.addWidget(vo_or_line_r, 1)
+        vo_lay.addLayout(vo_or_row)
+
+        self._btn_add_voiceover = QPushButton("  Add voiceover")
+        self._btn_add_voiceover.setIcon(load_icon("mic", color=T.FG_PRIMARY))
         self._btn_add_voiceover.setObjectName("CtrlBtn")
         self._btn_add_voiceover.setFixedHeight(32)
-        self._btn_add_voiceover.setToolTip("Add an AI voiceover segment at the current playback position.")
+        self._btn_add_voiceover.setToolTip(
+            "Add a manual text-to-speech voiceover segment at the current playback position.\n"
+            "Use the Voice track to review, drag, or delete it later."
+        )
         self._btn_add_voiceover.clicked.connect(self._on_add_voiceover)
         vo_lay.addWidget(self._btn_add_voiceover)
 
@@ -387,93 +478,7 @@ class EditorPanel(QWidget):
         self._vo_status.setVisible(False)
         vo_lay.addWidget(self._vo_status)
 
-        self._container.addWidget(_CollapsibleSection("VOICEOVER", vo_body))
-
-        # ── Keystroke Overlay (collapsible) ──────────────────────────
-        keystroke_body = QWidget()
-        keystroke_lay = QVBoxLayout(keystroke_body)
-        keystroke_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
-        keystroke_lay.setSpacing(T.SPACE_SM)
-
-        keystroke_desc = QLabel("Show keystrokes as floating overlays\nfor tutorial and demo recordings.")
-        keystroke_desc.setObjectName("Secondary")
-        keystroke_desc.setWordWrap(True)
-        keystroke_lay.addWidget(keystroke_desc)
-
-        # Enable/disable toggle
-        self._keystroke_enabled = QCheckBox("Show keystrokes")
-        self._keystroke_enabled.setObjectName("CtrlBtn")
-        self._keystroke_enabled.setStyleSheet(
-            f"QCheckBox {{ color: {T.FG_PRIMARY}; font-size: {T.FONT_SIZE_BODY}px; padding: 2px; }}"
-            f"QCheckBox::indicator {{ width: 18px; height: 18px; }}"
-            f"QCheckBox::indicator:unchecked {{ background: {T.BG_INTERACTIVE}; border: 1px solid {T.CARD_BORDER}; border-radius: 3px; }}"
-            f"QCheckBox::indicator:checked {{ background: {T.BRAND}; border: 1px solid {T.BRAND}; border-radius: 3px; }}"
-        )
-        self._keystroke_enabled.setChecked(False)
-        self._keystroke_enabled.toggled.connect(self._on_keystroke_enabled_changed)
-        keystroke_lay.addWidget(self._keystroke_enabled)
-
-        # Position dropdown
-        position_row = QHBoxLayout()
-        position_row.setSpacing(T.SPACE_SM)
-        position_label = QLabel("Position")
-        position_label.setObjectName("Secondary")
-        position_label.setFixedWidth(65)
-        position_row.addWidget(position_label)
-        self._keystroke_position_combo = QComboBox()
-        self._keystroke_position_combo.setObjectName("DepthCombo")
-        self._keystroke_position_combo.setFixedHeight(30)
-        self._keystroke_position_combo.addItem("Bottom Center", "bottom-center")
-        self._keystroke_position_combo.addItem("Bottom Left", "bottom-left")
-        self._keystroke_position_combo.addItem("Near Cursor", "near-cursor")
-        self._keystroke_position_combo.setCurrentIndex(0)
-        self._keystroke_position_combo.currentIndexChanged.connect(self._on_keystroke_config_changed)
-        position_row.addWidget(self._keystroke_position_combo, 1)
-        keystroke_lay.addLayout(position_row)
-
-        # Style dropdown
-        style_row = QHBoxLayout()
-        style_row.setSpacing(T.SPACE_SM)
-        style_label = QLabel("Style")
-        style_label.setObjectName("Secondary")
-        style_label.setFixedWidth(65)
-        style_row.addWidget(style_label)
-        self._keystroke_style_combo = QComboBox()
-        self._keystroke_style_combo.setObjectName("DepthCombo")
-        self._keystroke_style_combo.setFixedHeight(30)
-        self._keystroke_style_combo.addItem("Floating Badge", "floating-badge")
-        self._keystroke_style_combo.addItem("Minimal Text", "minimal-text")
-        self._keystroke_style_combo.addItem("Key Cap", "key-cap")
-        self._keystroke_style_combo.setCurrentIndex(0)
-        self._keystroke_style_combo.currentIndexChanged.connect(self._on_keystroke_config_changed)
-        style_row.addWidget(self._keystroke_style_combo, 1)
-        keystroke_lay.addLayout(style_row)
-
-        # Filter mode dropdown
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(T.SPACE_SM)
-        filter_label = QLabel("Filter")
-        filter_label.setObjectName("Secondary")
-        filter_label.setFixedWidth(65)
-        filter_row.addWidget(filter_label)
-        self._keystroke_filter_combo = QComboBox()
-        self._keystroke_filter_combo.setObjectName("DepthCombo")
-        self._keystroke_filter_combo.setFixedHeight(30)
-        self._keystroke_filter_combo.addItem("All Keys", "all")
-        self._keystroke_filter_combo.addItem("Modifiers Only", "modifiers-only")
-        self._keystroke_filter_combo.addItem("Shortcuts Only", "shortcuts-only")
-        shortcuts_only_idx = self._keystroke_filter_combo.findData("shortcuts-only")
-        if shortcuts_only_idx >= 0:
-            self._keystroke_filter_combo.setCurrentIndex(shortcuts_only_idx)
-        self._keystroke_filter_combo.setToolTip(
-            "Only shows keyboard shortcuts (Ctrl+X, Alt+Tab, etc.)\n"
-            "Safer for tutorials with password entry"
-        )
-        self._keystroke_filter_combo.currentIndexChanged.connect(self._on_keystroke_config_changed)
-        filter_row.addWidget(self._keystroke_filter_combo, 1)
-        keystroke_lay.addLayout(filter_row)
-
-        self._container.addWidget(_CollapsibleSection("KEYSTROKES", keystroke_body, collapsed=True))
+        self._container.addWidget(_CollapsibleSection("NARRATION & VOICEOVER", vo_body))
 
         # ── Background picker (collapsible) ──────────────────────────
         bg_body = QWidget()
@@ -544,62 +549,6 @@ class EditorPanel(QWidget):
         self._current_click_preset = DEFAULT_CLICK_EFFECT
 
         self._container.addWidget(_CollapsibleSection("CLICK EFFECTS", click_body, collapsed=True))
-
-        # ── Annotations (collapsible) ────────────────────────────────
-        annot_body = QWidget()
-        annot_lay = QVBoxLayout(annot_body)
-        annot_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
-        annot_lay.setSpacing(T.SPACE_SM)
-
-        annot_desc = QLabel("Add text, arrows, and highlights to emphasize key moments.")
-        annot_desc.setObjectName("Secondary")
-        annot_desc.setWordWrap(True)
-        annot_lay.addWidget(annot_desc)
-
-        # Add annotation buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(T.SPACE_SM)
-        
-        btn_text = QPushButton("+ Text")
-        btn_text.setObjectName("CtrlBtn")
-        btn_text.setFixedHeight(32)
-        btn_text.clicked.connect(lambda: self._add_annotation("text"))
-        btn_row.addWidget(btn_text)
-        
-        btn_arrow = QPushButton("+ Arrow")
-        btn_arrow.setObjectName("CtrlBtn")
-        btn_arrow.setFixedHeight(32)
-        btn_arrow.clicked.connect(lambda: self._add_annotation("arrow"))
-        btn_row.addWidget(btn_arrow)
-        
-        btn_highlight = QPushButton("+ Highlight")
-        btn_highlight.setObjectName("CtrlBtn")
-        btn_highlight.setFixedHeight(32)
-        btn_highlight.clicked.connect(lambda: self._add_annotation("highlight"))
-        btn_row.addWidget(btn_highlight)
-        
-        annot_lay.addLayout(btn_row)
-
-        # Annotations list
-        list_scroll = QScrollArea()
-        list_scroll.setWidgetResizable(True)
-        list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        list_scroll.setMaximumHeight(200)
-        list_scroll.setStyleSheet(
-            f"QScrollArea {{ border: 1px solid {T.BORDER_SUBTLE}; background: {T.BG_SURFACE};"
-            f"  border-radius: {T.RADIUS_SMALL}px; }}"
-        )
-        
-        self._annotations_list_widget = QWidget()
-        self._annotations_list_layout = QVBoxLayout(self._annotations_list_widget)
-        self._annotations_list_layout.setContentsMargins(T.SPACE_SM, T.SPACE_SM, T.SPACE_SM, T.SPACE_SM)
-        self._annotations_list_layout.setSpacing(T.SPACE_XS)
-        self._annotations_list_layout.addStretch()
-        
-        list_scroll.setWidget(self._annotations_list_widget)
-        annot_lay.addWidget(list_scroll)
-
-        self._container.addWidget(_CollapsibleSection("ANNOTATIONS", annot_body, collapsed=True))
 
         # ── Output dimensions (collapsible) ──────────────────────────
         dim_body = QWidget()
@@ -1103,6 +1052,16 @@ class EditorPanel(QWidget):
         """Request adding a voiceover segment at the current playback position."""
         self.add_voiceover_requested.emit(-1.0, "")  # voice selected in dialog
 
+    def _on_generate_narration(self) -> None:
+        """Request automated narration for the full recording."""
+        guidance = self._narration_guidance.toPlainText().strip()
+        self.generate_narration_requested.emit(self.selected_voice, guidance)
+
+    def set_narration_status(self, text: str) -> None:
+        """Update the narration status label from outside."""
+        self._narration_status.setText(text)
+        self._narration_status.setVisible(bool(text))
+
     def set_voiceover_status(self, text: str) -> None:
         """Update the voiceover status label from outside."""
         self._vo_status.setText(text)
@@ -1112,6 +1071,8 @@ class EditorPanel(QWidget):
     def set_ai_busy(self, busy: bool) -> None:
         """Disable/enable AI buttons while an operation is in progress."""
         self._btn_ai_zoom.setEnabled(not busy)
+        self._btn_generate_chapters.setEnabled(not busy)
+        self._btn_generate_narration.setEnabled(not busy)
         self._btn_add_voiceover.setEnabled(not busy)
 
     @property
@@ -1133,6 +1094,7 @@ class EditorPanel(QWidget):
             endpoint=settings.value("ai/endpoint", ""),
             api_key=unprotect(settings.value("ai/apiKey", "")),
             chat_model=settings.value("ai/chatModel", ""),
+            narration_model=settings.value("ai/narrationModel", "gpt-5.4"),
             tts_voice=settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
         )
 
@@ -1142,6 +1104,7 @@ class EditorPanel(QWidget):
             settings.setValue("ai/endpoint", result.endpoint)
             settings.setValue("ai/apiKey", protect(result.api_key))
             settings.setValue("ai/chatModel", result.chat_model)
+            settings.setValue("ai/narrationModel", result.narration_model)
             self.ai_settings_changed.emit()
             logger.info("AI settings updated")
             # Load available TTS voices in the background
@@ -1177,9 +1140,9 @@ class EditorPanel(QWidget):
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _on_auto_detect_chapters(self) -> None:
-        """Request auto-detection of chapter boundaries."""
-        self.auto_detect_chapters_requested.emit()
+    def _on_generate_chapters(self) -> None:
+        """Request AI-generated chapter markers."""
+        self.generate_chapters_requested.emit()
 
     def _on_add_chapter(self) -> None:
         """Add a chapter marker at the current playback position."""
@@ -1241,236 +1204,4 @@ class EditorPanel(QWidget):
         """Set the click effect preset from external code (e.g., project load)."""
         self._current_click_preset = preset
         self._click_combo.setCurrentText(preset.name)
-
-    def get_keystroke_config(self) -> KeystrokeOverlayConfig:
-        """Get the current keystroke overlay configuration."""
-        defaults = KeystrokeOverlayConfig()
-        return KeystrokeOverlayConfig(
-            enabled=self._keystroke_enabled.isChecked(),
-            position=self._keystroke_position_combo.currentData(),
-            style=self._keystroke_style_combo.currentData(),
-            display_duration_ms=defaults.display_duration_ms,
-            filter_mode=self._keystroke_filter_combo.currentData(),
-            font_size=defaults.font_size,
-            opacity=defaults.opacity,
-        )
-
-    def set_keystroke_config(self, config: KeystrokeOverlayConfig) -> None:
-        """Set the keystroke overlay configuration (e.g. from project load or QSettings)."""
-        # Block signals to avoid multiple emissions during batch update
-        self._keystroke_enabled.blockSignals(True)
-        self._keystroke_position_combo.blockSignals(True)
-        self._keystroke_style_combo.blockSignals(True)
-        self._keystroke_filter_combo.blockSignals(True)
-
-        self._keystroke_enabled.setChecked(config.enabled)
-
-        # Set position
-        for i in range(self._keystroke_position_combo.count()):
-            if self._keystroke_position_combo.itemData(i) == config.position:
-                self._keystroke_position_combo.setCurrentIndex(i)
-                break
-
-        # Set style
-        for i in range(self._keystroke_style_combo.count()):
-            if self._keystroke_style_combo.itemData(i) == config.style:
-                self._keystroke_style_combo.setCurrentIndex(i)
-                break
-
-        # Set filter
-        for i in range(self._keystroke_filter_combo.count()):
-            if self._keystroke_filter_combo.itemData(i) == config.filter_mode:
-                self._keystroke_filter_combo.setCurrentIndex(i)
-                break
-
-        # Restore signals
-        self._keystroke_enabled.blockSignals(False)
-        self._keystroke_position_combo.blockSignals(False)
-        self._keystroke_style_combo.blockSignals(False)
-        self._keystroke_filter_combo.blockSignals(False)
-
-    def _on_keystroke_enabled_changed(self, checked: bool) -> None:
-        """Handle keystroke overlay enable/disable toggle."""
-        config = self.get_keystroke_config()
-        self.keystroke_config_changed.emit(config)
-        logger.info("Keystroke overlay %s", "enabled" if checked else "disabled")
-
-    def _on_keystroke_config_changed(self) -> None:
-        """Handle keystroke overlay configuration changes."""
-        config = self.get_keystroke_config()
-        
-        # Update tooltip to warn about "All Keys" mode
-        if config.filter_mode == "all":
-            self._keystroke_filter_combo.setToolTip(
-                "⚠️ All keystrokes will be visible, including passwords and sensitive input"
-            )
-        elif config.filter_mode == "modifiers-only":
-            self._keystroke_filter_combo.setToolTip(
-                "Only shows keys with Ctrl, Alt, or Win modifiers"
-            )
-        else:  # shortcuts-only
-            self._keystroke_filter_combo.setToolTip(
-                "Only shows keyboard shortcuts (Ctrl+X, Alt+Tab, etc.)\n"
-                "Safer for tutorials with password entry"
-            )
-        
-        self.keystroke_config_changed.emit(config)
-        logger.info(
-            "Keystroke config changed: position=%s, style=%s, filter=%s",
-            config.position, config.style, config.filter_mode
-        )
-
-    # ── Annotation methods ──────────────────────────────────────────
-
-    def set_current_time(self, time_ms: float) -> None:
-        """Update the current playhead position for annotation placement."""
-        self._current_time_ms = time_ms
-
-    def _add_annotation(self, annot_type: str) -> None:
-        """Add a new annotation at the current playhead position."""
-        from ..models import TextAnnotation, ArrowAnnotation, HighlightBox
-
-        # Default duration: 3 seconds
-        start_ms = self._current_time_ms
-        end_ms = start_ms + 3000.0
-
-        # Create annotation based on type
-        if annot_type == "text":
-            annotation = TextAnnotation.create(
-                start_ms=start_ms,
-                end_ms=end_ms,
-                x=0.5,
-                y=0.5,
-                text="Your text here",
-            )
-        elif annot_type == "arrow":
-            annotation = ArrowAnnotation.create(
-                start_ms=start_ms,
-                end_ms=end_ms,
-                x1=0.3,
-                y1=0.3,
-                x2=0.5,
-                y2=0.5,
-            )
-        elif annot_type == "highlight":
-            annotation = HighlightBox.create(
-                start_ms=start_ms,
-                end_ms=end_ms,
-                x=0.3,
-                y=0.3,
-                width=0.2,
-                height=0.15,
-            )
-        else:
-            logger.warning("Unknown annotation type: %s", annot_type)
-            return
-
-        # Emit signal to add annotation
-        self.annotation_added.emit(annot_type, annotation)
-        logger.info("Added %s annotation at %.1f ms", annot_type, start_ms)
-
-        # Add to UI list
-        self._add_annotation_to_list(annot_type, annotation)
-
-    def _add_annotation_to_list(self, annot_type: str, annotation) -> None:
-        """Add an annotation entry to the UI list."""
-        from PySide6.QtWidgets import QHBoxLayout, QPushButton, QLabel
-
-        # Create list item widget
-        item_widget = QWidget()
-        item_widget.setStyleSheet(
-            f"QWidget {{ background: {T.BG_INTERACTIVE};"
-            f"  border-radius: {T.RADIUS_SMALL}px; padding: {T.SPACE_XXS}px; }}"
-        )
-        item_layout = QHBoxLayout(item_widget)
-        item_layout.setContentsMargins(T.SPACE_SM, T.SPACE_XS, T.SPACE_SM, T.SPACE_XS)
-        item_layout.setSpacing(T.SPACE_SM)
-
-        # Type icon — prefer Fluent icon, fall back to emoji glyph
-        _annot_icon_names = {
-            "text": "text_description",
-            "arrow": "arrow_right",
-            "highlight": "highlight",
-        }
-        _annot_emoji_fallback = {"text": "📝", "arrow": "➡️", "highlight": "🔆"}
-        icon_label = QLabel()
-        icon_label.setFixedWidth(20)
-        _annot_icon = load_icon(_annot_icon_names.get(annot_type, "add"), color=T.FG_2)
-        if not _annot_icon.isNull():
-            icon_label.setPixmap(_annot_icon.pixmap(16, 16))
-        else:
-            icon_label.setText(_annot_emoji_fallback.get(annot_type, "•"))
-        item_layout.addWidget(icon_label)
-
-        # Description
-        if annot_type == "text":
-            desc = f"Text: {annotation.text[:20]}..."
-        elif annot_type == "arrow":
-            desc = f"Arrow ({annotation.x1:.1f},{annotation.y1:.1f}) → ({annotation.x2:.1f},{annotation.y2:.1f})"
-        else:
-            desc = f"Highlight at ({annotation.x:.1f},{annotation.y:.1f})"
-
-        desc_label = QLabel(desc)
-        desc_label.setObjectName("Secondary")
-        desc_label.setStyleSheet(f"color: {T.FG_PRIMARY}; font-size: 12px;")
-        item_layout.addWidget(desc_label, 1)
-
-        # Delete button
-        del_btn = QPushButton("×")
-        del_btn.setFixedSize(24, 24)
-        del_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {T.FG_SECONDARY}; "
-            f"border: none; font-size: 18px; font-weight: bold; }}"
-            f"QPushButton:hover {{ color: {T.DANGER}; background: {T.BORDER_MEDIUM};"
-            f"  border-radius: {T.RADIUS_SMALL}px; }}"
-        )
-        del_btn.clicked.connect(
-            lambda: self._remove_annotation(annot_type, annotation.id, item_widget)
-        )
-        item_layout.addWidget(del_btn)
-
-        # Insert before the stretch
-        self._annotations_list_layout.insertWidget(
-            self._annotations_list_layout.count() - 1, item_widget
-        )
-
-    def _remove_annotation(self, annot_type: str, annot_id: str, widget: QWidget) -> None:
-        """Remove an annotation from both UI and data."""
-        # Remove from UI
-        self._annotations_list_layout.removeWidget(widget)
-        widget.deleteLater()
-
-        # Emit signal to remove from data
-        self.annotation_removed.emit(annot_type, annot_id)
-        logger.info("Removed %s annotation %s", annot_type, annot_id)
-
-    def clear_annotations_list(self) -> None:
-        """Clear all annotation items from the UI list."""
-        # Remove all widgets except the final stretch
-        while self._annotations_list_layout.count() > 1:
-            item = self._annotations_list_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-    def refresh_annotations_list(self, annotations) -> None:
-        """Refresh the annotations list UI from an AnnotationCollection."""
-        self.clear_annotations_list()
-
-        if not annotations:
-            return
-
-        # Add text annotations
-        if annotations.texts:
-            for text in annotations.texts:
-                self._add_annotation_to_list("text", text)
-
-        # Add arrow annotations
-        if annotations.arrows:
-            for arrow in annotations.arrows:
-                self._add_annotation_to_list("arrow", arrow)
-
-        # Add highlight annotations
-        if annotations.highlights:
-            for highlight in annotations.highlights:
-                self._add_annotation_to_list("highlight", highlight)
 

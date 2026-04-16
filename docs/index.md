@@ -22,7 +22,7 @@ Record your screen or any individual window, then export a polished MP4 or GIF w
 
     ---
 
-    Auto-detect typing bursts and click clusters to generate cinematic zoom keyframes — or let AI analyze your recording like a professional cameraman. Add **pan path points** to smoothly guide the camera between areas while staying zoomed in.
+    Auto-detect activity bursts and click clusters to generate cinematic zoom keyframes — or let AI analyze your recording like a professional cameraman. Add **pan path points** to smoothly guide the camera between areas while staying zoomed in.
 
 -   :fluent-mic_20_regular: **AI Voiceover**
 
@@ -34,13 +34,13 @@ Record your screen or any individual window, then export a polished MP4 or GIF w
 
     ---
 
-    84 background presets, 5 device frame styles, annotations (text, arrows, highlights), click effects, keystroke overlays, and polished frame presets.
+    84 background presets, 5 device frame styles, click effects, and polished frame presets.
 
 -   :fluent-video_20_regular: **Cinematic Export**
 
     ---
 
-    H.264 MP4 with GPU acceleration (NVENC, QuickSync, AMF) or GIF with palette-based encoding. Cursor, click ripples, keystroke overlay, annotations, and voiceover baked in. Auto-detected and manual **chapter markers** embedded in MP4 metadata.
+    H.264 MP4 with GPU acceleration (NVENC, QuickSync, AMF) or GIF with palette-based encoding. Cursor, click ripples, voiceover, and AI-generated or manual **chapter markers** embedded in MP4 metadata.
 
 -   :fluent-save_20_regular: **Project Files**
 
@@ -72,7 +72,7 @@ Want to contribute? See the **[Contributing Guide](CONTRIBUTING.md)** for dev se
 | Recording Pipe | ffmpeg via imageio-ffmpeg | H.264 intermediate codec piped via stdin |
 | Video Export | ffmpeg (libx264 / HW accel) | H.264 MP4 or GIF with zoom/cursor baked in |
 | Image Processing | OpenCV + NumPy | Frame manipulation, thumbnails, cursor rendering |
-| Input Tracking | Win32 Hooks (ctypes) | Low-level mouse, keyboard, and click tracking |
+| Input Tracking | Win32 Hooks (ctypes) | Low-level mouse and click tracking |
 | Zoom Engine | Pure Python | Quintic ease-out keyframe interpolation |
 | AI Features | Azure AI Foundry | AI zoom analysis, TTS voiceover |
 | Design System | tokens.py + Fluent 2 | 4px grid, semantic colors, consistent spacing |

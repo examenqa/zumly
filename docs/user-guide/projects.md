@@ -1,6 +1,6 @@
 # Project Files
 
-FollowCursor saves your entire session — the raw recording, zoom keyframes, voiceover, annotations, and all settings — into a single `.fcproj` file so you can close and pick up where you left off.
+FollowCursor saves your entire session — the raw recording, zoom keyframes, narration, voiceover, chapter markers, and settings — into a single `.fcproj` file so you can close and pick up where you left off.
 
 ---
 
@@ -23,9 +23,13 @@ A `.fcproj` file is a ZIP bundle containing everything needed to restore your se
 
 | File | Contents |
 | ---- | -------- |
-| `project.json` | All session data — mouse positions, keystrokes, clicks, zoom keyframes, trim range, annotations, chapter markers, and visual settings |
+| `project.json` | All session data — mouse positions, clicks, zoom keyframes, trim range, narration markdown, AI/manual chapter markers, and visual settings |
 | `recording.mp4` | Your raw recorded video |
 | `voiceover_*.wav` | One audio file per synthesized voiceover segment (if any) |
+
+Generated narration markdown is stored in `project.json`, generated voiceover segments travel as normal `voiceover_*.wav` segment files, and chapter markers reopen exactly where you left them. When you reopen the project, FollowCursor rewrites the sidecar `<video_name>_voiceover.md` file beside the extracted recording so the saved script stays available.
+
+Older `.fcproj` files that still contain removed keystroke or annotation payloads will still open safely. FollowCursor ignores those legacy fields when loading and does not write them back out when you save again.
 
 ---
 

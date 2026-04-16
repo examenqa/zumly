@@ -130,6 +130,9 @@ def build_encoder_args(enc_id: str) -> List[str]:
         profile = ENCODER_PROFILES["libx264"]
     _, codec, quality_args = profile
     args = ["-c:v", codec] + quality_args + ["-pix_fmt", "yuv420p"]
+    # Place moov atom at the start so players can open the file
+    # immediately without seeking to the end first.
+    args += ["-movflags", "+faststart"]
     return args
 
 

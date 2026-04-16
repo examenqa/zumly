@@ -6,6 +6,7 @@ Also renders click ripple effects at recorded click positions.
 """
 
 import logging
+import bisect
 import math
 from typing import List, Optional, Tuple
 
@@ -461,7 +462,12 @@ def draw_clicks_cv(
     base_alpha = preset.color[3] / 255.0
     style = preset.style if preset.style in ("ripple", "burst", "highlight") else "ripple"
 
-    for click in click_events:
+    # Use binary search to limit iteration to clicks in the visible window
+    window_start = time_ms - preset.duration_ms
+    lo = bisect.bisect_left(click_events, window_start, key=lambda c: c.timestamp)
+    hi = bisect.bisect_right(click_events, time_ms, key=lambda c: c.timestamp)
+
+    for click in click_events[lo:hi]:
         age = time_ms - click.timestamp
         if age < 0 or age > preset.duration_ms:
             continue

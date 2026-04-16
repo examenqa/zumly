@@ -1,6 +1,9 @@
 # Screen & Window Recording
 
-FollowCursor captures your screen or any individual window, then tracks your mouse, keyboard, and clicks so you can add zoom effects in the editor.
+FollowCursor captures your screen or any individual window, then tracks your mouse and clicks so you can add zoom effects in the editor.
+
+!!! note "Startup splash"
+    FollowCursor shows a brief splash screen while the recorder, tray controls, and editor shell initialise. It closes automatically as soon as the main window is ready.
 
 ---
 
@@ -31,7 +34,7 @@ Once the countdown finishes:
 
 - The app minimizes to the **system tray**
 - A subtle **red border** pulses around the captured monitor so you know recording is active
-- Your mouse position, keystrokes, and clicks are all being tracked automatically
+- Your mouse position and clicks are tracked automatically
 
 You can also start (and stop) recording from any app using the global hotkey **Ctrl+Shift+R**.
 

@@ -38,11 +38,9 @@ import numpy as np
 
 from PySide6.QtCore import QObject, Signal
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, KeyEvent, KeystrokeOverlayConfig, Chapter
+from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, Chapter
 from .zoom_engine import ZoomEngine
 from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
-from .keystroke_renderer import draw_keystrokes_cv
-from .annotation_renderer import render_annotations_cv
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
 from .frames import FramePreset, DEFAULT_FRAME
 
@@ -434,12 +432,12 @@ def _merge_voiceover_segments(
 
 class GeometryComputer:
     """Computes device/frame layout geometry for video export.
-    
+
     Pure-logic class with no Qt or OpenCV dependencies in the constructor,
     making it easily testable. All geometry calculations are deterministic
     given the input parameters.
     """
-    
+
     def __init__(
         self,
         canvas_w: int,
@@ -449,7 +447,7 @@ class GeometryComputer:
         frame_preset: FramePreset,
     ) -> None:
         """Initialize geometry computer with canvas and source dimensions.
-        
+
         Args:
             canvas_w: Output canvas width in pixels
             canvas_h: Output canvas height in pixels
@@ -463,10 +461,10 @@ class GeometryComputer:
         self.src_h = src_h
         self.frame_preset = frame_preset
         self.video_aspect = src_w / max(src_h, 1)
-    
+
     def compute(self) -> dict:
         """Compute all geometry parameters for the given configuration.
-        
+
         Returns:
             Dictionary with keys:
                 - scr_x, scr_y: screen position in canvas
@@ -479,7 +477,7 @@ class GeometryComputer:
         """
         fp = self.frame_preset
         W, H = float(self.canvas_w), float(self.canvas_h)
-        
+
         if fp.is_none:
             # No frame — video fills full canvas
             if W / H > self.video_aspect:
@@ -490,23 +488,23 @@ class GeometryComputer:
                 scr_h = int(W / self.video_aspect)
             scr_x = (self.canvas_w - scr_w) // 2
             scr_y = (self.canvas_h - scr_h) // 2
-            
+
             return {
                 "scr_x": scr_x,
                 "scr_y": scr_y,
                 "scr_w": scr_w,
                 "scr_h": scr_h,
             }
-        
+
         # Device frame present — compute bezel geometry
         pad_x = W * fp.padding
         pad_y = H * fp.padding
         avail_w = W - 2 * pad_x
         avail_h = H - 2 * pad_y
-        
+
         preliminary_scale = avail_w / _BEZEL_REF_W
         bw_est = fp.bezel_width * preliminary_scale
-        
+
         dev_h = avail_h
         scr_h_try = dev_h - 2 * bw_est
         scr_w_try = scr_h_try * self.video_aspect
@@ -516,23 +514,23 @@ class GeometryComputer:
             scr_w_try = dev_w - 2 * bw_est
             scr_h_try = scr_w_try / self.video_aspect
             dev_h = scr_h_try + 2 * bw_est
-        
+
         dev_x_i = int((W - dev_w) / 2)
         dev_y_i = int((H - dev_h) / 2)
         dev_w_i = int(dev_w)
         dev_h_i = int(dev_h)
-        
+
         scale = dev_w / _BEZEL_REF_W
         bw = int(fp.bezel_width * scale)
         outer_r = int(fp.outer_radius * scale)
         inner_r = max(int(fp.inner_radius * scale), 2) if fp.inner_radius > 0 else 0
         edge_thickness = max(1, int(fp.edge_width * scale))
-        
+
         scr_x = dev_x_i + bw
         scr_y = dev_y_i + bw
         scr_w = dev_w_i - 2 * bw
         scr_h = dev_h_i - 2 * bw
-        
+
         return {
             "scr_x": scr_x,
             "scr_y": scr_y,
@@ -583,9 +581,6 @@ class VideoExporter(QObject):
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
         video_segments: Optional[List[VideoSegment]] = None,
-        key_events: Optional[List[KeyEvent]] = None,
-        keystroke_config: Optional[KeystrokeOverlayConfig] = None,
-        annotations = None,
         chapters: Optional[List[Chapter]] = None,
     ) -> None:
         """Start export in a background thread.
@@ -606,9 +601,6 @@ class VideoExporter(QObject):
         objects; each with an audio file to mux at a specific time.
         *video_segments* — optional list of ``VideoSegment`` objects;
         when present, only frames within these time ranges are exported.
-        *key_events* — optional list of ``KeyEvent`` objects for keystroke rendering.
-        *keystroke_config* — optional ``KeystrokeOverlayConfig`` for keystroke overlay settings.
-        *annotations* — optional ``AnnotationCollection`` for text, arrow, and highlight annotations.
         *chapters* — optional list of ``Chapter`` objects for MP4 chapter metadata.
         """
         self._thread = threading.Thread(
@@ -627,9 +619,6 @@ class VideoExporter(QObject):
                   encoder_id,
                   voiceover_segments or [],
                   video_segments or [],
-                  key_events or [],
-                  keystroke_config,
-                  annotations,
                   chapters or []),
             daemon=True,
         )
@@ -647,7 +636,7 @@ class VideoExporter(QObject):
         output_path: str,
     ) -> Optional[VideoProbeResult]:
         """Phase 1: Probe source video metadata and determine output parameters.
-        
+
         Returns:
             VideoProbeResult on success, None on error (emits self.error signal).
         """
@@ -744,12 +733,12 @@ class VideoExporter(QObject):
         frame_preset: FramePreset,
     ) -> GeometryResult:
         """Phase 2: Compute device/frame layout and build static layers.
-        
+
         Returns:
             GeometryResult containing screen coordinates, canvas, and masks.
         """
         w, h = probe.out_w, probe.out_h
-        
+
         # Pre-build the gradient background
         self.status.emit("Building background & frame…")
         bg_top_bgr, bg_bottom_bgr = _preset_to_bgr(bg_preset)
@@ -759,12 +748,12 @@ class VideoExporter(QObject):
         # Compute device geometry using GeometryComputer
         geom_comp = GeometryComputer(w, h, probe.src_w, probe.src_h, frame_preset)
         geom = geom_comp.compute()
-        
+
         scr_x = geom["scr_x"]
         scr_y = geom["scr_y"]
         scr_w = geom["scr_w"]
         scr_h = geom["scr_h"]
-        
+
         # Build canvas and masks based on frame preset
         if frame_preset.is_none:
             # No frame — simple bg canvas
@@ -806,11 +795,11 @@ class VideoExporter(QObject):
                 else:
                     screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w] = 255
                 base_canvas[screen_mask > 0] = 0
-            
+
             # Pre-compute device region mask for zoom compositing
             device_mask_u8 = (np.any(base_canvas != bg, axis=2)
                               .astype(np.uint8) * 255)
-        
+
         return GeometryResult(
             scr_x=scr_x,
             scr_y=scr_y,
@@ -842,9 +831,6 @@ class VideoExporter(QObject):
         encoder_id: str = "libx264",
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
         video_segments: Optional[List[VideoSegment]] = None,
-        key_events: Optional[List] = None,
-        keystroke_config = None,
-        annotations = None,
         chapters: Optional[List] = None,
     ) -> None:
         """Execute the full export algorithm on a worker thread.
@@ -885,7 +871,7 @@ class VideoExporter(QObject):
             total_frames = probe.total_frames
             fps = probe.fps
             _is_gif = probe.is_gif
-            
+
             # Update output_path extension if needed
             if not _is_gif and not output_path.lower().endswith(".mp4"):
                 output_path = output_path.rsplit(".", 1)[0] + ".mp4"
@@ -1131,7 +1117,8 @@ class VideoExporter(QObject):
                     writer_t.join(timeout=5)
                     return False
                 src_idx = 0
-                last_f = first_frame.copy()
+                last_f = first_frame
+                _needs_overlay = _has_cursor or _has_clicks
 
                 eff_ts = trim_start_ms if trim_start_ms > 0 else 0.0
                 if trim_end_ms > 0:
@@ -1162,7 +1149,7 @@ class VideoExporter(QObject):
                     if not ret:
                         break
                     src_idx += 1
-                    last_f = frame.copy()
+                    last_f = frame
 
                 t_total = max(1, int(engine.compute_output_duration(
                     duration_ms or eff_te, eff_ts, eff_te,
@@ -1195,7 +1182,14 @@ class VideoExporter(QObject):
                             else:
                                 in_seg = (s <= t_ms < e)
                         if not in_seg:
-                            out_idx += 1
+                            # Jump to the start of the next segment to avoid
+                            # spinning on the same t_ms (which never advances
+                            # and would loop forever).
+                            next_seg = bisect.bisect_right(_seg_starts, t_ms)
+                            if next_seg < len(_seg_starts):
+                                t_ms = _seg_starts[next_seg]
+                            else:
+                                break  # no more segments
                             continue
 
                     # Pick the source frame for this output timestamp
@@ -1210,17 +1204,12 @@ class VideoExporter(QObject):
                             src_idx = target_src_idx
                             break
                         src_idx += 1
-                        last_f = frame.copy()
+                        last_f = frame
 
-                    frame = last_f.copy()
+                    # Only copy when overlays will draw in-place on this frame
+                    frame = last_f.copy() if _needs_overlay else last_f
 
                     zoom, px, py = engine.compute_at(t_ms)
-
-                    # Draw annotations BEFORE cursor/clicks (z-order: video → annotations → cursor → clicks → keystrokes)
-                    if annotations:
-                        render_annotations_cv(
-                            frame, annotations, t_ms, m_w, m_h
-                        )
 
                     if _has_cursor:
                         draw_cursor_cv(
@@ -1234,14 +1223,6 @@ class VideoExporter(QObject):
                             m_left, m_top, m_w, m_h,
                             click_preset,
                         )
-                    
-                    # Draw keystroke overlay if enabled
-                    if keystroke_config and keystroke_config.enabled and key_events:
-                        draw_keystrokes_cv(
-                            frame, key_events, t_ms, keystroke_config,
-                            m_left, m_top, m_w, m_h,
-                        )
-
                     composed = _compose_cv(
                         frame, zoom, px, py, w, h,
                         base_canvas, screen_mask,
@@ -1276,12 +1257,6 @@ class VideoExporter(QObject):
                             zoom, px, py = engine.compute_at(t_ms)
                             fc = last_f.copy()
 
-                            # Draw annotations BEFORE cursor/clicks (z-order)
-                            if annotations:
-                                render_annotations_cv(
-                                    fc, annotations, t_ms, m_w, m_h
-                                )
-
                             if _has_cursor:
                                 draw_cursor_cv(
                                     fc, mouse_track, t_ms,
@@ -1294,14 +1269,6 @@ class VideoExporter(QObject):
                                     m_left, m_top, m_w, m_h,
                                     click_preset,
                                 )
-                            
-                            # Draw keystroke overlay if enabled
-                            if keystroke_config and keystroke_config.enabled and key_events:
-                                draw_keystrokes_cv(
-                                    fc, key_events, t_ms, keystroke_config,
-                                    m_left, m_top, m_w, m_h,
-                                )
-                            
                             composed = _compose_cv(
                                 fc, zoom, px, py, w, h,
                                 base_canvas, screen_mask,
@@ -1475,6 +1442,17 @@ class VideoExporter(QObject):
                 err_msg = stderr_text.strip()[-800:] if stderr_text else "Unknown ffmpeg error"
                 logger.error("Export failed (encoder=%s, rc=%s): %s", encoder_id, proc.returncode, err_msg)
                 self.error.emit(f"ffmpeg error ({encoder_id}): {err_msg[:500]}")
+                return
+
+            # Verify the output file exists and is non-trivial.
+            # A valid MP4 is at least a few KB (moov atom + ftyp box).
+            if not os.path.isfile(output_path):
+                self.error.emit("Export produced no output file")
+                return
+            file_size = os.path.getsize(output_path)
+            if file_size < 1024:
+                logger.error("Export file suspiciously small (%d bytes): %s", file_size, output_path)
+                self.error.emit("Export failed: output file is empty or corrupt")
                 return
 
             if encoder_id != original_encoder_id:

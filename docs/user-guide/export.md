@@ -49,12 +49,9 @@ Deleted segments use **ripple delete** — the remaining clips close the gap aut
 
 Chapters appear as flag markers on your timeline and can be embedded as navigation points in the exported MP4 — useful for longer recordings or tutorials where viewers might want to skip to a section.
 
-FollowCursor detects chapters automatically:
+FollowCursor can generate chapters with AI from the same shared recording analysis used by narration. That keeps chapter beats aligned with the recording's major workflow shifts, zoom emphasis, and presentation flow without re-running a separate disconnected pass.
 
-- Gaps in activity (3+ seconds of idle time)
-- Major cursor position jumps
-
-You can also add chapters manually. Chapters are included in the MP4 file metadata and supported by players like YouTube and VLC.
+You can also add chapters manually. If you regenerate AI chapters, FollowCursor replaces the previous generated chapter markers and keeps any manual chapter markers you already added. Chapters are included in the MP4 file metadata and supported by players like YouTube and VLC.
 
 !!! note "Chapters in GIF exports"
     Chapter markers are not embedded in GIF files — they are an MP4-only feature.
@@ -68,10 +65,8 @@ Every frame of the export includes all of your edits, composited in this order:
 1. **Background** — your chosen gradient, solid color, or pattern
 2. **Device frame** — bezel, shadow, or no frame
 3. **Video content** — your recorded screen, zoomed and panned
-4. **Annotations** — text labels, arrows, and highlight boxes
-5. **Cursor** — your mouse cursor at the recorded position
-6. **Click effects** — animated ripples or highlights at click locations
-7. **Keystroke overlay** — keyboard shortcut badges
+4. **Cursor** — your mouse cursor at the recorded position
+5. **Click effects** — animated ripples or highlights at click locations
 
 What you see in the preview is exactly what will be in the exported file.
 

@@ -3,7 +3,7 @@
 import math
 from typing import List
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QSize
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QSize, QTimer
 from PySide6.QtGui import (
     QPainter,
     QColor,
@@ -15,7 +15,17 @@ from PySide6.QtGui import (
     QWheelEvent,
     QPolygonF,
 )
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMenu, QScrollBar
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QMenu,
+    QScrollBar,
+    QSizePolicy,
+    QToolTip,
+)
 
 from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment, VideoSegment, Chapter
 from ..utils import fmt_time as _fmt
@@ -33,6 +43,114 @@ def _fmt_precise(ms: float) -> str:
     s = int(total_s) % 60
     cs = int((total_s - int(total_s)) * 100)
     return f"{m}:{s:02d}.{cs:02d}"
+
+
+class _TimelineTimeReadout(QWidget):
+    """Stable, custom-painted playback time readout.
+
+    The timeline updates this widget continuously during playback. Painting the
+    combined readout ourselves keeps the background opaque, avoids label
+    relayout jitter, and disables subpixel antialiasing that can create colored
+    ghosting on composited Windows surfaces.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._current_text = "0:00.00"
+        self._total_text = "0:00.00"
+        self._separator_text = " / "
+        self._horizontal_padding = 2
+        self._dark_mode = True
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        font = QFont("Consolas")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPixelSize(T.FONT_SIZE_BODY_1)
+        font.setWeight(QFont.Weight.Medium)
+        font.setStyleStrategy(
+            QFont.StyleStrategy.PreferAntialias
+            | QFont.StyleStrategy.NoSubpixelAntialias
+        )
+        self.setFont(font)
+        self._update_size()
+
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint."""
+        if self._dark_mode != dark:
+            self._dark_mode = dark
+            self.update()
+
+    @property
+    def current_text(self) -> str:
+        return self._current_text
+
+    @property
+    def total_text(self) -> str:
+        return self._total_text
+
+    def set_times(self, current_ms: float, total_ms: float) -> None:
+        current_text = _fmt_precise(current_ms)
+        total_text = _fmt_precise(total_ms)
+        if current_text == self._current_text and total_text == self._total_text:
+            return
+        self._current_text = current_text
+        self._total_text = total_text
+        self._update_size()
+        self.update()
+
+    def _sample_text(self) -> str:
+        digits = max(len(self._current_text), len(self._total_text), len("0:00.00"))
+        sample = "0" * digits
+        return f"{sample}{self._separator_text}{sample}"
+
+    def _update_size(self) -> None:
+        metrics = self.fontMetrics()
+        width = metrics.horizontalAdvance(self._sample_text()) + (self._horizontal_padding * 2)
+        height = max(20, metrics.height())
+        self.setFixedSize(width, height)
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.fillRect(self.rect(), QColor(T.bg_canvas(self._dark_mode)))
+        painter.setFont(self.font())
+
+        metrics = painter.fontMetrics()
+        baseline = int((self.height() + metrics.ascent() - metrics.descent()) / 2)
+        x = self._horizontal_padding
+
+        painter.setPen(QColor(T.fg_primary(self._dark_mode)))
+        painter.drawText(x, baseline, self._current_text)
+        x += metrics.horizontalAdvance(self._current_text)
+
+        painter.setPen(QColor(T.fg_muted(self._dark_mode)))
+        painter.drawText(x, baseline, self._separator_text)
+        x += metrics.horizontalAdvance(self._separator_text)
+        painter.drawText(x, baseline, self._total_text)
+        painter.end()
+
+
+class _TimelineControlsHost(QWidget):
+    """Opaque host that keeps playback controls stable on translucent windows."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("PlaybackControls")
+        self._dark_mode = True
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint."""
+        if self._dark_mode != dark:
+            self._dark_mode = dark
+            self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        painter.fillRect(event.rect(), QColor(T.bg_canvas(self._dark_mode)))
+        painter.end()
 
 
 class _TimelineTrack(QWidget):
@@ -55,6 +173,8 @@ class _TimelineTrack(QWidget):
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
+    chapter_clicked = Signal(float)       # chapter timestamp ms — seek
+    chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)  # video segment id — delete
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
@@ -76,6 +196,8 @@ class _TimelineTrack(QWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_right_click)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+
+        self._dark_mode = True  # Theme state for custom painting
 
         self.duration: float = 0
         self.current_time: float = 0
@@ -114,6 +236,9 @@ class _TimelineTrack(QWidget):
         # Pan point markers — populated during paintEvent for hit-testing
         # Each entry: (center_x, center_y, radius, kf_id, segment_start_id)
         self._pan_point_markers: List[tuple] = []
+        # Chapter markers — populated during paintEvent for hit-testing
+        # Each entry: (x, top_y, height, Chapter)
+        self._chapter_markers: List[tuple] = []
 
         # Zoom segment selection
         self._selected_segment_id: str = ""     # start kf id of selected segment
@@ -137,6 +262,18 @@ class _TimelineTrack(QWidget):
         self._view_scale: float = 1.0   # 1.0 = fit-all
         self._view_offset: float = 0.0  # left-edge offset in ms
 
+        # Voiceover generation spinner animation
+        self._spinner_phase: int = 0  # current arc start angle in degrees
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.setInterval(80)  # ~12.5 fps → full rotation ≈ 0.8 s
+        self._spinner_timer.timeout.connect(self._on_spinner_tick)
+
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint."""
+        if self._dark_mode != dark:
+            self._dark_mode = dark
+            self.update()
+
     # ── trim-aware coordinate helpers ─────────────────────────────────
 
     @property
@@ -154,13 +291,26 @@ class _TimelineTrack(QWidget):
         """Effective visible duration (ms)."""
         return trim_eff_dur(self.trim_start_ms, self.trim_end_ms, self.duration)
 
-    _MENU_STYLE = (
-        "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
-        "        border-radius: 6px; padding: 4px 0; }"
-        "QMenu::item { padding: 6px 16px; }"
-        "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
-        "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
-    )
+    def _menu_style(self) -> str:
+        """Return the context menu stylesheet based on the current theme."""
+        if self._dark_mode:
+            return (
+                "QMenu { background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+                "        border-radius: 6px; padding: 4px 0; }"
+                "QMenu::item { padding: 6px 16px; }"
+                "QMenu::item:selected { background: #8b5cf6; border-radius: 4px; margin: 0 4px; }"
+                "QMenu::item:disabled { color: #9c99b6; }"
+                "QMenu::separator { height: 1px; background: #3d3a58; margin: 4px 8px; }"
+            )
+        else:
+            return (
+                f"QMenu {{ background: {T.LIGHT_BG_1}; color: {T.LIGHT_FG_1}; border: 1px solid {T.LIGHT_STROKE_1};"
+                "        border-radius: 6px; padding: 4px 0; }"
+                "QMenu::item { padding: 6px 16px; }"
+                f"QMenu::item:selected {{ background: {T.BRAND}; color: white; border-radius: 4px; margin: 0 4px; }}"
+                f"QMenu::item:disabled {{ color: {T.LIGHT_FG_4}; }}"
+                f"QMenu::separator {{ height: 1px; background: {T.LIGHT_STROKE_2}; margin: 4px 8px; }}"
+            )
 
     # ── coordinate mapping helpers ────────────────────────────────
 
@@ -259,6 +409,7 @@ class _TimelineTrack(QWidget):
     def _on_right_click(self, pos) -> None:
         """Right-click on a pan point, zoom segment, click event, trim handle, or empty space."""
         mx, my = pos.x(), pos.y()
+        self.setFocus()
         # Check trim handle right-click — offer "Reset trim"
         trim_hit = self._trim_hit_test(mx)
         if trim_hit:
@@ -267,7 +418,7 @@ class _TimelineTrack(QWidget):
             )
             if is_trimmed:
                 menu = QMenu(self)
-                menu.setStyleSheet(self._MENU_STYLE)
+                menu.setStyleSheet(self._menu_style())
                 reset_act = menu.addAction("↩  Reset trim")
                 reset_act.triggered.connect(self._reset_trim)
                 menu.exec(self.mapToGlobal(pos))
@@ -293,7 +444,7 @@ class _TimelineTrack(QWidget):
             self._selected_click_idx = click_idx
             self.update()
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
+            menu.setStyleSheet(self._menu_style())
             del_act = menu.addAction("  Delete click event")
             del_act.setIcon(load_icon("delete", color=T.DANGER))
             del_act.triggered.connect(lambda: self._delete_selected_click())
@@ -302,16 +453,56 @@ class _TimelineTrack(QWidget):
         # Check voiceover segment
         vo_id = self._voiceover_hit_test(mx, my)
         if vo_id:
+            self._selected_segment_id = ""
+            self._selected_click_idx = -1
+            self._selected_video_seg_id = ""
             self._selected_vo_id = vo_id
             self.update()
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
-            edit_act = menu.addAction("Edit voiceover")
+            menu.setStyleSheet(self._menu_style())
+            seg = next((s for s in self.voiceover_segments if s.id == vo_id), None)
+            header_text = "Voiceover segment"
+            if seg and seg.is_generated_narration:
+                header_text = f"Generated voiceover · {seg.generated_narration_label}"
+            header = menu.addAction(f"  {header_text}")
+            header.setEnabled(False)
+            menu.addSeparator()
+            edit_label = (
+                "Review spoken line…"
+                if seg and seg.is_generated_narration
+                else "Edit voiceover…"
+            )
+            delete_label = (
+                "Delete generated segment…"
+                if seg and seg.is_generated_narration
+                else "Delete voiceover"
+            )
+            edit_act = menu.addAction(edit_label)
             edit_act.setIcon(load_icon("edit", color=T.FG_PRIMARY))
             edit_act.triggered.connect(lambda: self.voiceover_clicked.emit(vo_id))
-            del_act = menu.addAction("Delete voiceover")
+            del_act = menu.addAction(delete_label)
             del_act.setIcon(load_icon("delete", color=T.DANGER))
             del_act.triggered.connect(lambda: self._delete_selected_voiceover())
+            menu.exec(self.mapToGlobal(pos))
+            return
+        # Check chapter marker
+        chapter = self._chapter_hit_test(mx, my)
+        if chapter is not None:
+            menu = QMenu(self)
+            menu.setStyleSheet(self._menu_style())
+            header = menu.addAction(f"  {chapter.name}")
+            header.setEnabled(False)
+            menu.addSeparator()
+            jump_act = menu.addAction(f"Jump to {_fmt_precise(chapter.timestamp_ms)}")
+            jump_act.setIcon(load_icon("play", color=T.FG_PRIMARY))
+            jump_act.triggered.connect(
+                lambda checked=False, chapter_time=float(chapter.timestamp_ms): self.chapter_clicked.emit(chapter_time)
+            )
+            delete_act = menu.addAction("Delete chapter")
+            delete_act.setIcon(load_icon("delete", color=T.DANGER))
+            delete_act.triggered.connect(
+                lambda checked=False, chapter_time=int(chapter.timestamp_ms): self.chapter_deleted.emit(chapter_time)
+            )
             menu.exec(self.mapToGlobal(pos))
             return
         # Check video segment
@@ -326,8 +517,11 @@ class _TimelineTrack(QWidget):
             # Only show delete if more than 1 segment remains
             if len(self.video_segments) > 1:
                 menu = QMenu(self)
-                menu.setStyleSheet(self._MENU_STYLE)
-                del_act = menu.addAction("  Delete segment")
+                menu.setStyleSheet(self._menu_style())
+                header = menu.addAction("  Clip segment")
+                header.setEnabled(False)
+                menu.addSeparator()
+                del_act = menu.addAction("Delete clip…")
                 del_act.setIcon(load_icon("delete", color=T.DANGER))
                 del_act.triggered.connect(lambda: self._delete_selected_video_segment())
                 menu.exec(self.mapToGlobal(pos))
@@ -336,11 +530,11 @@ class _TimelineTrack(QWidget):
         if self._eff_dur > 0 and self.width() > 0:
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
             menu = QMenu(self)
-            menu.setStyleSheet(self._MENU_STYLE)
-            act_split = menu.addAction("  Split here")
+            menu.setStyleSheet(self._menu_style())
+            act_split = menu.addAction("Split clip here")
             act_split.setIcon(load_icon("cut", color=T.FG_PRIMARY))
             act_split.triggered.connect(
-                lambda: self.split_requested.emit(self.current_time)
+                lambda checked=False, split_time=time_ms: self.split_requested.emit(split_time)
             )
             menu.addSeparator()
             act_zoom = menu.addAction("  Add Zoom here")
@@ -362,12 +556,15 @@ class _TimelineTrack(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # background
-        painter.fillRect(0, 0, w, h, QColor("#1b1a2e"))
+        # background — theme-aware
+        bg_color = T.bg_canvas(self._dark_mode)
+        track_bg = T.bg_track(self._dark_mode)
+        track_border = T.bg_track_border(self._dark_mode)
+        painter.fillRect(0, 0, w, h, QColor(bg_color))
 
         # track bg (rounded)
-        painter.setBrush(QBrush(QColor("#201f34")))
-        painter.setPen(QPen(QColor("#2d2b45"), 1))
+        painter.setBrush(QBrush(QColor(track_bg)))
+        painter.setPen(QPen(QColor(track_border), 1))
         painter.drawRoundedRect(0, 0, w - 1, h - 1, 6, 6)
 
         if self.duration <= 0:
@@ -377,16 +574,12 @@ class _TimelineTrack(QWidget):
         # time markers along top
         self._draw_time_markers(painter, w)
 
-        # Activity tracks: Mouse (20px), Keyboard (14px), Clicks (14px)
+        # Activity tracks: Mouse (20px) and Clicks (14px)
         mouse_top = 16
         mouse_h = 20
         self._draw_mouse_track(painter, w, mouse_top, mouse_h)
 
-        keyboard_top = mouse_top + mouse_h + 2
-        keyboard_h = 14
-        self._draw_keyboard_track(painter, w, keyboard_top, keyboard_h)
-
-        self._click_top = keyboard_top + keyboard_h + 2
+        self._click_top = mouse_top + mouse_h + 2
         self._click_h = 14
         self._draw_click_track(painter, w, self._click_top, self._click_h)
 
@@ -414,7 +607,7 @@ class _TimelineTrack(QWidget):
 
         # playhead
         px = self._ms_to_x(self.current_time, w)
-        playhead_color = QColor("#facc15") if self._trim_snapped else QColor("#ffffff")
+        playhead_color = QColor("#facc15") if self._trim_snapped else QColor(T.fg_primary(self._dark_mode))
         painter.setPen(QPen(playhead_color, 2))
         painter.drawLine(int(px), 0, int(px), h)
         # playhead handle
@@ -444,7 +637,7 @@ class _TimelineTrack(QWidget):
         font.setFamily("Segoe UI Variable")
         font.setPixelSize(11)
         painter.setFont(font)
-        painter.setPen(QPen(QColor("#5a5873"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
 
         eff_start = self._eff_start
         eff_end = self._eff_end
@@ -469,7 +662,7 @@ class _TimelineTrack(QWidget):
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
         painter.drawText(4, top + h - 3, "Mouse")
 
         eff_start = self._eff_start
@@ -503,49 +696,6 @@ class _TimelineTrack(QWidget):
             a = int((0.3 + intensity * 0.6) * 255)
             painter.fillRect(QRectF(i * bw, top, bw + 1, h), QColor(r, g, b, a))
 
-    def _draw_keyboard_track(self, painter: QPainter, w: int, top: int, h: int) -> None:
-        """Draw keyboard activity — cyan bars for keystroke density."""
-        eff_dur = self._eff_dur
-        events = self.key_events
-        if not events or eff_dur <= 0:
-            return
-
-        # Track label
-        label_font = QFont()
-        label_font.setFamily("Segoe UI Variable")
-        label_font.setPixelSize(10)
-        painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
-        painter.drawText(4, top + h - 2, "Keys")
-
-        eff_start = self._eff_start
-        eff_end = self._eff_end
-        buckets = max(1, min(w, 200))
-        counts = [0] * buckets
-        max_count = 0
-
-        for ev in events:
-            if ev.timestamp < eff_start or ev.timestamp > eff_end:
-                continue
-            bucket = min(buckets - 1, max(0, int(((ev.timestamp - eff_start) / eff_dur) * buckets)))
-            counts[bucket] += 1
-            max_count = max(max_count, counts[bucket])
-
-        if max_count == 0:
-            return
-
-        bw = w / buckets
-        for i, c in enumerate(counts):
-            if c == 0:
-                continue
-            intensity = c / max_count
-            # Cyan/teal palette
-            r = int(20 + intensity * 40)
-            g = int(180 + intensity * 75)
-            b = int(200 + intensity * 55)
-            a = int((0.35 + intensity * 0.55) * 255)
-            painter.fillRect(QRectF(i * bw, top, bw + 1, h), QColor(r, g, b, a))
-
     def _draw_click_track(self, painter: QPainter, w: int, top: int, h: int) -> None:
         """Draw click events — orange markers, selected click highlighted."""
         events = self.click_events
@@ -557,7 +707,7 @@ class _TimelineTrack(QWidget):
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
         painter.drawText(4, top + h - 2, "Clicks")
 
         eff_start = self._eff_start
@@ -588,7 +738,7 @@ class _TimelineTrack(QWidget):
         label_font.setFamily("Segoe UI Variable")
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.setPen(QPen(QColor(T.fg_dim(self._dark_mode)), 1))
         painter.drawText(4, top + h - 3, "Zoom")
 
         if not self.keyframes or self._eff_dur <= 0:
@@ -755,16 +905,17 @@ class _TimelineTrack(QWidget):
                 pp_font.setPixelSize(9)
                 pp_font.setWeight(QFont.Weight.Bold)
                 painter.setFont(pp_font)
+                pan_point_outline = T.bg_canvas(self._dark_mode)
                 for pp_idx, (pp_x, pp_kf) in enumerate(pan_points, start=1):
                     radius = 7
                     cy = top + h / 2
                     # Record for hit-testing
                     self._pan_point_markers.append((pp_x, cy, radius, pp_kf.id, start_id))
                     # Circle background
-                    painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+                    painter.setPen(QPen(QColor(pan_point_outline), 1.5))
                     painter.setBrush(QBrush(QColor("#facc15")))
                     painter.drawEllipse(QPointF(pp_x, cy), radius, radius)
-                    # Number label
+                    # Number label — dark text on yellow
                     painter.setPen(QPen(QColor("#1b1a2e")))
                     num_rect = QRectF(pp_x - radius, cy - radius, radius * 2, radius * 2)
                     painter.drawText(num_rect, Qt.AlignmentFlag.AlignCenter, str(pp_idx))
@@ -780,6 +931,52 @@ class _TimelineTrack(QWidget):
             painter.drawRoundedRect(QRectF(sx, top + 2, handle_w, h - 4), 1, 1)
             # Right handle
             painter.drawRoundedRect(QRectF(ex - handle_w, top + 2, handle_w, h - 4), 1, 1)
+
+    # ── voiceover generation spinner ────────────────────────────────
+
+    def _on_spinner_tick(self) -> None:
+        """Advance the spinner phase and repaint the track."""
+        self._spinner_phase = (self._spinner_phase + 36) % 360
+        self.update()
+
+    def _update_spinner_timer(self) -> None:
+        """Start or stop the spinner animation timer based on generating segments.
+
+        Call this whenever voiceover_segments changes.  The timer only runs
+        while at least one segment has ``tts_generating=True``, keeping the
+        widget idle when no generation is in progress.
+        """
+        has_generating = any(s.tts_generating for s in self.voiceover_segments)
+        if has_generating and not self._spinner_timer.isActive():
+            self._spinner_phase = 0
+            self._spinner_timer.start()
+        elif not has_generating and self._spinner_timer.isActive():
+            self._spinner_timer.stop()
+
+    def _draw_spinner(
+        self, painter: QPainter, sx: float, top: float, seg_w: float, h: float
+    ) -> None:
+        """Overlay a looping amber arc on a segment that is still being generated.
+
+        The arc is drawn at the right end of the pill so it does not overlap
+        the segment label.  On very narrow pills (< 20 px) it is centred.
+        """
+        arc_r = max(3.0, min(5.0, h / 2.0 - 1.0))
+        if seg_w >= arc_r * 2 + 8:
+            cx = sx + seg_w - arc_r - 4.0
+        else:
+            cx = sx + seg_w / 2.0
+        cy = top + h / 2.0
+        rect = QRectF(cx - arc_r, cy - arc_r, arc_r * 2.0, arc_r * 2.0)
+
+        pen = QPen(QColor("#fbbf24"), 2.0)  # amber-400
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        # Qt arc angles are in 1/16th-degree units; positive = counter-clockwise
+        start_angle = int(self._spinner_phase * 16)
+        span_angle = int(120 * 16)  # 120° sweep — clearly a loading arc
+        painter.drawArc(rect, start_angle, span_angle)
 
     # ── voiceover segments ──────────────────────────────────────────
 
@@ -836,14 +1033,21 @@ class _TimelineTrack(QWidget):
             # Text label (truncated)
             painter.setFont(seg_font)
             painter.setPen(QPen(QColor("#e2e8f0"), 1))
-            text = seg.text[:20] + ("\u2026" if len(seg.text) > 20 else "")
+            if seg.is_generated_narration:
+                text = seg.generated_narration_label
+            else:
+                text = seg.text[:20] + ("\u2026" if len(seg.text) > 20 else "")
             clip_rect = QRectF(sx + 3, top + 1, seg_w - 6, h - 2)
             painter.drawText(clip_rect, Qt.AlignmentFlag.AlignVCenter, text)
 
-            # Mic icon if no audio yet
-            if not seg.audio_path:
+            # Mic icon if no audio yet (skip when generating — spinner takes that slot)
+            if not seg.audio_path and not seg.tts_generating:
                 painter.setPen(QPen(QColor("#94a3b8"), 1))
                 painter.drawText(int(sx + seg_w - 12), top + h - 3, "\u2026")
+
+            # Generation spinner overlay
+            if seg.tts_generating:
+                self._draw_spinner(painter, sx, top, seg_w, h)
 
             self._vo_rects.append((sx, seg_w, seg.id))
 
@@ -901,8 +1105,22 @@ class _TimelineTrack(QWidget):
                 return seg_id
         return ""
 
+    def _chapter_hit_test(self, mx: float, my: float) -> Chapter | None:
+        """Return the chapter marker under the pointer, if any."""
+        for marker_x, marker_y, marker_h, chapter in self._chapter_markers:
+            if abs(mx - marker_x) <= 7 and marker_y - 2 <= my <= marker_y + marker_h + 2:
+                return chapter
+        return None
+
+    @staticmethod
+    def _chapter_tooltip_text(chapter: Chapter) -> str:
+        """Build a tooltip for a chapter marker."""
+        marker_kind = "Generated chapter" if chapter.auto_detected else "Manual chapter"
+        return f"{chapter.name}\n{marker_kind} · {_fmt_precise(chapter.timestamp_ms)}"
+
     def _draw_chapter_markers(self, painter: QPainter, w: int, h: int) -> None:
         """Draw chapter markers as small flag icons along the bottom edge."""
+        self._chapter_markers = []
         if self.duration <= 0 or not self.chapters:
             return
 
@@ -934,6 +1152,7 @@ class _TimelineTrack(QWidget):
                 QPointF(x, marker_y + flag_h),
             ])
             painter.drawPolygon(flag)
+            self._chapter_markers.append((float(x), float(marker_y), float(marker_h), chapter))
 
     # ── trim handles ──────────────────────────────────────────────
 
@@ -950,7 +1169,8 @@ class _TimelineTrack(QWidget):
         # Handle bars — always at the edges of the visible viewport
         handle_w = 4
         handle_color = QColor("#facc15")  # yellow accent
-        snap_color = QColor("#ffffff")    # white highlight when snapped to playhead
+        snap_color = QColor(T.fg_primary(self._dark_mode))  # white (dark) / black (light) when snapped
+        handle_grip = QColor(T.bg_canvas(self._dark_mode))  # grip lines match background
         snapped_start = self._trim_snapped and self._drag_mode == "trim_start"
         snapped_end = self._trim_snapped and self._drag_mode == "trim_end"
         painter.setPen(Qt.PenStyle.NoPen)
@@ -959,7 +1179,7 @@ class _TimelineTrack(QWidget):
         sx = 0
         painter.setBrush(QBrush(snap_color if snapped_start else handle_color))
         painter.drawRoundedRect(QRectF(sx, 0, handle_w, h), 2, 2)
-        painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+        painter.setPen(QPen(handle_grip, 1.5))
         mid_y = h / 2
         painter.drawLine(int(sx) + 1, int(mid_y) - 6, int(sx) + 1, int(mid_y) + 6)
         painter.drawLine(int(sx) + 3, int(mid_y) - 6, int(sx) + 3, int(mid_y) + 6)
@@ -969,7 +1189,7 @@ class _TimelineTrack(QWidget):
         ex = w
         painter.setBrush(QBrush(snap_color if snapped_end else handle_color))
         painter.drawRoundedRect(QRectF(ex - handle_w, 0, handle_w, h), 2, 2)
-        painter.setPen(QPen(QColor("#1b1a2e"), 1.5))
+        painter.setPen(QPen(handle_grip, 1.5))
         painter.drawLine(int(ex) - 3, int(mid_y) - 6, int(ex) - 3, int(mid_y) + 6)
         painter.drawLine(int(ex) - 1, int(mid_y) - 6, int(ex) - 1, int(mid_y) + 6)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -1121,6 +1341,16 @@ class _TimelineTrack(QWidget):
                 self._selected_vo_id = ""
                 self.update()
                 return
+            # Check chapter marker seek
+            chapter = self._chapter_hit_test(mx, my)
+            if chapter is not None:
+                self._selected_click_idx = -1
+                self._selected_segment_id = ""
+                self._selected_vo_id = ""
+                self._selected_video_seg_id = ""
+                self.chapter_clicked.emit(float(chapter.timestamp_ms))
+                self.update()
+                return
             # Regular click — seek (and deselect any click/segment/voiceover)
             self._selected_click_idx = -1
             self._selected_segment_id = ""
@@ -1133,6 +1363,21 @@ class _TimelineTrack(QWidget):
                 click_time_ms = 0.0
             self.clicked.emit(click_time_ms)
             self.update()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton and self.width() > 0:
+            mx = event.position().x()
+            my = event.position().y()
+            vo_id = self._voiceover_hit_test(mx, my)
+            if vo_id:
+                self._selected_vo_id = vo_id
+                self._selected_click_idx = -1
+                self._selected_segment_id = ""
+                self._selected_video_seg_id = ""
+                self.update()
+                self.voiceover_clicked.emit(vo_id)
+                return
+        super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         mx = event.position().x()
@@ -1257,6 +1502,15 @@ class _TimelineTrack(QWidget):
                 break
         edge_hit = self._edge_hit_test(mx, my)
         trim_hit = self._trim_hit_test(mx)
+        chapter_hover = self._chapter_hit_test(mx, my)
+        if chapter_hover is not None:
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                self._chapter_tooltip_text(chapter_hover),
+                self,
+            )
+        else:
+            QToolTip.hideText()
         if pan_hover:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         elif edge_hit:
@@ -1267,6 +1521,8 @@ class _TimelineTrack(QWidget):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         elif self._voiceover_hit_test(mx, my):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif chapter_hover is not None:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         elif self._video_seg_hit_test(mx, my):
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
@@ -1323,7 +1579,7 @@ class _TimelineTrack(QWidget):
         if self._selected_vo_id:
             vid = self._selected_vo_id
             self._selected_vo_id = ""
-            self.voiceover_clicked.emit(vid)  # main_window handles via edit dialog
+            self.voiceover_deleted.emit(vid)
             self.update()
 
     def _delete_selected_video_segment(self) -> None:
@@ -1377,6 +1633,7 @@ class TimelineWidget(QWidget):
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
+    chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)   # video segment id — delete
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
@@ -1393,7 +1650,9 @@ class TimelineWidget(QWidget):
         layout.setSpacing(4)
 
         # ── Playback controls row (centered, like Clipchamp) ────
-        controls_row = QHBoxLayout()
+        self._controls_host = _TimelineControlsHost(self)
+        controls_row = QHBoxLayout(self._controls_host)
+        controls_row.setContentsMargins(0, 0, 0, 0)
         controls_row.setSpacing(6)
 
         controls_row.addStretch()
@@ -1424,21 +1683,12 @@ class TimelineWidget(QWidget):
         controls_row.addSpacing(12)
 
         # time display: current / total
-        self._time_current = QLabel("0:00.00")
-        self._time_current.setObjectName("TimeDisplay")
-        controls_row.addWidget(self._time_current)
-
-        time_sep = QLabel(" / ")
-        time_sep.setObjectName("TimeDisplayDim")
-        controls_row.addWidget(time_sep)
-
-        self._time_total = QLabel("0:00.00")
-        self._time_total.setObjectName("TimeDisplayDim")
-        controls_row.addWidget(self._time_total)
+        self._time_display = _TimelineTimeReadout(self._controls_host)
+        controls_row.addWidget(self._time_display)
 
         controls_row.addStretch()
 
-        layout.addLayout(controls_row)
+        layout.addWidget(self._controls_host)
 
         # ── Track ───────────────────────────────────────────────
         self._track = _TimelineTrack()
@@ -1453,6 +1703,8 @@ class TimelineWidget(QWidget):
         self._track.voiceover_clicked.connect(self.voiceover_clicked)
         self._track.voiceover_deleted.connect(self.voiceover_deleted)
         self._track.voiceover_moved.connect(self.voiceover_moved)
+        self._track.chapter_clicked.connect(self.seek_requested)
+        self._track.chapter_deleted.connect(self.chapter_deleted)
         self._track.video_segment_deleted.connect(self.video_segment_deleted)
         self._track.split_requested.connect(self.split_requested)
         self._track.trim_changed.connect(self.trim_changed)
@@ -1470,7 +1722,11 @@ class TimelineWidget(QWidget):
 
         # ── Bottom hints ────────────────────────────────────────
         hints_row = QHBoxLayout()
-        hint_kf = QLabel("Right-click zoom segment to edit · Click to select · Del to delete · Drag edges to trim · S to split")
+        hint_kf = QLabel(
+            "Right-click zoom to edit · Double-click voiceover to review speech · "
+            "Hover chapter flags to review names · Del removes the selected item · "
+            "Right-click empty space or press S to split a clip"
+        )
         hint_kf.setObjectName("Muted")
         hints_row.addWidget(hint_kf)
         hints_row.addStretch()
@@ -1537,10 +1793,10 @@ class TimelineWidget(QWidget):
         self._track.trim_end_ms = trim_end_ms
         if voiceover_segments is not None:
             self._track.voiceover_segments = voiceover_segments
+            self._track._update_spinner_timer()
         if video_segments is not None:
             self._track.video_segments = video_segments
-        self._time_current.setText(_fmt_precise(current_time))
-        self._time_total.setText(_fmt_precise(duration))
+        self._time_display.set_times(current_time, duration)
         # Clamp view state after duration changes (scale may exceed new max)
         self._track._clamp_view()
         self._sync_scrollbar()
@@ -1562,3 +1818,19 @@ class TimelineWidget(QWidget):
     def _on_click(self, time_ms: float) -> None:
         """Handle click on timeline track — time_ms is the absolute timestamp."""
         self.seek_requested.emit(time_ms)
+
+    def set_dark_mode(self, dark: bool) -> None:
+        """Update the theme mode and repaint all custom-painted children."""
+        self._controls_host.set_dark_mode(dark)
+        self._time_display.set_dark_mode(dark)
+        self._track.set_dark_mode(dark)
+
+    @property
+    def chapters(self) -> List[Chapter]:
+        """Proxy chapter markers to the underlying track widget."""
+        return self._track.chapters
+
+    @chapters.setter
+    def chapters(self, value: List[Chapter]) -> None:
+        self._track.chapters = list(value or [])
+        self._track.update()

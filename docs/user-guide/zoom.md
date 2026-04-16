@@ -12,7 +12,7 @@ You add **zoom segments** to your timeline. Each segment tells the camera to zoo
 
 ## Auto-Generate Zoom Keyframes
 
-FollowCursor can analyze your recorded mouse and keyboard activity and automatically suggest where to zoom.
+FollowCursor can analyze your recorded activity and automatically suggest where to zoom.
 
 1. In the **Editor Panel** (right sidebar), find the **SMART ZOOM** section
 2. Pick a sensitivity level:
@@ -27,7 +27,7 @@ FollowCursor can analyze your recorded mouse and keyboard activity and automatic
 
 The analyzer looks for two kinds of activity in your recording:
 
-- **Typing bursts** — when your mouse was still and you were typing, the camera zooms into where you were typing
+- **Activity bursts** — when your mouse was still during a dense patch of interaction, the camera zooms into that area
 - **Click clusters** — one or more clicks in a short window; clicks are the strongest signal and always generate a zoom
 
 When related activity happens in the same area, it's merged into a single sustained zoom. When clusters happen close together in different spots, the camera stays zoomed and **pans smoothly** between them rather than zooming out and back in.

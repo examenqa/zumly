@@ -36,6 +36,7 @@ from .models import (
     KeyEvent,
     ClickEvent,
     VideoSegment,
+    VoiceoverSegment,
     RecordingSession,
     DEFAULT_FPS,
     DEFAULT_MOUSE_INTERVAL,
@@ -50,9 +51,10 @@ from .global_hotkeys import GlobalHotkeys
 from .project_file import PROJ_EXT
 from .backgrounds import PRESETS as BG_PRESETS
 from .frames import FRAME_PRESETS
-from .theme import get_theme
+from .theme import get_theme, get_base_palette
 from .icon_loader import clear_cache as clear_icon_cache
 from .fluent_effects import apply_shadow, install_focus_ring
+from .utils import fmt_time as _fmt_time
 from .widgets.title_bar import TitleBar
 from .widgets.source_picker import SourcePickerDialog
 from .widgets.preview_widget import PreviewWidget
@@ -64,7 +66,7 @@ from .widgets.recording_border import RecordingBorderOverlay
 from .icon import create_app_icon
 from .icon_loader import load_icon
 from . import tokens as T
-from .mica import is_mica_supported, enable_mica
+from .mica import is_mica_supported, enable_mica, enable_dwm_shadow
 
 
 class _LoadProjectWorker(QThread):
@@ -103,8 +105,6 @@ class _SaveProjectWorker(QThread):
     def __init__(self, path: str, video_path: str, session,
                  monitor_rect, actual_fps: float,
                  bg_preset, frame_preset, click_preset,
-                 keystroke_config,
-                 annotations,
                  metadata_only: bool = False,
                  parent=None) -> None:
         super().__init__(parent)
@@ -116,8 +116,6 @@ class _SaveProjectWorker(QThread):
         self._bg_preset = bg_preset
         self._frame_preset = frame_preset
         self._click_preset = click_preset
-        self._keystroke_config = keystroke_config
-        self._annotations = annotations
         self._metadata_only = metadata_only
 
     def run(self) -> None:  # noqa: D401
@@ -127,8 +125,7 @@ class _SaveProjectWorker(QThread):
                 self._path, self._video_path, self._session,
                 self._monitor_rect, self._actual_fps,
                 self._bg_preset, self._frame_preset,
-                self._click_preset, self._keystroke_config,
-                self._annotations,
+                self._click_preset,
                 metadata_only=self._metadata_only,
             )
             self.done.emit(self._path)
@@ -309,9 +306,10 @@ class _PreviewSynthWorker(QThread):
             return
 
         try:
-            from .ai_service import _build_speech_config
+            from .ai_service import _build_speech_config, _markdown_to_tts_text
             speech_config = _build_speech_config(self._api_key, self._endpoint)
             speech_config.speech_synthesis_voice_name = self._voice
+            speech_text = _markdown_to_tts_text(self._text)
 
             audio_config = speechsdk.audio.AudioOutputConfig(
                 filename=self._output_path
@@ -332,12 +330,12 @@ class _PreviewSynthWorker(QThread):
                     '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">'
                     f'<voice name="{_html.escape(self._voice)}">'
                     f'<prosody rate="{rate_str}" volume="{vol_str}">'
-                    f'{_html.escape(self._text)}'
+                    f'{_html.escape(speech_text)}'
                     '</prosody></voice></speak>'
                 )
                 result = synthesizer.speak_ssml_async(ssml).get()
             else:
-                result = synthesizer.speak_text_async(self._text).get()
+                result = synthesizer.speak_text_async(speech_text).get()
 
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 self.done.emit(self._output_path)
@@ -375,6 +373,7 @@ class _VoiceoverDialog(QDialog):
         is_edit: bool = False,
         rate: float = 1.0,
         volume: float = 1.0,
+        section_label: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -416,18 +415,31 @@ class _VoiceoverDialog(QDialog):
         layout.setContentsMargins(20, 16, 20, 16)
 
         # Header
+        is_narration = "Narration" in title or "Generated Voiceover" in title
+        section_label = section_label.strip()
         t_str = f"{int(timestamp_ms / 1000) // 60}:{int(timestamp_ms / 1000) % 60:02d}"
-        header = QLabel(f"Voiceover at <b>{t_str}</b>")
+        header_label = "Generated voiceover" if is_narration else "Voiceover"
+        if is_narration and section_label:
+            header_label = f"{header_label} · {section_label}"
+        header = QLabel(f"{header_label} at <b>{t_str}</b>")
         header.setStyleSheet("font-size: 15px; color: #e4e4ed;")
         layout.addWidget(header)
 
-        desc = QLabel("Enter voiceover text and pick a voice.")
+        desc = QLabel(
+            "Review the spoken line for this generated segment and pick a voice."
+            if is_narration
+            else "Enter voiceover text and pick a voice."
+        )
         desc.setStyleSheet("font-size: 12px; color: #9c99b6;")
         layout.addWidget(desc)
 
         # Text edit
         self._text_edit = QTextEdit()
-        self._text_edit.setPlaceholderText("Type your voiceover text here\u2026")
+        self._text_edit.setPlaceholderText(
+            "Edit the spoken narration for this segment\u2026"
+            if is_narration
+            else "Type your voiceover text here\u2026"
+        )
         self._text_edit.setPlainText(text)
         self._text_edit.setFixedHeight(100)
         self._text_edit.setStyleSheet(
@@ -691,6 +703,8 @@ class MainWindow(QMainWindow):
     via ``QSettings``.
     """
 
+    startup_ready = CoreSignal()
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("FollowCursor")
@@ -699,12 +713,19 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 
+        # ── persistent settings ─────────────────────────────────────
+        self._settings = QSettings("FollowCursor", "FollowCursor")
+        self._dark_mode: bool = self._settings.value(
+            "appearance/darkMode", True, type=bool,
+        )
+
         # Enable Mica backdrop on Windows 11 Build 22621+
         hwnd = int(self.winId())
         if is_mica_supported():
-            success = enable_mica(hwnd, dark_mode=True)
+            success = enable_mica(hwnd, dark_mode=self._dark_mode)
             if success:
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                enable_dwm_shadow(hwnd)
                 logger.info("Mica backdrop enabled with transparent background")
 
                 def _apply_mica_transparency() -> None:
@@ -712,17 +733,13 @@ class MainWindow(QMainWindow):
                     central = self.centralWidget()
                     if central:
                         central.setObjectName("micaCentralWidget")
-                    extra = (
-                        "QMainWindow#micaHostWindow { background-color: transparent; } "
-                        "QWidget#micaCentralWidget { background-color: transparent; }"
-                    )
-                    self.setStyleSheet(self.styleSheet() + extra)
+                    # Re-apply full theme now that object names are set so that:
+                    # 1. The transparent-background CSS rules match the named widgets.
+                    # 2. _refresh_icons() runs with all widgets already constructed.
+                    self._apply_theme()
 
                 QTimer.singleShot(0, _apply_mica_transparency)
 
-        # ── persistent settings ─────────────────────────────────────
-        self._settings = QSettings("FollowCursor", "FollowCursor")
-        self._dark_mode: bool = self._settings.value("appearance/darkMode", True, type=bool)
         self._apply_theme()
         
         self._last_export_dir: str = self._settings.value("lastExportDir", "")
@@ -739,10 +756,22 @@ class MainWindow(QMainWindow):
         self._exporter = None  # Created lazily via _ensure_exporter()
         self._border_overlay = RecordingBorderOverlay()
         self._ai_worker = None   # AIWorker, created lazily
+        self._active_ai_context: str = ""
         self._voiceover_segments: list = []  # List[VoiceoverSegment]
+        self._generated_narration_batch_queue: list[str] = []
+        self._generated_narration_batch_total: int = 0
+        self._generated_narration_batch_completed: int = 0
+        self._generated_narration_batch_script_name: str = ""
+        self._generated_narration_batch_intro: str = ""
+        self._generated_narration_batch_prefix: str = ""
+        self._generated_narration_batch_manual_action: str = ""
+        self._generated_narration_batch_target_durations: dict[str, float] = {}
+        self._generated_narration_batch_voices: dict[str, str] = {}
+        self._generated_narration_batch_retry_counts: dict[str, int] = {}
         self._video_segments: List[VideoSegment] = []  # timeline video segments
         self._vo_played_ids: set = set()  # track which voiceovers have played this playback
         self._vo_lock = threading.Lock()  # protect _vo_played_ids access
+        self._startup_ready_emitted = False
 
         self._recording = False
         self._selected_monitor: int = 0  # 0 = none selected
@@ -851,7 +880,6 @@ class MainWindow(QMainWindow):
         self._preview.pan_point_requested.connect(self._on_preview_pan_point)
         self._preview.centroid_picked.connect(self._on_centroid_picked)
         self._preview.centroid_dragged.connect(self._on_centroid_dragged)
-        self._preview.annotation_dragged.connect(self._on_annotation_dragged)
 
         # Keyframe whose centroid is being repositioned via preview click
         self._centroid_target_kf_id: str = ""
@@ -892,6 +920,7 @@ class MainWindow(QMainWindow):
         self._timeline.split_requested.connect(self._split_at_time)
         self._timeline.trim_changed.connect(self._on_trim_changed)
         self._timeline.trim_reset.connect(self._on_trim_reset)
+        self._timeline.chapter_deleted.connect(self._on_chapter_removed)
         self._timeline.drag_finished.connect(self._on_drag_finished)
         center.addWidget(self._timeline)
 
@@ -907,11 +936,7 @@ class MainWindow(QMainWindow):
         self._editor.background_changed.connect(self._on_bg_changed)
         self._editor.frame_changed.connect(self._on_frame_changed)
         self._editor.click_effect_changed.connect(self._on_click_changed)
-        self._editor.keystroke_config_changed.connect(self._on_keystroke_config_changed)
-        self._editor.annotation_added.connect(self._on_annotation_added)
-        self._editor.annotation_removed.connect(self._on_annotation_removed)
-        self._editor.annotation_updated.connect(self._on_annotation_updated)
-        self._editor.auto_detect_chapters_requested.connect(self._on_auto_detect_chapters)
+        self._editor.generate_chapters_requested.connect(self._on_generate_chapters_requested)
         self._editor.chapter_added.connect(self._on_chapter_added)
         self._editor.chapter_removed.connect(self._on_chapter_removed)
         self._editor.debug_overlay_changed.connect(self._on_debug_overlay_changed)
@@ -920,6 +945,7 @@ class MainWindow(QMainWindow):
         self._editor.redo_requested.connect(self._redo)
         self._editor.encoder_changed.connect(self._on_encoder_changed)
         self._editor.ai_zoom_requested.connect(self._on_ai_zoom_requested)
+        self._editor.generate_narration_requested.connect(self._on_generate_narration_requested)
         self._editor.add_voiceover_requested.connect(self._on_add_voiceover_requested)
         content.addWidget(self._editor)
 
@@ -990,19 +1016,32 @@ class MainWindow(QMainWindow):
         immediately.  Creates the system tray icon, updates the encoder
         label, and pre-loads TTS voices if configured.
         """
-        self._ensure_tray_icon()
-        self._update_encoder_label(self._editor.encoder_id)
-        # Auto-load TTS voices in background if AI settings are already configured
-        ai = self._load_ai_settings()
-        if ai.tts_configured:
-            self._status_text.setText("Loading TTS voices\u2026")
-            self._editor._load_tts_voices(ai.endpoint, ai.api_key)
-            # Clear status after a delay (voices load on background thread)
-            QTimer.singleShot(5000, lambda: (
-                self._status_text.setText("Ready")
-                if self._status_text.text() == "Loading TTS voices\u2026"
-                else None
-            ))
+        try:
+            self._ensure_tray_icon()
+            self._update_encoder_label(self._editor.encoder_id)
+            # Auto-load TTS voices in background if AI settings are already configured
+            ai = self._load_ai_settings()
+            if ai.tts_configured:
+                self._status_text.setText("Loading TTS voices\u2026")
+                self._editor._load_tts_voices(ai.endpoint, ai.api_key)
+                # Clear status after a delay (voices load on background thread)
+                QTimer.singleShot(5000, lambda: (
+                    self._status_text.setText("Ready")
+                    if self._status_text.text() == "Loading TTS voices\u2026"
+                    else None
+                ))
+            self.startup_ready.emit()
+        except Exception:
+            logger.exception("Deferred startup initialization failed")
+        finally:
+            QTimer.singleShot(0, self._emit_startup_ready)
+
+    def _emit_startup_ready(self) -> None:
+        """Emit the startup-ready signal once the first deferred pass finishes."""
+        if self._startup_ready_emitted:
+            return
+        self._startup_ready_emitted = True
+        self.startup_ready.emit()
 
     def _ensure_tray_icon(self) -> None:
         """Create the system tray icon on first use."""
@@ -1277,7 +1316,14 @@ class MainWindow(QMainWindow):
         # Session data
         self._mouse_track = []
         self._mouse_track_timestamps = []
+        self._key_events = []
+        self._click_events = []
+        self._frame_timestamps = []
+        self._rec_duration_ms = 0.0
+        self._playback_time = 0.0
         self._actual_fps_override = 0.0
+        self._keystroke_config = None
+        self._annotations = None
 
         # Voiceover / trim / project / video segments
         self._voiceover_segments = []
@@ -1289,6 +1335,8 @@ class MainWindow(QMainWindow):
         self._trim_start_ms = 0.0
         self._trim_end_ms = 0.0
         self._preview.set_playback_end(0.0)
+        self._preview.set_keystroke_data([], None)
+        self._preview.set_annotations(None)
         self._project_path = ""
         self._unsaved_changes = False
         self._output_dim = "auto"
@@ -1411,7 +1459,12 @@ class MainWindow(QMainWindow):
         try:
             self._mouse_track = mouse_track
             self._mouse_track_timestamps = [mp.timestamp for mp in self._mouse_track]
-            self._key_events = key_events
+            if key_events:
+                logger.info(
+                    "Ignoring %d captured keystroke event(s) after recording finalization",
+                    len(key_events),
+                )
+            self._key_events = []
             self._click_events = click_events
             self._zoom_engine.click_events = self._click_events
             self._zoom_engine.video_segments = self._video_segments
@@ -1427,8 +1480,6 @@ class MainWindow(QMainWindow):
             self._status_text.setText("Ready")
             self._unsaved_changes = True
             self._update_title()
-            # Push keystroke data to preview for live rendering
-            self._preview.set_keystroke_data(self._key_events, self._keystroke_config)
             self._set_view("edit")
         except Exception:
             logger.exception("Error in post-recording finalization")
@@ -1730,149 +1781,107 @@ class MainWindow(QMainWindow):
         # Persist to QSettings
         self._settings.setValue("clickPreset", preset.name)
 
-    def _on_keystroke_config_changed(self, config) -> None:
-        """Handle keystroke overlay configuration changes."""
-        self._keystroke_config = config
-        # Persist to QSettings
-        self._settings.setValue("keystroke/enabled", config.enabled)
-        self._settings.setValue("keystroke/position", config.position)
-        self._settings.setValue("keystroke/style", config.style)
-        self._settings.setValue("keystroke/filterMode", config.filter_mode)
-        # Update preview with keystroke data
-        self._preview.set_keystroke_data(self._key_events, self._keystroke_config)
-        self._mark_dirty()
-
-    def _on_annotation_added(self, annot_type: str, annotation) -> None:
-        """Handle new annotation added from editor panel."""
-        from .models import AnnotationCollection
-        
-        if self._annotations is None:
-            self._annotations = AnnotationCollection()
-        
-        # Add to the appropriate list
-        if annot_type == "text":
-            if self._annotations.texts is None:
-                self._annotations.texts = []
-            self._annotations.texts.append(annotation)
-        elif annot_type == "arrow":
-            if self._annotations.arrows is None:
-                self._annotations.arrows = []
-            self._annotations.arrows.append(annotation)
-        elif annot_type == "highlight":
-            if self._annotations.highlights is None:
-                self._annotations.highlights = []
-            self._annotations.highlights.append(annotation)
-        
-        # Update preview
-        self._preview.set_annotations(self._annotations)
-        self._mark_dirty()
-        logger.info("Annotation added: %s", annot_type)
-
-    def _on_annotation_removed(self, annot_type: str, annot_id: str) -> None:
-        """Handle annotation removed from editor panel."""
-        if not self._annotations:
-            return
-        
-        # Remove from the appropriate list
-        if annot_type == "text" and self._annotations.texts:
-            self._annotations.texts = [
-                a for a in self._annotations.texts if a.id != annot_id
-            ]
-        elif annot_type == "arrow" and self._annotations.arrows:
-            self._annotations.arrows = [
-                a for a in self._annotations.arrows if a.id != annot_id
-            ]
-        elif annot_type == "highlight" and self._annotations.highlights:
-            self._annotations.highlights = [
-                a for a in self._annotations.highlights if a.id != annot_id
-            ]
-        
-        # Update preview
-        self._preview.set_annotations(self._annotations)
-        self._mark_dirty()
-        logger.info("Annotation removed: %s %s", annot_type, annot_id)
-
-    def _on_annotation_updated(self, annot_type: str, annotation) -> None:
-        """Handle annotation updated from editor panel."""
-        if self._annotations is None:
-            return
-
-        # Update the matching annotation by id
-        if annot_type == "text" and self._annotations.texts:
-            self._annotations.texts = [
-                annotation if a.id == annotation.id else a
-                for a in self._annotations.texts
-            ]
-        elif annot_type == "arrow" and self._annotations.arrows:
-            self._annotations.arrows = [
-                annotation if a.id == annotation.id else a
-                for a in self._annotations.arrows
-            ]
-        elif annot_type == "highlight" and self._annotations.highlights:
-            self._annotations.highlights = [
-                annotation if a.id == annotation.id else a
-                for a in self._annotations.highlights
-            ]
-
-        self._preview.set_annotations(self._annotations)
-        self._mark_dirty()
-        logger.info("Annotation updated: %s", annot_type)
-
-    def _on_annotation_dragged(self, annot_type: str, annot_id: str, new_x: float, new_y: float) -> None:
-        """Handle annotation dragged in the preview widget."""
-        if self._annotations is None:
-            return
-
-        if annot_type == "text" and self._annotations.texts:
-            for a in self._annotations.texts:
-                if a.id == annot_id:
-                    a.x = new_x
-                    a.y = new_y
-                    break
-        elif annot_type == "arrow" and self._annotations.arrows:
-            for a in self._annotations.arrows:
-                if a.id == annot_id:
-                    midpoint_x = (a.x1 + a.x2) / 2.0
-                    midpoint_y = (a.y1 + a.y2) / 2.0
-                    dx = new_x - midpoint_x
-                    dy = new_y - midpoint_y
-                    # Constrain so translated endpoints stay within [0, 1]
-                    min_dx = -min(a.x1, a.x2)
-                    max_dx = 1.0 - max(a.x1, a.x2)
-                    min_dy = -min(a.y1, a.y2)
-                    max_dy = 1.0 - max(a.y1, a.y2)
-                    dx = max(min_dx, min(max_dx, dx))
-                    dy = max(min_dy, min(max_dy, dy))
-                    a.x1 += dx
-                    a.y1 += dy
-                    a.x2 += dx
-                    a.y2 += dy
-                    break
-        elif annot_type == "highlight" and self._annotations.highlights:
-            for a in self._annotations.highlights:
-                if a.id == annot_id:
-                    a.x = new_x
-                    a.y = new_y
-                    break
-
-        self._preview.set_annotations(self._annotations)
-        self._mark_dirty()
-
-    def _on_auto_detect_chapters(self) -> None:
-        """Handle auto-detect chapters request from editor panel."""
-        from .activity_analyzer import detect_chapters
-        chapters = detect_chapters(
-            self._mouse_track,
-            self._key_events,
-            self._click_events,
-            self._rec_duration_ms
-        )
-        self._chapters = chapters
-        self._timeline.chapters = chapters
+    def _apply_chapters(self, chapters) -> None:
+        """Apply chapter markers to project state and the timeline."""
+        self._chapters = sorted(chapters, key=lambda chapter: chapter.timestamp_ms)
+        self._timeline.chapters = self._chapters
         self._timeline.update()
         self._mark_dirty()
-        self._editor.set_chapters_status(f"{len(chapters)} chapter(s) detected")
-        logger.info("Auto-detected %d chapters", len(chapters))
+
+    def _merge_generated_chapters(self, generated_chapters):
+        """Replace generated chapters while preserving manual markers."""
+        manual_chapters = sorted(
+            [chapter for chapter in self._chapters if not chapter.auto_detected],
+            key=lambda chapter: chapter.timestamp_ms,
+        )
+        merged = list(manual_chapters)
+        for chapter in generated_chapters:
+            if any(
+                abs(chapter.timestamp_ms - manual.timestamp_ms) < 1000
+                for manual in manual_chapters
+            ):
+                continue
+            merged.append(chapter)
+        return sorted(merged, key=lambda chapter: chapter.timestamp_ms)
+
+    def _on_generate_chapters_requested(self) -> None:
+        """Handle AI chapter generation request from the editor panel."""
+        ai_settings = self._load_ai_settings()
+        if not ai_settings.narration_configured:
+            self._editor.set_chapters_status(
+                "Set up AI in ⚙ AI Settings before you generate chapters."
+            )
+            return
+        if not self._video_path or not os.path.isfile(self._video_path):
+            self._editor.set_chapters_status(
+                "Load a recording before you generate chapters."
+            )
+            return
+        if (
+            not self._monitor_rect
+            or self._monitor_rect.get("width", 0) <= 0
+            or self._monitor_rect.get("height", 0) <= 0
+        ):
+            self._editor.set_chapters_status(
+                "Source geometry is unavailable. Reopen the recording and try again."
+            )
+            return
+
+        worker = self._ensure_ai_worker()
+        if worker.isRunning():
+            self._editor.set_chapters_status(
+                "Another AI task is already running. Wait for it to finish, then try again."
+            )
+            return
+
+        self._active_ai_context = "chapters"
+        worker.run_chapters(
+            ai_settings,
+            video_path=self._video_path,
+            mouse_track=self._mouse_track,
+            monitor_rect=self._monitor_rect,
+            duration_ms=self._rec_duration_ms,
+            key_events=None,
+            click_events=self._click_events or None,
+            zoom_keyframes=self._zoom_engine.keyframes or None,
+            annotations=None,
+            frame_timestamps=self._frame_timestamps or None,
+        )
+        self._editor.set_chapters_status(
+            "Sampling the recording and drafting aligned chapter markers…"
+        )
+        self._editor.set_ai_busy(True)
+
+    def _on_ai_chapters_result(self, chapters) -> None:
+        """Handle AI chapter generation results."""
+        self._status_text.setText("Ready")
+        previous_generated = sum(1 for chapter in self._chapters if chapter.auto_detected)
+        merged_chapters = self._merge_generated_chapters(chapters or [])
+        self._apply_chapters(merged_chapters)
+        self._editor.set_ai_busy(False)
+        self._active_ai_context = ""
+        generated_count = sum(1 for chapter in self._chapters if chapter.auto_detected)
+        manual_count = sum(1 for chapter in self._chapters if not chapter.auto_detected)
+        if not generated_count:
+            self._editor.set_chapters_status(
+                "AI found no major chapter beats. Any manual chapter markers stayed in place."
+            )
+            return
+        status_text = (
+            f"✓ Generated {generated_count} AI chapter marker"
+            f"{'s' if generated_count != 1 else ''} from the shared recording analysis."
+        )
+        if previous_generated:
+            status_text += " Replaced the previous generated chapter markers."
+        if manual_count:
+            status_text += f" Kept {manual_count} manual chapter"
+            status_text += "s." if manual_count != 1 else "."
+        self._editor.set_chapters_status(status_text)
+        logger.info(
+            "AI-generated %d chapters (kept %d manual chapters)",
+            generated_count,
+            manual_count,
+        )
 
     def _on_chapter_added(self, chapter) -> None:
         """Handle manual chapter addition from editor panel."""
@@ -1889,19 +1898,16 @@ class MainWindow(QMainWindow):
             next_num = max(existing_nums, default=0) + 1
             chapter.name = f"Chapter {next_num}"
         
-        self._chapters.append(chapter)
-        self._chapters.sort(key=lambda c: c.timestamp_ms)
-        self._timeline.chapters = self._chapters
-        self._timeline.update()
-        self._mark_dirty()
+        self._apply_chapters([*self._chapters, chapter])
+        self._editor.set_chapters_status(f"Added {chapter.name}.")
         logger.info("Chapter added: %s at %.2fs", chapter.name, chapter.timestamp_ms / 1000)
 
     def _on_chapter_removed(self, timestamp_ms: int) -> None:
         """Handle chapter removal."""
-        self._chapters = [c for c in self._chapters if c.timestamp_ms != timestamp_ms]
-        self._timeline.chapters = self._chapters
-        self._timeline.update()
-        self._mark_dirty()
+        removed = next((c for c in self._chapters if c.timestamp_ms == timestamp_ms), None)
+        self._apply_chapters([c for c in self._chapters if c.timestamp_ms != timestamp_ms])
+        if removed is not None:
+            self._editor.set_chapters_status(f"Removed {removed.name}.")
         logger.info("Chapter removed at %.2fs", timestamp_ms / 1000)
 
     def _on_debug_overlay_changed(self, enabled: bool) -> None:
@@ -1934,6 +1940,7 @@ class MainWindow(QMainWindow):
             endpoint=self._settings.value("ai/endpoint", ""),
             api_key=unprotect(self._settings.value("ai/apiKey", "")),
             chat_model=self._settings.value("ai/chatModel", ""),
+            narration_model=self._settings.value("ai/narrationModel", "gpt-5.4"),
             tts_voice=self._settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
         )
 
@@ -1943,9 +1950,12 @@ class MainWindow(QMainWindow):
             from .ai_service import AIWorker
             self._ai_worker = AIWorker(parent=self)
             self._ai_worker.zoom_result.connect(self._on_ai_zoom_result)
+            self._ai_worker.chapters_result.connect(self._on_ai_chapters_result)
+            self._ai_worker.narration_result.connect(self._on_ai_narration_result)
             self._ai_worker.tts_result.connect(self._on_ai_tts_result)
             self._ai_worker.error.connect(self._on_ai_error)
             self._ai_worker.status.connect(self._on_ai_status)
+            self._ai_worker.finished.connect(self._on_ai_worker_finished)
         return self._ai_worker
 
     def _on_ai_zoom_requested(self, max_clusters: int, zoom_level: float, min_gap_ms: int) -> None:
@@ -1960,12 +1970,13 @@ class MainWindow(QMainWindow):
         if worker.isRunning():
             self._editor.set_ai_zoom_status("AI operation already in progress\u2026")
             return
+        self._active_ai_context = "zoom"
         worker.run_zoom_analysis(
             ai_settings,
             mouse_track=self._mouse_track,
             monitor_rect=self._monitor_rect,
             duration_ms=self._rec_duration_ms,
-            key_events=self._key_events or None,
+            key_events=None,
             click_events=self._click_events or None,
             max_clusters=max_clusters,
             zoom_level=zoom_level,
@@ -1977,6 +1988,7 @@ class MainWindow(QMainWindow):
         """Handle AI zoom analysis results — same flow as local auto-keyframes."""
         self._status_text.setText("Ready")
         self._editor.set_ai_busy(False)
+        self._active_ai_context = ""
         if not keyframes:
             self._editor.set_ai_zoom_status("AI found no significant activity.")
             return
@@ -1988,13 +2000,560 @@ class MainWindow(QMainWindow):
         # Reuse the same flow as local auto-keyframes
         self._on_auto_keyframes(keyframes)
 
+    def _confirm_replace_generated_narration(self) -> bool:
+        """Confirm before replacing existing generated narration segments."""
+        if not self._generated_narration_segments():
+            return True
+
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Replace generated voiceover segments?")
+        dlg.setIcon(QMessageBox.Icon.Warning)
+        dlg.setText(
+            "You already have generated voiceover segments from narration.<br><br>"
+            "Generating again will <b>replace</b> those segments, but any "
+            "<b>manual voiceover segments</b> stay exactly as they are."
+        )
+        dlg.addButton("Replace", QMessageBox.ButtonRole.AcceptRole)
+        btn_cancel = dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dlg.setDefaultButton(btn_cancel)
+        dlg.setStyleSheet(
+            "QMessageBox { background: #1b1a2e; }"
+            "QMessageBox QLabel { color: #e4e4ed; font-size: 13px; }"
+            "QPushButton { min-width: 80px; min-height: 28px;"
+            "  background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 16px; }"
+            "QPushButton:hover { background: #8b5cf6; }"
+        )
+        dlg.exec()
+        return dlg.clickedButton() != btn_cancel
+
+    def _confirm_destructive_action(
+        self,
+        title: str,
+        text: str,
+        *,
+        accept_label: str,
+        cancel_label: str = "Cancel",
+    ) -> bool:
+        """Show a styled destructive-action confirmation dialog."""
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(title)
+        dlg.setIcon(QMessageBox.Icon.Warning)
+        dlg.setText(text)
+        btn_accept = dlg.addButton(accept_label, QMessageBox.ButtonRole.AcceptRole)
+        btn_cancel = dlg.addButton(cancel_label, QMessageBox.ButtonRole.RejectRole)
+        dlg.setDefaultButton(btn_cancel)
+        dlg.setStyleSheet(
+            "QMessageBox { background: #1b1a2e; }"
+            "QMessageBox QLabel { color: #e4e4ed; font-size: 13px; }"
+            "QPushButton { min-width: 80px; min-height: 28px;"
+            "  background: #28263e; color: #e4e4ed; border: 1px solid #3d3a58;"
+            "  border-radius: 6px; padding: 4px 16px; }"
+            "QPushButton:hover { background: #8b5cf6; }"
+        )
+        dlg.exec()
+        return dlg.clickedButton() == btn_accept
+
+    def _confirm_delete_generated_voiceover_segment(self, seg: VoiceoverSegment) -> bool:
+        """Confirm deleting a generated voiceover segment from narration."""
+        remaining_generated = [
+            existing for existing in self._generated_narration_segments()
+            if existing.id != seg.id
+        ]
+        script_name = os.path.basename(seg.script_path) if seg.script_path else "the narration markdown"
+        text = (
+            f"Delete the <b>{seg.generated_narration_label}</b> generated voiceover segment?<br><br>"
+            "This removes the segment from the Voice track and rewrites the saved narration script."
+        )
+        if remaining_generated:
+            text += (
+                f"<br><br><b>{len(remaining_generated)}</b> generated voiceover segment"
+                f"{'s' if len(remaining_generated) != 1 else ''} will remain."
+            )
+        else:
+            text += (
+                f"<br><br>No generated narration will remain, so FollowCursor will also "
+                f"remove <b>{script_name}</b>."
+            )
+        text += "<br><br>Manual voiceover segments stay exactly as they are."
+        return self._confirm_destructive_action(
+            "Delete generated voiceover segment?",
+            text,
+            accept_label="Delete segment",
+            cancel_label="Keep segment",
+        )
+
+    def _confirm_delete_video_segment(
+        self,
+        seg: VideoSegment,
+        *,
+        generated_updated: int,
+        generated_removed: int,
+        manual_removed: int,
+    ) -> bool:
+        """Confirm deleting a clip segment from the ripple-edit timeline."""
+        text = (
+            f"Delete the clip from <b>{_fmt_time(seg.start_ms)}</b> to "
+            f"<b>{_fmt_time(seg.end_ms)}</b>?<br><br>"
+            "FollowCursor will ripple the timeline closed. Any zoom or pan edits inside "
+            "that clip are removed, overlapping manual voiceover segments are deleted, "
+            "generated narration is trimmed and retimed when possible, and "
+            "everything after the cut shifts earlier."
+        )
+        impacted_segments: list[str] = []
+        if generated_updated:
+            impacted_segments.append(
+                f"<b>{generated_updated}</b> generated voiceover segment"
+                f"{'s' if generated_updated != 1 else ''} will be resynthesized"
+            )
+        if generated_removed:
+            impacted_segments.append(
+                f"<b>{generated_removed}</b> generated voiceover segment"
+                f"{'s' if generated_removed != 1 else ''} will be removed"
+            )
+        if manual_removed:
+            impacted_segments.append(
+                f"<b>{manual_removed}</b> manual voiceover segment"
+                f"{'s' if manual_removed != 1 else ''} will be removed"
+            )
+        if impacted_segments:
+            text += "<br><br>This clip affects " + ", ".join(impacted_segments) + "."
+        if generated_updated or generated_removed:
+            text += " FollowCursor will rewrite the saved narration markdown to match the cut."
+        return self._confirm_destructive_action(
+            "Delete clip segment?",
+            text,
+            accept_label="Delete clip",
+        )
+
+    def _generated_narration_segments(self) -> list:
+        """Return generated narration segments in timeline order."""
+        return sorted(
+            [seg for seg in self._voiceover_segments if seg.is_generated_narration],
+            key=lambda seg: seg.timestamp,
+        )
+
+    def _normalize_generated_narration_sequence(self) -> None:
+        """Retain a non-overlapping generated narration timeline after audio changes."""
+        from .ai_service import _normalize_generated_narration_voiceover_segments
+
+        self._voiceover_segments = _normalize_generated_narration_voiceover_segments(
+            self._voiceover_segments,
+            video_duration_ms=self._rec_duration_ms,
+        )
+        self._zoom_engine.voiceover_segments = self._voiceover_segments
+
+    def _compose_generated_narration_markdown(self) -> str:
+        """Combine generated narration segments into one sidecar markdown document."""
+        parts = [
+            seg.script_markdown.strip()
+            for seg in self._generated_narration_segments()
+            if seg.script_markdown.strip()
+        ]
+        return "\n\n".join(parts).strip()
+
+    def _write_generated_narration_script(self, seg: VoiceoverSegment) -> str:
+        """Ensure the generated narration markdown exists beside the current video."""
+        if not seg.is_generated_narration or not self._video_path:
+            return seg.script_path
+
+        markdown_script = self._compose_generated_narration_markdown()
+        if not markdown_script:
+            return seg.script_path
+
+        root, _ = os.path.splitext(self._video_path)
+        script_path = f"{root}_voiceover.md"
+        directory = os.path.dirname(script_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(markdown_script)
+            if not markdown_script.endswith("\n"):
+                handle.write("\n")
+        for generated_seg in self._generated_narration_segments():
+            generated_seg.script_path = script_path
+        return script_path
+
+    def _generated_narration_audio_path(self, seg: VoiceoverSegment) -> str:
+        """Return the deterministic WAV path for a generated narration segment."""
+        from .ai_service import _build_narration_segment_audio_path, _extract_narration_section_label
+
+        generated_segments = self._generated_narration_segments()
+        if seg in generated_segments:
+            segment_index = generated_segments.index(seg) + 1
+        else:
+            segment_index = 1
+        if seg.script_path:
+            script_path = seg.script_path
+        elif self._video_path:
+            root, _ = os.path.splitext(self._video_path)
+            script_path = f"{root}_voiceover.md"
+        else:
+            return seg.audio_path
+        section_label = _extract_narration_section_label(seg.script_markdown)
+        return _build_narration_segment_audio_path(script_path, segment_index, section_label)
+
+    def _sync_generated_narration_script(self) -> None:
+        """Rewrite or remove the generated narration sidecar to match current segments."""
+        generated_segments = self._generated_narration_segments()
+        if generated_segments:
+            self._write_generated_narration_script(generated_segments[0])
+            return
+        if not self._video_path:
+            return
+        root, _ = os.path.splitext(self._video_path)
+        script_path = f"{root}_voiceover.md"
+        try:
+            if os.path.isfile(script_path):
+                os.remove(script_path)
+        except OSError as exc:
+            logger.warning("Could not remove stale narration markdown: %s", exc)
+
+    def _clear_generated_narration_synthesis_batch(self) -> None:
+        """Reset queued generated voiceover synthesis state."""
+        self._generated_narration_batch_queue = []
+        self._generated_narration_batch_total = 0
+        self._generated_narration_batch_completed = 0
+        self._generated_narration_batch_script_name = ""
+        self._generated_narration_batch_intro = ""
+        self._generated_narration_batch_prefix = ""
+        self._generated_narration_batch_manual_action = ""
+        self._generated_narration_batch_target_durations = {}
+        self._generated_narration_batch_voices = {}
+        self._generated_narration_batch_retry_counts = {}
+
+    def _prepare_generated_narration_synthesis_batch(
+        self,
+        segment_ids: list[str],
+        script_name: str,
+        intro_text: str,
+        prefix_text: str | None = None,
+        manual_action_text: str | None = None,
+    ) -> None:
+        """Queue generated narration segments for automatic TTS."""
+        from .ai_service import _generated_narration_duration_map
+
+        self._clear_generated_narration_synthesis_batch()
+        self._generated_narration_batch_queue = list(segment_ids)
+        self._generated_narration_batch_total = len(self._generated_narration_batch_queue)
+        self._generated_narration_batch_completed = 0
+        self._generated_narration_batch_script_name = script_name
+        self._generated_narration_batch_intro = intro_text
+        default_prefix = f"✓ Narration is ready. Saved {script_name}. {intro_text}".strip()
+        self._generated_narration_batch_prefix = " ".join(
+            (prefix_text or default_prefix).split()
+        )
+        self._generated_narration_batch_manual_action = (
+            manual_action_text
+            or "Open a generated segment on the Voice track to try again."
+        )
+        duration_map = _generated_narration_duration_map(
+            self._generated_narration_segments(),
+            self._rec_duration_ms,
+        )
+        selected_generated = {
+            seg.id: seg for seg in self._generated_narration_segments()
+            if seg.id in self._generated_narration_batch_queue
+        }
+        default_batch_voice = self._load_ai_settings().tts_voice
+        self._generated_narration_batch_target_durations = {
+            seg_id: duration_map.get(seg_id, 0.0)
+            for seg_id in self._generated_narration_batch_queue
+        }
+        self._generated_narration_batch_voices = {
+            seg_id: (
+                selected_generated[seg_id].voice
+                or default_batch_voice
+            )
+            for seg_id in self._generated_narration_batch_queue
+            if seg_id in selected_generated
+        }
+        self._generated_narration_batch_retry_counts = {
+            seg_id: 0 for seg_id in self._generated_narration_batch_queue
+        }
+
+    def _fail_generated_narration_auto_synthesis(
+        self,
+        prefix_text: str,
+        reason: str,
+        manual_action_text: str,
+    ) -> bool:
+        """Clear the queued batch and explain why manual resynthesis is needed."""
+        self._clear_generated_narration_synthesis_batch()
+        worker_running = self._ensure_ai_worker().isRunning()
+        self._editor.set_ai_busy(worker_running)
+        if not worker_running:
+            self._active_ai_context = ""
+        message = (
+            f"{prefix_text} Speech did not start automatically because {reason} "
+            f"{manual_action_text}"
+        )
+        self._editor.set_narration_status(" ".join(message.split()))
+        return False
+
+    def _try_start_generated_narration_synthesis_batch(
+        self,
+        *,
+        prefix_text: str,
+        manual_action_text: str,
+    ) -> bool:
+        """Start queued generated narration synthesis or emit an explicit blocker."""
+        ai_settings = self._load_ai_settings()
+        if not ai_settings.tts_configured:
+            return self._fail_generated_narration_auto_synthesis(
+                prefix_text,
+                "TTS is not set up in ⚙ AI Settings.",
+                manual_action_text,
+            )
+        worker = self._ensure_ai_worker()
+        if worker.isRunning():
+            return self._fail_generated_narration_auto_synthesis(
+                prefix_text,
+                "another AI task is still finishing.",
+                manual_action_text,
+            )
+        if self._synthesize_next_generated_narration_segment():
+            return True
+        return self._fail_generated_narration_auto_synthesis(
+            prefix_text,
+            "FollowCursor could not start speech.",
+            manual_action_text,
+        )
+
+    def _on_ai_worker_finished(self) -> None:
+        """Continue any queued generated narration synthesis after the worker fully stops."""
+        if self._generated_narration_batch_total <= 0:
+            return
+        if not self._generated_narration_batch_queue:
+            return
+        self._try_start_generated_narration_synthesis_batch(
+            prefix_text=(
+                self._generated_narration_batch_prefix
+                or self._generated_narration_batch_intro
+                or "Generated narration is on the Voice track."
+            ),
+            manual_action_text=(
+                self._generated_narration_batch_manual_action
+                or "Open a generated segment on the Voice track to try again."
+            ),
+        )
+
+    def _generated_narration_batch_status(self) -> str:
+        """Return progress text for generated voiceover synthesis."""
+        if self._generated_narration_batch_total <= 0:
+            return "Generating speech for the generated voiceover…"
+        current = min(
+            self._generated_narration_batch_completed + 1,
+            self._generated_narration_batch_total,
+        )
+        if self._generated_narration_batch_intro:
+            return (
+                f"{self._generated_narration_batch_intro} "
+                f"Generating speech {current} of {self._generated_narration_batch_total}…"
+            )
+        return (
+            f"Drafted {self._generated_narration_batch_total} generated voiceover "
+            f"segment{'s' if self._generated_narration_batch_total != 1 else ''}. "
+            f"Speech starts automatically. Generating {current} of "
+            f"{self._generated_narration_batch_total}…"
+        )
+
+    def _synthesize_next_generated_narration_segment(self) -> bool:
+        """Kick off synthesis for the next generated voiceover segment."""
+        while self._generated_narration_batch_queue:
+            next_id = self._generated_narration_batch_queue[0]
+            seg = next((s for s in self._voiceover_segments if s.id == next_id), None)
+            if seg is None:
+                self._generated_narration_batch_queue.pop(0)
+                self._generated_narration_batch_completed += 1
+                continue
+            if self._synthesize_voiceover(
+                seg,
+                status_text=self._generated_narration_batch_status(),
+            ):
+                self._generated_narration_batch_queue.pop(0)
+                return True
+            return False
+        return False
+
+    def _generated_narration_target_duration_ms(self, seg) -> float:
+        """Return the intended spoken duration for a generated narration segment."""
+        generated_segments = self._generated_narration_segments()
+        if seg not in generated_segments:
+            return 0.0
+        index = generated_segments.index(seg)
+        if index + 1 < len(generated_segments):
+            return max(0.0, generated_segments[index + 1].timestamp - seg.timestamp)
+        if self._rec_duration_ms > 0:
+            return max(0.0, self._rec_duration_ms - seg.timestamp)
+        return 0.0
+
+    def _maybe_retry_generated_narration_tts(self, seg) -> bool:
+        """Retry one generated segment when measured TTS pacing still misses its window."""
+        from .ai_service import (
+            _corrected_narration_retry_rate,
+        )
+
+        target_duration_ms = self._generated_narration_batch_target_durations.get(
+            seg.id,
+            self._generated_narration_target_duration_ms(seg),
+        )
+        if target_duration_ms <= 0 or seg.duration_ms <= 0:
+            return False
+        if self._generated_narration_batch_retry_counts.get(seg.id, 0) >= 1:
+            return False
+
+        retry_rate = _corrected_narration_retry_rate(
+            seg.rate,
+            seg.duration_ms,
+            target_duration_ms,
+            base_rate=1.0,
+        )
+        if retry_rate is None:
+            return False
+
+        self._generated_narration_batch_retry_counts[seg.id] = (
+            self._generated_narration_batch_retry_counts.get(seg.id, 0) + 1
+        )
+        seg.rate = retry_rate
+        self._generated_narration_batch_queue.insert(0, seg.id)
+        self._editor.set_narration_status(
+            f"Matching {seg.generated_narration_label} timing "
+            f"({self._generated_narration_batch_completed + 1}/"
+            f"{max(1, self._generated_narration_batch_total)})…"
+        )
+        return True
+
+    def _restore_generated_narration_assets(self) -> None:
+        """Rehydrate the generated narration markdown beside the current video."""
+        generated_seg = next((seg for seg in self._generated_narration_segments()), None)
+        if generated_seg is None:
+            return
+        try:
+            self._write_generated_narration_script(generated_seg)
+        except OSError as exc:
+            logger.warning("Could not restore narration markdown: %s", exc)
+
+    def _default_generated_narration_paths(self) -> tuple[str, str]:
+        """Return the default sidecar paths for generated narration assets."""
+        if not self._video_path:
+            raise ValueError("Narration generation requires a loaded video.")
+        root, _ = os.path.splitext(self._video_path)
+        return f"{root}_voiceover.md", f"{root}_voiceover.wav"
+
     # ── Voiceover segments ──────────────────────────────────────────
+
+    def _on_generate_narration_requested(self, voice: str, guidance: str) -> None:
+        """Generate presentation-style voiceover segments for the current recording."""
+        if not self._video_path or not os.path.isfile(self._video_path):
+            self._editor.set_narration_status(
+                "Record or open a video before generating narration."
+            )
+            return
+        if (
+            not self._monitor_rect
+            or self._monitor_rect.get("width", 0) <= 0
+            or self._monitor_rect.get("height", 0) <= 0
+        ):
+            self._editor.set_narration_status(
+                "Source geometry is unavailable. Reopen the recording and try again."
+            )
+            return
+
+        ai_settings = self._load_ai_settings()
+        if not ai_settings.narration_configured:
+            self._editor.set_narration_status(
+                "Set up AI in ⚙ AI Settings before you generate narration."
+            )
+            return
+        if not ai_settings.tts_configured:
+            self._editor.set_narration_status(
+                "Set up TTS in ⚙ AI Settings first. Generate narration adds the "
+                "segments and starts speech automatically."
+            )
+            return
+
+        worker = self._ensure_ai_worker()
+        if worker.isRunning():
+            self._editor.set_narration_status(
+                "Another AI task is already running. Wait for it to finish, then try again."
+            )
+            return
+        if not self._confirm_replace_generated_narration():
+            return
+
+        script_output_path, audio_output_path = self._default_generated_narration_paths()
+        selected_voice = voice or self._editor.selected_voice
+        self._active_ai_context = "narration"
+        worker.run_narration(
+            ai_settings,
+            video_path=self._video_path,
+            mouse_track=self._mouse_track,
+            monitor_rect=self._monitor_rect,
+            duration_ms=self._rec_duration_ms,
+            key_events=None,
+            click_events=self._click_events or None,
+            zoom_keyframes=self._zoom_engine.keyframes or None,
+            annotations=None,
+            frame_timestamps=self._frame_timestamps or None,
+            voice=selected_voice,
+            rate=1.0,
+            volume=1.0,
+            script_output_path=script_output_path,
+            audio_output_path=audio_output_path,
+            synthesize_audio=False,
+            guidance_prompt=guidance or None,
+        )
+        self._editor.set_narration_status(
+            f"Drafting GPT-5.4 voiceover segments with {selected_voice}. "
+            "Speech starts automatically when the draft lands."
+        )
+        self._editor.set_ai_busy(True)
+
+    def _on_ai_narration_result(self, generated) -> None:
+        """Merge freshly generated narration segments into the current project."""
+        from .ai_service import replace_generated_narration_segments
+
+        self._status_text.setText("Ready")
+
+        self._voiceover_segments = replace_generated_narration_segments(
+            self._voiceover_segments,
+            generated.voiceover_segments,
+        )
+        script_name = os.path.basename(generated.script_path)
+        try:
+            if generated.voiceover_segments:
+                self._write_generated_narration_script(generated.voiceover_segments[0])
+                script_name = os.path.basename(generated.voiceover_segments[0].script_path)
+        except OSError as exc:
+            logger.warning("Could not rewrite narration markdown beside video: %s", exc)
+        self._zoom_engine.voiceover_segments = self._voiceover_segments
+        self._mark_dirty()
+        self._refresh_editor()
+        if not generated.voiceover_segments:
+            self._editor.set_ai_busy(False)
+            self._active_ai_context = ""
+            self._editor.set_narration_status(f"✓ Narration is ready. Saved {script_name}.")
+            return
+
+        segment_ids = [seg.id for seg in self._generated_narration_segments()]
+        intro_text = (
+            f"Drafted {len(segment_ids)} generated voiceover segment"
+            f"{'s' if len(segment_ids) != 1 else ''}. Speech starts automatically."
+        )
+        ready_prefix = f"✓ Narration is ready. Saved {script_name}. {intro_text}"
+        self._prepare_generated_narration_synthesis_batch(
+            segment_ids,
+            script_name,
+            intro_text,
+            prefix_text=ready_prefix,
+            manual_action_text="Open a generated segment on the Voice track to try again.",
+        )
 
     def _on_add_voiceover_requested(self, timestamp_ms: float, voice: str) -> None:
         """Show dialog to add a voiceover segment at the given time."""
         if timestamp_ms < 0:
             timestamp_ms = self._playback_time
-        from .models import VoiceoverSegment
         dlg = _VoiceoverDialog(timestamp_ms, voice, parent=self)
         result = dlg.exec()
         if result == _VoiceoverDialog.RESULT_OK:
@@ -2010,6 +2569,7 @@ class MainWindow(QMainWindow):
             )
             self._voiceover_segments.append(seg)
             self._voiceover_segments.sort(key=lambda s: s.timestamp)
+            self._zoom_engine.voiceover_segments = self._voiceover_segments
             self._mark_dirty()
             self._refresh_editor()
             # Reuse cached preview audio if available
@@ -2031,61 +2591,159 @@ class MainWindow(QMainWindow):
             else:
                 self._synthesize_voiceover(seg)
 
+    def _remove_voiceover_segment(self, seg: VoiceoverSegment) -> None:
+        """Remove a voiceover segment and update any generated narration assets."""
+        script_name = (
+            os.path.basename(seg.script_path)
+            if seg.script_path
+            else "the narration markdown"
+        )
+        remaining_generated = [
+            existing for existing in self._voiceover_segments
+            if existing.id != seg.id and existing.is_generated_narration
+        ]
+        self._voiceover_segments = [s for s in self._voiceover_segments if s.id != seg.id]
+        self._zoom_engine.voiceover_segments = self._voiceover_segments
+        if seg.is_generated_narration:
+            self._sync_generated_narration_script()
+        self._mark_dirty()
+        self._refresh_editor()
+        if seg.is_generated_narration:
+            if remaining_generated:
+                self._editor.set_narration_status(
+                    f"Removed {seg.generated_narration_label} generated voiceover segment. "
+                    f"Updated {script_name}."
+                )
+            else:
+                self._editor.set_narration_status(
+                    f"Removed {seg.generated_narration_label} generated voiceover segment. "
+                    f"Removed {script_name} because no generated narration remains."
+                )
+        else:
+            self._editor.set_voiceover_status("Voiceover removed.")
+
     def _on_voiceover_clicked(self, seg_id: str) -> None:
         """Show edit/delete dialog for a voiceover segment."""
         seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
         if seg is None:
             return
+        section_label = ""
+        dialog_text = seg.text
+        if seg.is_generated_narration:
+            from .ai_service import _clean_narration_spoken_text, _extract_narration_section_label
+
+            section_label = _extract_narration_section_label(seg.script_markdown)
+            if section_label == "Segment":
+                section_label = seg.generated_narration_label
+            dialog_text = _clean_narration_spoken_text(
+                seg.text or seg.script_markdown,
+                section=section_label,
+            )
         dlg = _VoiceoverDialog(
-            seg.timestamp, seg.voice, text=seg.text,
-            title="Edit Voiceover",
+            seg.timestamp,
+            seg.voice,
+            text=dialog_text,
+            title="Edit Generated Voiceover" if seg.is_generated_narration else "Edit Voiceover",
             is_edit=True,
             rate=seg.rate,
             volume=seg.volume,
+            section_label=section_label,
             parent=self,
         )
         result = dlg.exec()
         if result == _VoiceoverDialog.RESULT_OK:
             # Remember the chosen voice for next time
             self._settings.setValue("ai/ttsVoice", dlg.voice)
+            if seg.is_generated_narration:
+                from .ai_service import (
+                    _build_generated_narration_markdown,
+                    _clean_narration_spoken_text,
+                )
+
+                section_name = (
+                    section_label
+                    if section_label and section_label != "Segment"
+                    else seg.generated_narration_label
+                )
+                seg.text = _clean_narration_spoken_text(dlg.text, section=section_name)
+                seg.script_markdown = _build_generated_narration_markdown(
+                    section_name,
+                    seg.text,
+                )
+            else:
+                seg.text = dlg.text
             seg.timestamp = dlg.timestamp_ms
-            seg.text = dlg.text
             seg.voice = dlg.voice
             seg.rate = dlg.rate
             seg.volume = dlg.volume
             self._voiceover_segments.sort(key=lambda s: s.timestamp)
+            self._zoom_engine.voiceover_segments = self._voiceover_segments
             self._mark_dirty()
             self._refresh_editor()
             # Reuse cached preview audio if available
             cached = dlg.cached_audio_path
             if cached:
                 import shutil
-                import tempfile
-                dest = os.path.join(
-                    tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
-                )
+                if seg.is_generated_narration:
+                    dest = self._generated_narration_audio_path(seg)
+                else:
+                    import tempfile
+                    dest = os.path.join(
+                        tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
+                    )
                 shutil.copy2(cached, dest)
                 seg.audio_path = dest
                 seg.duration_ms = self._probe_audio_duration(dest)
+                if seg.is_generated_narration:
+                    self._normalize_generated_narration_sequence()
+                if seg.is_generated_narration:
+                    try:
+                        self._write_generated_narration_script(seg)
+                    except OSError as exc:
+                        logger.warning("Could not rewrite narration markdown beside video: %s", exc)
                 self._mark_dirty()
                 self._refresh_editor()
-                self._editor.set_voiceover_status(
-                    f"\u2713 Voiceover updated ({seg.duration_ms / 1000:.1f}s)."
+                status_setter = (
+                    self._editor.set_narration_status
+                    if seg.is_generated_narration
+                    else self._editor.set_voiceover_status
                 )
+                if seg.is_generated_narration:
+                    script_name = (
+                        os.path.basename(seg.script_path)
+                        if seg.script_path
+                        else "the narration script"
+                    )
+                    status_setter(
+                        f"✓ Updated {seg.generated_narration_label}. Speech is ready "
+                        f"({seg.duration_ms / 1000:.1f}s). Saved {script_name}."
+                    )
+                else:
+                    status_setter(
+                        f"✓ Voiceover updated ({seg.duration_ms / 1000:.1f}s)."
+                    )
             else:
-                self._synthesize_voiceover(seg)
+                self._synthesize_voiceover(
+                    seg,
+                    status_text=(
+                        f"Updating {seg.generated_narration_label} and generating speech…"
+                        if seg.is_generated_narration
+                        else None
+                    ),
+                )
         elif result == _VoiceoverDialog.RESULT_DELETE:
-            self._voiceover_segments = [s for s in self._voiceover_segments if s.id != seg_id]
-            self._mark_dirty()
-            self._refresh_editor()
-            self._editor.set_voiceover_status("Voiceover removed.")
+            if seg.is_generated_narration and not self._confirm_delete_generated_voiceover_segment(seg):
+                return
+            self._remove_voiceover_segment(seg)
 
     def _on_voiceover_deleted(self, seg_id: str) -> None:
         """Handle direct voiceover deletion (keyboard Delete key)."""
-        self._voiceover_segments = [s for s in self._voiceover_segments if s.id != seg_id]
-        self._mark_dirty()
-        self._refresh_editor()
-        self._editor.set_voiceover_status("Voiceover removed.")
+        seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
+        if seg is None:
+            return
+        if seg.is_generated_narration and not self._confirm_delete_generated_voiceover_segment(seg):
+            return
+        self._remove_voiceover_segment(seg)
 
     def _on_voiceover_moved(self, seg_id: str, new_time: float) -> None:
         """Handle voiceover segment drag on the timeline."""
@@ -2094,47 +2752,153 @@ class MainWindow(QMainWindow):
             return
         seg.timestamp = max(0.0, new_time)
         self._voiceover_segments.sort(key=lambda s: s.timestamp)
+        self._zoom_engine.voiceover_segments = self._voiceover_segments
+        if seg.is_generated_narration:
+            self._sync_generated_narration_script()
         self._mark_dirty()
         self._refresh_editor()
 
-    def _synthesize_voiceover(self, seg) -> None:
+    def _synthesize_voiceover(self, seg, status_text: str | None = None) -> bool:
         """Synthesize TTS audio for a voiceover segment."""
+        is_generated = bool(getattr(seg, "is_generated_narration", False))
+        status_setter = (
+            self._editor.set_narration_status
+            if is_generated
+            else self._editor.set_voiceover_status
+        )
         ai_settings = self._load_ai_settings()
         if not ai_settings.tts_configured:
-            self._editor.set_voiceover_status(
-                "TTS not configured. Set a TTS model in \u2699 AI Settings."
+            status_setter(
+                "Set up TTS in ⚙ AI Settings to voice this segment."
+                if is_generated
+                else "Set up TTS in ⚙ AI Settings before you add speech."
             )
-            return
+            return False
         worker = self._ensure_ai_worker()
         if worker.isRunning():
-            self._editor.set_voiceover_status("AI operation already in progress\u2026")
-            return
-        ai_settings.tts_voice = seg.voice
-        import tempfile
-        output_path = os.path.join(
-            tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
-        )
-        worker.run_tts(ai_settings, seg.id, seg.text, output_path,
+            status_setter(
+                "Another AI task is already running. Wait for it to finish, then try again."
+            )
+            return False
+        self._active_ai_context = "narration" if is_generated else "voiceover"
+        resolved_voice = seg.voice or ai_settings.tts_voice
+        if is_generated:
+            resolved_voice = self._generated_narration_batch_voices.get(seg.id, resolved_voice)
+        ai_settings.tts_voice = resolved_voice
+        seg.voice = resolved_voice
+        if is_generated:
+            output_path = self._generated_narration_audio_path(seg)
+        else:
+            import tempfile
+            output_path = os.path.join(
+                tempfile.gettempdir(), f"followcursor_vo_{seg.id[:8]}.wav"
+            )
+        if is_generated and seg.script_markdown:
+            from .ai_service import _clean_narration_spoken_text
+            tts_text = _clean_narration_spoken_text(
+                seg.text or seg.script_markdown,
+                section=seg.generated_narration_label,
+            )
+        else:
+            tts_text = seg.text
+        worker.run_tts(ai_settings, seg.id, tts_text, output_path,
                        rate=seg.rate, volume=seg.volume)
-        self._editor.set_voiceover_status("Synthesizing speech\u2026")
+        seg.tts_generating = True
+        self._refresh_editor()
+        if status_text:
+            status_setter(status_text)
+        elif is_generated:
+            status_setter("Generating speech for this generated segment\u2026")
+        else:
+            status_setter("Generating speech\u2026")
         self._editor.set_ai_busy(True)
+        return True
 
     def _on_ai_tts_result(self, seg_id: str, audio_path: str) -> None:
         """Handle TTS audio file result — associate with the voiceover segment."""
-        self._status_text.setText("Ready")
-        self._editor.set_ai_busy(False)
         seg = next((s for s in self._voiceover_segments if s.id == seg_id), None)
         if seg is None:
+            self._status_text.setText("Ready")
+            self._editor.set_ai_busy(False)
+            self._active_ai_context = ""
             return
+        seg.tts_generating = False
         seg.audio_path = audio_path
         # Probe duration with ffmpeg
         seg.duration_ms = self._probe_audio_duration(audio_path)
+        if seg.is_generated_narration:
+            self._normalize_generated_narration_sequence()
+        if seg.is_generated_narration:
+            try:
+                self._write_generated_narration_script(seg)
+            except OSError as exc:
+                logger.warning("Could not rewrite narration markdown beside video: %s", exc)
         self._mark_dirty()
         self._refresh_editor()
-        self._editor.set_voiceover_status(
-            f"\u2713 Speech synthesized ({seg.duration_ms / 1000:.1f}s). "
-            "Will be included in export."
-        )
+        if seg.is_generated_narration and self._generated_narration_batch_total:
+            if self._maybe_retry_generated_narration_tts(seg):
+                return
+            self._generated_narration_batch_completed += 1
+            if self._generated_narration_batch_queue:
+                return
+
+            total_segments = self._generated_narration_batch_total
+            script_name = self._generated_narration_batch_script_name or (
+                os.path.basename(seg.script_path)
+                if seg.script_path
+                else "the narration markdown"
+            )
+            from .ai_service import _narration_total_audio_tolerance_ms
+
+            generated_segments = self._generated_narration_segments()
+            spoken_ends = [
+                generated_seg.timestamp + generated_seg.duration_ms
+                for generated_seg in generated_segments
+                if generated_seg.duration_ms > 0
+            ]
+            total_drift_note = ""
+            if spoken_ends and self._rec_duration_ms > 0:
+                spoken_end_ms = max(spoken_ends)
+                total_tolerance_ms = _narration_total_audio_tolerance_ms(self._rec_duration_ms)
+                drift_ms = self._rec_duration_ms - spoken_end_ms
+                if abs(drift_ms) > total_tolerance_ms:
+                    logger.warning(
+                        "Generated voiceover batch still ends %.1fs %s the video (tolerance %.1fs)",
+                        abs(drift_ms) / 1000.0,
+                        "before" if drift_ms > 0 else "after",
+                        total_tolerance_ms / 1000.0,
+                    )
+                else:
+                    total_drift_note = " Duration now tracks the video closely."
+            self._clear_generated_narration_synthesis_batch()
+            self._status_text.setText("Ready")
+            self._editor.set_ai_busy(False)
+            self._active_ai_context = ""
+            self._editor.set_narration_status(
+                f"✓ Narration is ready. Saved {script_name} and generated speech for "
+                f"{total_segments} segment{'s' if total_segments != 1 else ''}."
+                f"{total_drift_note}"
+            )
+            return
+
+        self._status_text.setText("Ready")
+        self._editor.set_ai_busy(False)
+        self._active_ai_context = ""
+        if seg.is_generated_narration:
+            script_name = (
+                os.path.basename(seg.script_path)
+                if seg.script_path
+                else "the narration markdown"
+            )
+            self._editor.set_narration_status(
+                f"✓ {seg.generated_narration_label} is ready "
+                f"({seg.duration_ms / 1000:.1f}s). Updated {script_name}."
+            )
+        else:
+            self._editor.set_voiceover_status(
+                f"\u2713 Speech is ready ({seg.duration_ms / 1000:.1f}s). "
+                "Will be included in export."
+            )
 
     def _probe_audio_duration(self, path: str) -> float:
         """Get the duration of an audio file in milliseconds via ffprobe/ffmpeg."""
@@ -2167,15 +2931,53 @@ class MainWindow(QMainWindow):
         logger.error("AI error (%s): %s", task, msg)
         self._status_text.setText("Ready")
         self._editor.set_ai_busy(False)
+        had_generated_batch = self._generated_narration_batch_total > 0
+        self._clear_generated_narration_synthesis_batch()
+        for _seg in self._voiceover_segments:
+            if _seg.tts_generating:
+                _seg.tts_generating = False
         truncated = msg[:200]
         if task == "zoom":
             self._editor.set_ai_zoom_status(f"AI error: {truncated}")
+        elif task == "chapters" or self._active_ai_context == "chapters":
+            self._editor.set_chapters_status(
+                f"Couldn't generate chapters: {truncated}"
+            )
+        elif task == "narration" or self._active_ai_context == "narration":
+            if had_generated_batch:
+                self._editor.set_narration_status(
+                    "The draft is on the Voice track, but speech could not finish: "
+                    f"{truncated}"
+                )
+            else:
+                self._editor.set_narration_status(
+                    f"Couldn't generate narration: {truncated}"
+                )
         else:
-            self._editor.set_voiceover_status(f"AI error: {truncated}")
+            self._editor.set_voiceover_status(
+                f"Couldn't generate speech: {truncated}"
+            )
+        self._active_ai_context = ""
 
     def _on_ai_status(self, msg: str) -> None:
         """Handle AI status updates."""
-        self._status_text.setText(msg)
+        display_msg = msg
+        if self._active_ai_context == "narration":
+            if msg in {
+                "Generating GPT-5.4 narration clips…",
+                "Generating GPT-5.4 voiceover segments…",
+            }:
+                display_msg = "Drafting GPT-5.4 voiceover segments…"
+            elif msg in {"Synthesizing speech…", "Generating speech…"}:
+                display_msg = self._generated_narration_batch_status()
+            self._editor.set_narration_status(display_msg)
+        elif self._active_ai_context == "chapters":
+            if msg == "Generating AI chapter markers…":
+                display_msg = "Drafting aligned chapter markers…"
+            elif msg == "Synthesizing AI chapters from shared recording context…":
+                display_msg = "Finalizing aligned chapter markers…"
+            self._editor.set_chapters_status(display_msg)
+        self._status_text.setText(display_msg)
 
     # ── undo / redo ─────────────────────────────────────────────────
 
@@ -2254,13 +3056,19 @@ class MainWindow(QMainWindow):
 
         # Reject if too close to a trim handle
         if abs(time_ms - eff_start) < MIN_GAP_MS or abs(time_ms - eff_end) < MIN_GAP_MS:
+            self._status_text.setOpenExternalLinks(False)
+            self._status_text.setText("Split is too close to a trim handle or cut.")
             return
 
         # Reject if too close to any existing segment boundary
         for seg in segments:
             if abs(time_ms - seg.start_ms) < MIN_GAP_MS:
+                self._status_text.setOpenExternalLinks(False)
+                self._status_text.setText("Split is too close to a trim handle or cut.")
                 return
             if abs(time_ms - seg.end_ms) < MIN_GAP_MS:
+                self._status_text.setOpenExternalLinks(False)
+                self._status_text.setText("Split is too close to a trim handle or cut.")
                 return
 
         # Find the segment that contains time_ms
@@ -2270,6 +3078,8 @@ class MainWindow(QMainWindow):
                 target = seg
                 break
         if target is None:
+            self._status_text.setOpenExternalLinks(False)
+            self._status_text.setText("Click inside a clip before splitting it.")
             return
 
         # Push undo before mutation
@@ -2285,6 +3095,8 @@ class MainWindow(QMainWindow):
         self._video_segments = segments
         self._mark_dirty()
         self._refresh_editor()
+        self._status_text.setOpenExternalLinks(False)
+        self._status_text.setText(f"Split clip at {_fmt_time(time_ms)}.")
 
     def _on_drag_finished(self) -> None:
         """Reset undo debounce flag when a timeline drag completes."""
@@ -2925,7 +3737,6 @@ class MainWindow(QMainWindow):
         self._stop_voiceover_audio()
         self._preview.seek_to(time_ms)
         self._preview.set_current_time(time_ms)
-        self._editor.set_current_time(time_ms)  # Update editor panel for annotation placement
         self._zoom_engine.update(time_ms)
         self._preview.set_zoom(
             self._zoom_engine.current_zoom,
@@ -3039,9 +3850,6 @@ class MainWindow(QMainWindow):
                     encoder_id=self._editor.encoder_id,
                     voiceover_segments=self._voiceover_segments or None,
                     video_segments=self._video_segments or None,
-                    key_events=self._key_events or None,
-                    keystroke_config=self._keystroke_config,
-                    annotations=self._annotations,
                     chapters=self._chapters or None,
                 )
             except Exception:
@@ -3284,17 +4092,36 @@ class MainWindow(QMainWindow):
 
         At least one segment must remain.  Zoom keyframes within the
         deleted segment's half-open interval [start_ms, end_ms) are
-        removed.  Voiceover segments are removed if their time range
-        [timestamp, timestamp + duration_ms) overlaps the deleted
-        segment at all (partial overlap means the audio would be
-        clipped, so the entire voiceover is removed).  All timestamped
-        data after the deleted segment is retimed so the remaining
-        segments close the gap.
+        removed. Manual voiceover segments that overlap the deleted
+        clip are removed because their audio would be clipped. Generated
+        narration segments are trimmed to the surviving span, retimed
+        through the ripple, and re-synthesized so the narration stays
+        aligned with the edited timeline. All timestamped data after
+        the deleted segment is retimed so the remaining segments close
+        the gap.
         """
+        from .ai_service import ripple_delete_voiceover_segments
+
         if len(self._video_segments) <= 1:
             return
         seg = next((s for s in self._video_segments if s.id == seg_id), None)
         if seg is None:
+            return
+        voiceover_result = ripple_delete_voiceover_segments(
+            self._voiceover_segments,
+            seg.start_ms,
+            seg.end_ms,
+            video_duration_ms=self._rec_duration_ms,
+        )
+        generated_updated = len(voiceover_result.regenerated_segment_ids)
+        generated_removed = voiceover_result.removed_generated_count
+        manual_removed = voiceover_result.removed_manual_count
+        if not self._confirm_delete_video_segment(
+            seg,
+            generated_updated=generated_updated,
+            generated_removed=generated_removed,
+            manual_removed=manual_removed,
+        ):
             return
         self._zoom_engine.push_undo()
 
@@ -3307,15 +4134,9 @@ class MainWindow(QMainWindow):
             kf for kf in self._zoom_engine.keyframes
             if not (seg.start_ms <= kf.timestamp < seg.end_ms)
         ]
-        # Remove voiceover segments that overlap the deleted segment.
-        # A voiceover occupies [v.timestamp, v.timestamp + v.duration_ms).
-        # Any overlap with [seg.start_ms, seg.end_ms) means the audio would
-        # be partially clipped, so remove the entire voiceover.
-        self._voiceover_segments = [
-            v for v in self._voiceover_segments
-            if not (v.timestamp < seg.end_ms
-                    and v.timestamp + v.duration_ms > seg.start_ms)
-        ]
+        # Generated narration is trimmed/retimed, while overlapping manual
+        # voiceovers are dropped because they cannot be rewritten safely.
+        self._voiceover_segments = voiceover_result.segments
         self._zoom_engine.voiceover_segments = self._voiceover_segments
 
         # Remove the video segment itself
@@ -3332,11 +4153,6 @@ class MainWindow(QMainWindow):
         for kf in self._zoom_engine.keyframes:
             if kf.timestamp >= seg.end_ms:
                 kf.timestamp -= gap
-
-        # Retime voiceover segments after the deleted region
-        for v in self._voiceover_segments:
-            if v.timestamp >= seg.end_ms:
-                v.timestamp -= gap
 
         # Retime click events after the deleted region
         for ce in self._click_events:
@@ -3376,9 +4192,73 @@ class MainWindow(QMainWindow):
             elif self._trim_end_ms > seg.start_ms:
                 self._trim_end_ms = seg.start_ms
 
+        if generated_updated or generated_removed:
+            self._sync_generated_narration_script()
         self._zoom_engine.video_segments = self._video_segments
+        self._zoom_engine.voiceover_segments = self._voiceover_segments
         self._mark_dirty()
         self._refresh_editor()
+        self._status_text.setOpenExternalLinks(False)
+        self._status_text.setText(
+            f"Deleted clip {_fmt_time(seg.start_ms)}–{_fmt_time(seg.end_ms)} and retimed everything after it."
+        )
+        if manual_removed:
+            self._editor.set_voiceover_status(
+                f"Deleted clip. Removed {manual_removed} manual voiceover segment"
+                f"{'s' if manual_removed != 1 else ''} that overlapped the cut."
+            )
+        if not (generated_updated or generated_removed):
+            return
+
+        script_name = "the narration markdown"
+        if self._video_path:
+            root, _ = os.path.splitext(self._video_path)
+            script_name = os.path.basename(f"{root}_voiceover.md")
+
+        removed_note = ""
+        if generated_removed:
+            if self._generated_narration_segments():
+                removed_note = (
+                    f" Removed {generated_removed} generated voiceover segment"
+                    f"{'s' if generated_removed != 1 else ''} that fell fully inside the deleted clip."
+                )
+            else:
+                removed_note = (
+                    f" Removed {generated_removed} generated voiceover segment"
+                    f"{'s' if generated_removed != 1 else ''} and removed {script_name} because no generated narration remains."
+                )
+
+        if not generated_updated:
+            self._editor.set_narration_status(removed_note.strip())
+            return
+
+        intro_text = (
+            f"Updated {generated_updated} generated voiceover segment"
+            f"{'s' if generated_updated != 1 else ''} for the new cut. "
+            "Speech starts automatically."
+        )
+        if generated_removed:
+            intro_text += (
+                f" Removed {generated_removed} fully deleted generated segment"
+                f"{'s' if generated_removed != 1 else ''}."
+            )
+
+        self._prepare_generated_narration_synthesis_batch(
+            list(voiceover_result.regenerated_segment_ids),
+            script_name,
+            intro_text,
+            prefix_text=f"{intro_text}{removed_note}",
+            manual_action_text=(
+                "Open an updated generated segment on the Voice track to try again."
+            ),
+        )
+        if self._try_start_generated_narration_synthesis_batch(
+            prefix_text=f"{intro_text}{removed_note}",
+            manual_action_text=(
+                "Open an updated generated segment on the Voice track to try again."
+            ),
+        ):
+            return
 
     # ── lazy exporter ───────────────────────────────────────────────
 
@@ -3453,7 +4333,7 @@ class MainWindow(QMainWindow):
             duration=self._rec_duration_ms,
             mouse_track=self._mouse_track,
             keyframes=list(self._zoom_engine.keyframes),  # snapshot
-            key_events=self._key_events,
+            key_events=None,
             click_events=self._click_events,
             frame_timestamps=self._frame_timestamps or None,
             trim_start_ms=self._trim_start_ms,
@@ -3490,8 +4370,6 @@ class MainWindow(QMainWindow):
                 path, self._video_path, session,
                 self._monitor_rect, self._recorder.actual_fps,
                 self._bg_preset, self._frame_preset, self._click_preset,
-                self._keystroke_config,
-                self._annotations,
                 metadata_only=is_resave,
                 parent=self,
             )
@@ -3565,7 +4443,12 @@ class MainWindow(QMainWindow):
             session = proj["session"]
             self._mouse_track = session.mouse_track
             self._mouse_track_timestamps = [mp.timestamp for mp in self._mouse_track]
-            self._key_events = session.key_events or []
+            if session.key_events:
+                logger.info(
+                    "Ignoring %d legacy keystroke event(s) from the loaded project",
+                    len(session.key_events),
+                )
+            self._key_events = []
             self._click_events = session.click_events or []
             self._zoom_engine.click_events = self._click_events
             self._video_segments = list(session.video_segments) if session.video_segments else []
@@ -3589,7 +4472,8 @@ class MainWindow(QMainWindow):
 
             # Restore voiceover segments
             self._voiceover_segments = list(session.voiceover_segments) if session.voiceover_segments else []
-            self._zoom_engine.voiceover_segments = self._voiceover_segments
+            self._normalize_generated_narration_sequence()
+            self._restore_generated_narration_assets()
 
             # Restore background preset if saved
             loaded_bg = proj.get("bg_preset")
@@ -3610,18 +4494,10 @@ class MainWindow(QMainWindow):
                 self._preview.set_click_preset(loaded_click)
                 self._editor.set_click_preset(loaded_click)
 
-            # Restore keystroke config if saved
-            loaded_keystroke = proj.get("keystroke_config")
-            if loaded_keystroke:
-                self._keystroke_config = loaded_keystroke
-                self._editor.set_keystroke_config(loaded_keystroke)
-
-            # Restore annotations if saved
-            loaded_annotations = proj.get("annotations")
-            if loaded_annotations:
-                self._annotations = loaded_annotations
-                self._preview.set_annotations(loaded_annotations)
-                self._editor.refresh_annotations_list(loaded_annotations)
+            self._keystroke_config = None
+            self._annotations = None
+            self._preview.set_keystroke_data([], None)
+            self._preview.set_annotations(None)
 
             # Restore chapters if saved
             if session.chapters:
@@ -3765,14 +4641,32 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         """Apply the current theme (dark or light) to the application."""
+        if is_mica_supported():
+            enable_mica(int(self.winId()), dark_mode=self._dark_mode)
         theme_stylesheet = get_theme(dark=self._dark_mode)
+        # When Mica transparent background is active (objectName set by
+        # _apply_mica_transparency), keep the transparent-background overlay
+        # rules so the Mica backdrop shows through on every theme switch.
+        if self.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground):
+            theme_stylesheet += (
+                " QMainWindow#micaHostWindow { background-color: transparent; }"
+                " QWidget#micaCentralWidget { background-color: transparent; }"
+            )
         self.setStyleSheet(theme_stylesheet)
+        # Sync the application palette so that widgets not fully covered by QSS
+        # (e.g. palette-driven native controls) use the correct theme colours.
+        QApplication.instance().setPalette(get_base_palette(dark=self._dark_mode))
         clear_icon_cache()
         self._refresh_icons()
+        # Propagate theme to custom-painted widgets
+        if hasattr(self, "_timeline"):
+            self._timeline.set_dark_mode(self._dark_mode)
         logger.info(f"Applied {'dark' if self._dark_mode else 'light'} theme")
 
     def _refresh_icons(self) -> None:
         """Reload all widget icons with colours matching the active theme."""
+        if not hasattr(self, "_title_bar"):
+            return
         self._title_bar.refresh_icons(dark=self._dark_mode)
         fg = T.FG_PRIMARY if self._dark_mode else T.LIGHT_FG_1
         self._btn_edit_view.setIcon(load_icon("play", color=fg))

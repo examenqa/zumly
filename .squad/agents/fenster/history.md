@@ -1,156 +1,189 @@
 # Fenster — Work History
 
-## Completed Work
+## Current Focus: Narration Guidance Prompt
 
-### 2025-01-04 — Issue #53: Refactor video_exporter.py export thread
-**Branch:** `squad/53-refactor-exporter`  
-**PR:** https://github.com/sabbour/followcursor/pull/58
+### 2026-04-15T23:04:02.621Z — Optional Narration Guidance Prompt
 
-Decomposed the 300+ line `_run()` method into composable, testable phases:
+**Status:** ✅ Complete
+**Validation:** 468 pytest tests passed
 
-- **Extracted `GeometryComputer` class** — Pure-logic bezel/device layout calculations with no Qt or OpenCV dependencies in the constructor. Enables unit testing geometry without video files.
-- **Added typed result dataclasses** — `VideoProbeResult` and `GeometryResult` for explicit phase outputs instead of raw dicts/floats.
-- **Refactored phases**:
-  - `_probe_video()` — Probes source metadata, reconciles FPS/frame-count discrepancies, determines output dimensions
-  - `_compute_geometry()` — Uses `GeometryComputer` to calculate device/screen layout, builds static canvas layers (background, bezel, masks)
-- **12 new unit tests** covering:
-  - No-frame mode (landscape, portrait video on canvas)
-  - Standard bezel geometry, aspect ratio preservation
-  - Edge cases: small canvas, high padding, zero bezel width
-  - All 5 built-in frame presets
+#### What Was Done
 
-**Testing:** All 347 tests pass (339 existing + 12 new). Export behavior unchanged across all formats (MP4, GIF) and frame types.
+Added backend support for an optional user-entered narration guidance prompt that influences what the AI-generated script focuses on.
 
-## Learnings
+**New helper:** `_build_narration_system_prompt(guidance: str = "") -> str`
+- Returns `_NARRATION_SYSTEM_PROMPT` unchanged when guidance is empty/whitespace
+- Appends a "Creator guidance" block when non-empty
+- Applied to all three AI call sites that can write or rewrite narration text:
+  - `_generate_narration_segments` (single-pass and batch-synthesis paths)
+  - `_polish_narration_segments_for_timing` (pacing/style rewrite pass)
 
-### Pure-Logic Extraction Pattern
-When refactoring complex methods with tangled dependencies (Qt, OpenCV, FFmpeg), extract **pure-logic classes first**. The `GeometryComputer` class demonstrates this:
-- **Constructor takes only primitives** (ints, dataclasses) — no Qt/OpenCV objects
-- **Single `compute()` method returns a dict** — deterministic, easily testable
-- **No side effects** — no logging, no file I/O, no state mutation
+**Persistence:** Session-only. Guidance is a generation-time parameter (same pattern as voice), not project content. Not written to `.fcproj`.
 
-This pattern enables:
-1. **Unit testing without mocking** — no need for fake `cv2.VideoCapture` or `QSettings`
-2. **Property-based testing** — can fuzz inputs, verify invariants (e.g., screen always fits in canvas)
-3. **Debugging in isolation** — reproduce geometry bugs without full export pipeline
+**Existing plumbing (already in branch):**
+- `generate_narration(guidance_prompt: Optional[str] = None)` was already present
+- `main_window._on_generate_narration_requested(voice, guidance)` was already present
+- McManus had already wired the `Signal(str, str)` and `QPlainTextEdit` in `editor_panel.py`
 
-### Phase Decomposition Strategy
-The export pipeline had 5 implicit phases buried in one method. Key to successful refactoring:
-1. **Start with phases that have clear I/O boundaries** — probe (reads metadata, returns dataclass), geometry (reads dimensions, returns canvas/masks)
-2. **Extract one phase at a time** — don't refactor everything at once
-3. **Keep original behavior intact** — run full test suite after each phase extraction
+#### Files Changed
 
-Remaining phases to extract (future work):
-- `_prepare_audio()` — voiceover merge
-- `_render_frames()` — frame loop, zoom/cursor application
-- `_finalize()` — FFmpeg encoding with fallback chain
+- `followcursor/app/ai_service.py` — added `_build_narration_system_prompt`; updated `_generate_narration_segments` and `_polish_narration_segments_for_timing`
+- `followcursor/tests/test_ai_service.py` — added `TestNarrationGuidancePrompt` (6 tests)
+- `.squad/decisions/inbox/fenster-narration-guidance.md` — decision record
 
-### Dataclass vs Dict for Phase Results
-Originally considered returning raw dicts from phase methods. Switched to typed dataclasses (`VideoProbeResult`, `GeometryResult`) because:
-- **Type safety** — IDE autocomplete, type checker catches missing fields
-- **Self-documenting** — field names + types make intent clear without docstrings
-- **Testable** — can construct test fixtures without worrying about dict key typos
+---
 
-Trade-off: more boilerplate, but worth it for long-lived code that multiple devs will touch.
+### 2026-04-15 — Narration Feature Spawn & Completion
 
-### Windows ctypes + Geometry Calculations
-Bezel geometry uses floating-point math with `np.float32` arrays. Critical to:
-- **Clamp values before casting to int** — avoid negative coordinates or out-of-bounds indices
-- **Ensure even dimensions** — H.264 requires even width/height; geometry must round correctly
-- **Test edge cases** — portrait video, small canvas (640×480), ultra-wide monitors
+**Status:** ✅ Complete  
+**Validation:** All pytest (435 tests) passed
 
-The geometry computer validates these constraints in pure logic before OpenCV touches any pixels.
+#### Implementation
 
-### 2025-01-06 — Issue #62: Keystroke viz exposes passwords — filter modes not implemented
-**Branch:** `squad/62-keystroke-security`  
-**PR:** https://github.com/sabbour/followcursor/pull/63
+Automated narration uses GPT-5.4 runtime with:
+- Sequential multimodal batching (respects 50-image provider cap)
+- Five-beat presentation structure: Context → Background → Prompt/Action → Walkthrough → Result
+- Each beat becomes a `VoiceoverSegment` on voiceover track
+- Combined markdown sidecar `<video_name>_voiceover.md`
 
-Critical security fix: keystroke overlay showed ALL typed characters (including passwords) by default. Filter modes were defined but never implemented in the renderer.
+#### Key Features
 
-**Changes:**
-- **Implemented filter_mode logic in `keystroke_renderer.py`:**
-  - Modified `_group_keystrokes()` to accept `filter_mode` parameter
-  - Created `_should_show_group()` helper to filter keystroke groups based on mode
-  - "all" mode shows everything (user explicitly chose this)
-  - "modifiers-only" shows only keystrokes with Ctrl, Alt, or Win modifiers
-  - "shortcuts-only" shows only keyboard shortcuts (Ctrl+X, Alt+Tab, etc.), filters single character presses
-- **Changed default from "all" to "shortcuts-only":**
-  - Updated `KeystrokeOverlayConfig` dataclass default
-  - Updated `from_dict()` for backward compatibility
-  - Updated UI combo box default selection
-- **Added security warnings in `editor_panel.py`:**
-  - Dynamic tooltip updates when filter mode changes
-  - ⚠️ Warning when "All Keys" selected about passwords/sensitive input
-  - Helpful descriptions for safer modes
+- **Multimodal inputs:** Zoom keyframes, annotations, mouse motion, clicks, keystrokes, sampled frames
+- **Duration alignment:** Five-section timing plan + polish pass + TTS rate nudges
+- **Ripple-delete safe:** Generated segments trimmed (not destroyed) during editing
+- **Provider-safe:** Batching + rate-limiting pause for long runs
 
-**Testing:** All 347 tests passed.
+#### Decision
 
-## Learnings
+See `.squad/decisions.md`: *Narration Redesign — Backend & UI Alignment (2026-04-15)*
 
-### Security by Default: Safe Defaults Trump Convenience
-The original "show all keystrokes" default was convenient for demos but dangerous for real-world use. Key lessons:
+---
 
-1. **Default to the safest option** — "shortcuts-only" hides passwords by default. Users who want full keystroke capture must explicitly opt in.
-2. **Progressive disclosure of risk** — The "All Keys" mode now shows a warning tooltip (⚠️) so users understand the security implications before choosing it.
-3. **Filter at the source** — The filter happens in `_group_keystrokes()` BEFORE grouping/rendering, not after. This ensures filtered keystrokes never make it into the rendering pipeline, even in edge cases.
+### 2026-04-15T22:56:10.313Z — Narration Timing & Chapter Knowledge Consolidation
 
-### Filtering Before Grouping vs. After
-Initially considered filtering after keystroke groups were formed, but realized this creates a gap:
-- **After-grouping filter:** A password like "MyPass123" might form a group, then get filtered as a whole, but intermediate state could leak in logs or intermediate data structures.
-- **Before-grouping filter (chosen approach):** Individual keystrokes are filtered immediately, so they never participate in grouping. This prevents even partial passwords from being grouped together.
+**Mode:** Background agent spawned by Scribe; concurrent work with McManus
+**Task:** Three backend sub-tasks: voiceover timing correction, chapter knowledge unification, keystroke/annotation removal
 
-Trade-off: Slightly more complex filtering logic (track VK codes through grouping), but eliminates entire classes of security bugs.
+#### Scope Completed
 
-### Modifier Key Detection: Win32 VK Code Ranges
-Windows virtual key codes for modifiers are not contiguous:
-- **Ctrl/Alt/Win modifiers:** 0x11, 0x12, 0x5B, 0x5C, 0xA2-0xA5 (used for "shortcuts-only" filter)
-- **Shift keys:** 0x10, 0xA0, 0xA1 (NOT considered a modifier for "shortcuts-only" — Shift+A is still just typing)
+1. **Voiceover Timing Alignment After Real TTS Duration Measurement**
+   - Generated narration segments timestamped before actual TTS WAV durations existed; later clips overlapped once real audio landed
+   - Fix: After AI worker finishes each segment, push later segments forward with measured durations (inferred placeholders for unsynthesized later beats)
+   - Auto-TTS batch waits fully for each segment before queuing next retry/clip
+   - Original planned timing windows preserved for one bounded retry even after later clips retimed forward (maintains subtle narration rate-correction)
+   - Result: Voice track stays non-overlapping after real TTS durations land
 
-The filter uses a frozenset for O(1) lookup. Critical to exclude Shift from the modifier set, otherwise typing capital letters would be shown as "shortcuts" when they're really just normal text entry.
+2. **Voice Consistency Through Auto-Synthesis Batch**
+   - Batch-selected/generated segment voice pinned through auto-synthesis and retries
+   - Set Azure Speech's `speech_synthesis_voice_name` before constructing synthesizer
+   - Avoids SDK/default fallback on plain-text TTS calls without SSML
+   - Voice selection preserved across batch operations
 
-### Dynamic Tooltip Updates: User Feedback Loop
-The keystroke filter dropdown initially had a static tooltip listing all three modes. Changed to dynamic tooltips that update when the selection changes:
-- **"All Keys":** Shows prominent ⚠️ warning about passwords
-- **"Modifiers Only":** Explains what will be shown
-- **"Shortcuts Only":** Explains safer behavior
+3. **AI Chapters Now Unified with Narration Knowledge**
+   - Chapter generation reuses `SharedRecordingKnowledge` artifact instead of separate heuristic/visual analysis pass
+   - Shared artifact carries: frame samples, activity summary, click/key beats, zoom cues, annotations, provider-safe batch notes
+   - Benefits: Chapters and narration aligned on same evidence (no drift); avoids paying twice for frame extraction + batch analysis; exported chapter beats stay aligned with narration story arc
+   - Chapter behavior: Regeneration replaces only prior generated markers; manual chapters preserved; titles stay short/outcome-focused (no literal click/zoom narration)
 
-This creates a feedback loop: users see the security implication RIGHT as they change the setting, not buried in documentation. This reduces accidental password leaks during tutorial recordings.
+4. **Backend Contract: Keystroke & Annotation Removal**
+   - `RecordingSession.key_events` is legacy-load-only; new sessions have no keystroke stream
+   - `load_project()` returns `keystroke_config = None` and `annotations = None`
+   - Keyboard capture remains as compatibility shim only; no new keystroke events collected
+   - Auto-zoom and chapter heuristics no longer use keystrokes (clicks stay as only input-activity cue)
+   - AI narration/chapter context no longer uses keystrokes or annotations
+   - Compatibility: Legacy `.fcproj` files load but data ignored and normalized away; dropped on save
+   - UI can safely remove controls/docs without waiting on further backend work
 
-## Issue #133 — README accuracy (fix/133-readme-accuracy)
-- Fixed screen_recorder.py docstring line 6 (was: "lossless AVI", now: H.264 CRF 18 ultrafast MP4)
-- Added 8 missing features to README: AI Smart Zoom, Voiceover/TTS, Chapters, Annotations, Keystroke Overlay, Click Effects, Pan Path Points, Segment Deletion
-- Fixed architecture table Recording Pipe entry
-- PR opened for #133
+#### Coordination Notes
 
-## Issue #133 — README Accuracy (2026-04-07)
+- **Partner:** McManus (UI) — playback time readout custom paint, chapter flag rendering, annotations/keystroke section removal, backward-compatible project loading
+- **Decision entries (now merged to decisions.md):**
+  - `.squad/decisions/inbox/fenster-overlap-fix.md`
+  - `.squad/decisions/inbox/fenster-ai-chapters.md`
+  - `.squad/decisions/inbox/fenster-remove-annotations-keystrokes.md`
+- Persistence layer (project_file.py) normalizes away keystroke_config and annotations on load/save
+- AI service module stops requesting keystroke context for narration and chapter generation
+- Voice track timing logic now measures actual WAV durations and retimes downstream segments
 
-**Branch:** fix/133-readme-accuracy  
-**PR:** #139
+#### Validation
 
-### Summary
+✓ Full pytest (435 tests) passed
+✓ Compileall clean
+✓ Timing logic verified with real TTS measurements
 
-Fenster identified and corrected multiple README inaccuracies:
+#### Learnings
 
-1. **Added 8 missing features** with user-facing language:
-   - Segment deletion
-   - Keystroke overlay
-   - Chapters
-   - Annotations
-   - Pan/zoom scripting (pan path points)
-   - Multiple background presets
-   - Multiple device frames
-   - Zoom activity analysis
+- Draft timestamps before TTS synthesis + synchronous TTS queueing = overlap risk; measuring actual WAV durations and retiming downstream fixes the issue
+- Shared recording-knowledge artifact (single cache of frame samples + activity + batch notes) naturally aligns chapters and narration; separate passes cause drift
+- Backward-compatible keystroke_config/annotations handling (load-ok, clear-on-save) lets backend safely remove features without breaking old workflows
 
-2. **Fixed architecture table** — Updated HuffYuv reference to H.264 (actual codec used in export)
+#### Handoff
 
-3. **Fixed docstring** — Corrected return type documentation in `screen_recorder.py`
+Backend cleanup follow-up: Delete dormant compatibility pieces (`AnnotationCollection` / `KeystrokeOverlayConfig` serialization, AI-service annotation plumbing, legacy hook/model helpers) once branch no longer needs to open older `.fcproj` files.
+
+Orchestration log: `.squad/orchestration-log/20260415T225610-fenster.md`
+
+---
+
+**For archived work history, see:** `history-archive.md`
+
+---
+
+## 2026-04-15T23:04:02.621Z — Voiceover Generation State Machine
+
+**Status:** ✅ Complete  
+**Session:** voiceover-generation-indicator  
+**Coordination:** McManus (UI spinner + guidance field)
+
+### What Was Done
+
+Added `VoiceoverSegment.tts_generating` runtime-only flag to signal TTS synthesis in progress. State machine:
+- Created segments: `False`
+- Handed to `AIWorker.run_tts`: **`True`**
+- `_on_ai_tts_result` completes: `False`
+- `_on_ai_error` fires: `False` on all segments
+
+**Persistence:** Never serialized. Segments loaded from `.fcproj` always start `False`.
+
+**Equality:** `compare=False` — two segments differing only in synthesis state are equal (same authored content).
+
+### Files Changed
+
+- `followcursor/app/models.py` — `tts_generating` field with `compare=False`
+- `followcursor/app/main_window.py` — toggle around synthesis workflow
+- `followcursor/tests/test_models.py` — 5 regression tests
+
+### Integration Point
+
+McManus timeline renderer reads `tts_generating` flag to draw looping spinner overlay while synthesis is in flight.
+
+### Validation
+
+✓ 5 tests pass (default, equality, persistence, toggle, error handling)
+
+---
+
+
+---
+
+## 2026-04-15T23:04:02.621Z — Narration Guidance Prompt Backend (Background Session)
+
+**Status:** ✅ Complete | **Validation:** 468 pytest tests passed
 
 ### Outcome
 
-✅ PR #139 opened — Ready for review. No merge conflicts expected with active branches (#138, #140).
+Confirmed and completed guidance plumbing in ai_service.py. Guidance is injected into main narration generation pass, synthesis/batch pass, and timing-polish rewrite pass.
 
-### Notes
+### Implementation
 
-- README now reflects current complete feature set
-- Maintains user-facing language (no jargon, "you" focus)
-- Tech stack table remains accurate
+- **ai_service.py:** Guidance threaded through all three narration generation phases
+- **test_ai_service.py:** Focused regression tests for guidance-aware narration
+
+### Key Behavior
+
+Guidance is optional, session-only (not persisted to `.fcproj`). Reuses existing `_build_narration_system_prompt()` pattern.
+
+### Coordination
+
+McManus built the UI field. Feature complete and working end-to-end.
+

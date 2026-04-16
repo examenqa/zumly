@@ -1,22 +1,9 @@
-"""Analyze mouse + keyboard + click activity to auto-generate zoom keyframes.
+"""Analyze mouse + click activity to auto-generate zoom keyframes.
 
-Detects two kinds of interesting moments:
-
-1. **Typing zones** — mouse nearly stationary while keys are being pressed.
-   When ``KeyEvent`` objects carry cursor positions (``x``/``y``), the zoom
-   uses the keystroke position directly; otherwise it falls back to the
-   mouse cursor position.
-   Score = keystrokes-per-second in the window (only when mouse is slow).
-
-2. **Click clusters** — ≥1 mouse click within a 3-second sliding window.
-   Zoom targets the centroid of the clicks in that burst.
-   Single clicks are treated as deliberate actions.
-
-All signal types are merged into a single scored timeline, clustered,
-and the top clusters get zoom-in / zoom-out keyframe pairs.
-
-Signal weighting: clicks > typing.  Mouse settlements (cursor resting)
-are **not** used as zoom triggers.
+Click clusters are the only remaining automatic zoom signal. The
+``key_events`` argument is retained for backward-compatible call sites but
+is intentionally ignored now that the keystroke feature has been removed.
+Mouse settlements (cursor resting) are **not** used as zoom triggers.
 """
 
 import logging
@@ -120,7 +107,7 @@ def analyze_activity(
     follow_cursor: bool = True,
     min_gap_ms: int = MIN_GAP_MS,
 ) -> List[ZoomKeyframe]:
-    """Detect activity clusters from mouse + keyboard + click data.
+    """Detect activity clusters from mouse + click data.
 
     Args:
         zoom_level: Zoom factor for auto-keyframes (e.g. 1.25, 1.5, 2.0).
@@ -141,14 +128,17 @@ def analyze_activity(
     mon_w = max(monitor_rect.get("width", 1), 1)
     mon_h = max(monitor_rect.get("height", 1), 1)
 
-    key_timestamps = [k.timestamp for k in key_events] if key_events else []
+    ignored_key_count = len(key_events or [])
     click_list = click_events or []
+    duration = mouse_track[-1].timestamp
 
     logger.info(
-        "Analyzing: %d mouse samples, %d key events, %d click events, duration=%.0fms",
-        len(mouse_track), len(key_timestamps), len(click_list),
-        mouse_track[-1].timestamp,
+        "Analyzing: %d mouse samples, %d ignored legacy key events, %d click events, duration=%.0fms",
+        len(mouse_track), ignored_key_count, len(click_list),
+        duration,
     )
+    if ignored_key_count:
+        logger.debug("Ignoring removed keystroke activity during auto-zoom analysis")
 
     # ── 1. Per-sample mouse velocity + normalized position ──────────
     samples: List[Tuple[float, float, float, float]] = []
@@ -165,104 +155,9 @@ def analyze_activity(
     if not samples:
         return []
 
-    duration = samples[-1][0]
-    n_windows = max(1, int(duration / WINDOW_MS))
-
-    # ── 2. Score each window ────────────────────────────────────────
-    # Each window gets:
-    #   typing_score = keys-per-second (only when mouse is slow)
-    #   label        = "typing" | "click"
-
+    # ── 2. Find click-driven peaks ──────────────────────────────────
     WindowInfo = Tuple[float, float, float, float, str]  # (time, score, x, y, label)
-    windows: List[WindowInfo] = []
-
-    # First pass: compute average speed per window
-    window_speeds: List[Tuple[float, float, float, float]] = []  # (center_t, avg_speed, avg_x, avg_y)
-    for wi in range(n_windows):
-        t_start = wi * WINDOW_MS
-        t_end = t_start + WINDOW_MS
-
-        bucket = [s for s in samples if t_start <= s[0] < t_end]
-        if not bucket:
-            window_speeds.append(((t_start + t_end) / 2, 0.0, 0.5, 0.5))
-            continue
-
-        avg_speed = sum(b[1] for b in bucket) / len(bucket)
-        avg_x = sum(b[2] for b in bucket) / len(bucket)
-        avg_y = sum(b[3] for b in bucket) / len(bucket)
-        center_t = (t_start + t_end) / 2
-        window_speeds.append((center_t, avg_speed, avg_x, avg_y))
-
-    # Second pass: detect settlements (big deceleration) and typing zones
-    for wi in range(n_windows):
-        t_start = wi * WINDOW_MS
-        t_end = t_start + WINDOW_MS
-        center_t, avg_speed, avg_x, avg_y = window_speeds[wi]
-
-        # Count keystrokes in this window
-        n_keys = sum(1 for kt in key_timestamps if t_start <= kt < t_end)
-        kps = n_keys / (WINDOW_MS / 1000)  # keys per second
-
-        # Decide whether this is a typing zone:
-        # - Mouse truly still  → full typing score
-        # - Mouse drifting slowly → reduced typing score (position less certain)
-        mouse_is_still = avg_speed < MOUSE_STILL_PX_MS
-        mouse_slow_enough = avg_speed < MOUSE_TYPING_PX_MS
-        is_typing = mouse_slow_enough and kps >= TYPING_MIN_KPS
-
-        if is_typing:
-            # Score based on typing density; penalize if mouse is drifting
-            base_score = min(kps / 10.0, 1.0) * WEIGHT_TYPING
-            score = base_score if mouse_is_still else base_score * 0.7
-
-            # Use KeyEvent positions when available — they capture
-            # the cursor location at each keystroke, giving a more
-            # accurate typing location than the mouse track average.
-            typed_in_window = [
-                k for k in (key_events or [])
-                if t_start <= k.timestamp < t_end and k.x is not None and k.y is not None
-            ]
-            if typed_in_window:
-                avg_x = sum(
-                    max(0.0, min(1.0, (k.x - mon_left) / mon_w))  # type: ignore[operator]
-                    for k in typed_in_window
-                ) / len(typed_in_window)
-                avg_y = sum(
-                    max(0.0, min(1.0, (k.y - mon_top) / mon_h))  # type: ignore[operator]
-                    for k in typed_in_window
-                ) / len(typed_in_window)
-
-            windows.append((center_t, score, avg_x, avg_y, "typing"))
-        # Mouse settlements (cursor resting) are intentionally not
-        # tracked — only typing and click signals generate zoom events.
-
-    # ── 3. Find peaks per signal type ───────────────────────────────
-    typing_windows = [w for w in windows if w[4] == "typing"]
-
-    logger.info(
-        "Windows: %d typing",
-        len(typing_windows),
-    )
-
     peaks: List[WindowInfo] = []
-
-    # Typing peaks: sustained typing runs (merge consecutive typing windows
-    # into runs, take the center of each run)
-    if typing_windows:
-        runs: List[List[WindowInfo]] = []
-        current_run: List[WindowInfo] = [typing_windows[0]]
-        for tw in typing_windows[1:]:
-            if tw[0] - current_run[-1][0] <= WINDOW_MS * 1.5:
-                current_run.append(tw)
-            else:
-                runs.append(current_run)
-                current_run = [tw]
-        runs.append(current_run)
-
-        for run in runs:
-            # Pick the window with highest typing score in this run
-            best = max(run, key=lambda w: w[1])
-            peaks.append(best)
 
     # Click-cluster peaks: clicks within a sliding window
     if click_events and len(click_events) >= CLICK_MIN_COUNT:
@@ -293,7 +188,7 @@ def analyze_activity(
                 i += 1
 
     if not peaks:
-        return []  # no typing or click activity → no zoom keyframes
+        return []  # no click activity → no zoom keyframes
 
     # Log peak breakdown
     peak_types = {}
@@ -305,11 +200,11 @@ def analyze_activity(
     #
     # Two peaks merge into the same cluster when EITHER:
     #   a) they are within min_gap_ms of any peak already in the cluster, OR
-    #   b) they share the same type (click / typing), are spatially close
+    #   b) they are click peaks that are spatially close
     #      (< SPATIAL_MERGE_DIST), and within an extended time threshold.
     #
     # This prevents repeated zoom-out → zoom-in cycles when the user
-    # clicks or types in the same area with small pauses.
+    # clicks in the same area with small pauses.
     peaks.sort(key=lambda p: p[0])
     clusters: List[List[WindowInfo]] = []
     current_cluster: List[WindowInfo] = [peaks[0]]
@@ -322,11 +217,10 @@ def analyze_activity(
             if gap < min_gap_ms:
                 should_merge = True
                 break
-            # (b) extended merge for same-type, spatially close peaks
-            if p[4] == cp[4] and p[4] in ("click", "typing"):
+            # (b) extended merge for same-type, spatially close click peaks
+            if p[4] == cp[4] and p[4] == "click":
                 dist = math.sqrt((p[2] - cp[2]) ** 2 + (p[3] - cp[3]) ** 2)
-                ext_gap = CLICK_MERGE_GAP_MS if p[4] == "click" else TYPING_MERGE_GAP_MS
-                if dist < SPATIAL_MERGE_DIST and gap < ext_gap:
+                if dist < SPATIAL_MERGE_DIST and gap < CLICK_MERGE_GAP_MS:
                     should_merge = True
                     break
 
@@ -412,13 +306,8 @@ def analyze_activity(
         # before that.
         zoom_in_time = max(0.0, cluster_start - TRANSITION_MS - ANTICIPATION_MS)
 
-        # Hold duration depends on activity type
-        if label == "typing":
-            hold_ms = ZOOM_HOLD_TYPING_MS
-            reason = "Typing activity detected"
-        else:
-            hold_ms = ZOOM_HOLD_CLICK_MS
-            reason = "Click cluster detected"
+        hold_ms = ZOOM_HOLD_CLICK_MS
+        reason = "Click cluster detected"
 
         cluster_info.append({
             "start": cluster_start,
@@ -635,10 +524,10 @@ def detect_chapters(
     click_events: List[ClickEvent] | None,
     duration_ms: float,
 ) -> List["Chapter"]:
-    """Auto-detect chapter boundaries based on activity patterns.
+    """Auto-detect chapter boundaries based on mouse and click activity.
 
     Uses heuristic analysis (no AI API calls) to identify scene boundaries:
-    - Extended inactivity (>3s idle between mouse/keyboard/click events)
+    - Extended inactivity (>3s idle between mouse/click events)
     - Major mouse position jumps (cursor moves >30% of screen distance)
     - Significant time gaps between activity bursts
 
@@ -662,9 +551,8 @@ def detect_chapters(
                 event_times.append(m.timestamp)
                 last_added = m.timestamp
 
-    # Add keystroke timestamps
     if key_events:
-        event_times.extend(k.timestamp for k in key_events)
+        logger.debug("Ignoring removed keystroke activity during chapter detection")
 
     # Add click timestamps
     if click_events:

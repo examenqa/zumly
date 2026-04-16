@@ -335,3 +335,113 @@ LIGHT_BRAND_TRANSLUCENT_STRONG: str = "rgba(139, 92, 246, 0.20)" # tinted brand 
 
 # Light theme focus ring
 LIGHT_FOCUS_RING: str = "#8b5cf6"          # same brand purple; legible on light backgrounds
+
+
+# ── Theme-Aware Color Getters ─────────────────────────────────────────────
+# Use these helpers in custom-painted widgets that need to respond to theme changes.
+
+def bg_canvas(dark: bool = True) -> str:
+    """Timeline/control background."""
+    return BG_LAYER_1 if dark else LIGHT_BG_2
+
+
+def bg_track(dark: bool = True) -> str:
+    """Track background inside timeline."""
+    return BG_LAYER_2 if dark else LIGHT_BG_3
+
+
+def bg_track_border(dark: bool = True) -> str:
+    """Track border stroke."""
+    return STROKE_2 if dark else LIGHT_STROKE_2
+
+
+def fg_primary(dark: bool = True) -> str:
+    """Primary foreground (text, icons)."""
+    return FG_1 if dark else LIGHT_FG_1
+
+
+def fg_muted(dark: bool = True) -> str:
+    """Muted/secondary foreground."""
+    return FG_3 if dark else LIGHT_FG_3
+
+
+def fg_dim(dark: bool = True) -> str:
+    """Dim foreground (track labels, tick marks)."""
+    return FG_4 if dark else LIGHT_FG_4
+
+
+def dialog_stylesheet(dark: bool = True) -> str:
+    """Return QMessageBox stylesheet for the current theme.
+    
+    Use this for all modal dialogs to ensure consistent theming.
+    """
+    if dark:
+        return """
+            QMessageBox {
+                background-color: #1a1829;
+                color: #e4e4ed;
+            }
+            QMessageBox QLabel {
+                color: #e4e4ed;
+                font-size: 13px;
+            }
+            QPushButton {
+                height: 32px;
+                min-width: 80px;
+                padding: 0 18px;
+                border-radius: 6px;
+                border: 1px solid #3d3b55;
+                background-color: #28263e;
+                color: #e4e4ed;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #353350;
+                border-color: #4e4c68;
+            }
+            QPushButton:default {
+                background-color: #8b5cf6;
+                border: none;
+                color: white;
+                font-weight: 600;
+            }
+            QPushButton:default:hover {
+                background-color: #9d74f7;
+            }
+        """
+    else:
+        return f"""
+            QMessageBox {{
+                background-color: {LIGHT_BG_1};
+                color: {LIGHT_FG_1};
+            }}
+            QMessageBox QLabel {{
+                color: {LIGHT_FG_1};
+                font-size: 13px;
+            }}
+            QPushButton {{
+                height: 32px;
+                min-width: 80px;
+                padding: 0 18px;
+                border-radius: 6px;
+                border: 1px solid {LIGHT_STROKE_1};
+                background-color: {LIGHT_BG_3};
+                color: {LIGHT_FG_1};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {LIGHT_BG_4};
+                border-color: {LIGHT_STROKE_ACCESSIBLE};
+            }}
+            QPushButton:default {{
+                background-color: {BRAND};
+                border: none;
+                color: white;
+                font-weight: 600;
+            }}
+            QPushButton:default:hover {{
+                background-color: {LIGHT_BRAND_BG_HOVER};
+            }}
+        """
