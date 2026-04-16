@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **AI narration prompt** — reframed toward product benefit and ease-of-use storytelling; narrator now captures the meta-level value (what's easy, what's impressive) rather than literal on-screen mechanics
 - **Light mode theming** — improved coverage for custom-painted timeline and voiceover widgets
 
+### Fixed
+- **Window shadow** — frameless window now shows a DWM drop shadow when not maximized (re-enabled via `DwmExtendFrameIntoClientArea` ghost frame)
+- **Light mode title bar** — title bar version label and theme toggle icon now render with correct light-mode colours on initial launch instead of remaining dark until a manual theme toggle
+
 ### Removed
 - **Annotations feature** — text, arrow, and highlight overlays removed from recording and export
 - **Key strokes overlay** — keystroke recording and rendering removed from recording and export
