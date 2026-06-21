@@ -19,8 +19,8 @@ Thanks for your interest in contributing! This guide covers everything you need 
 ### Clone & Install
 
 ```powershell
-git clone https://github.com/sabbour/followcursor.git
-cd followcursor/followcursor
+git clone https://github.com/sabbour/zumly.git
+cd zumly/zumly
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -41,11 +41,11 @@ The repo includes VS Code configuration in `.vscode/`:
 ## Repository Layout
 
 ```
-followcursor/              <-- repo root (.git, .github, .vscode)
+zumly/              <-- repo root (.git, .github, .vscode)
 |-- .github/workflows/     <-- CI pipeline
 |-- .vscode/               <-- VS Code tasks, launch, settings
 |-- docs/                  <-- Documentation (mkdocs-material site)
-+-- followcursor/          <-- Python project root
++-- zumly/          <-- Python project root
     |-- main.py            <-- Entry point
     |-- requirements.txt
     |-- pytest.ini
@@ -60,7 +60,7 @@ followcursor/              <-- repo root (.git, .github, .vscode)
 ```
 
 !!! note
-    `.github/` and `.vscode/` live at **repo root**, not inside `followcursor/`. Python project files live inside the `followcursor/` subfolder.
+    `.github/` and `.vscode/` live at **repo root**, not inside `zumly/`. Python project files live inside the `zumly/` subfolder.
 
 ---
 
@@ -103,8 +103,8 @@ All colors, spacing, radii, and typography values come from `app/tokens.py`. Imp
 
 ### Test Suite
 
-- **Framework:** pytest (configured via `followcursor/pytest.ini`)
-- **Location:** `followcursor/tests/` — one `test_<module>.py` per source module
+- **Framework:** pytest (configured via `zumly/pytest.ini`)
+- **Location:** `zumly/tests/` — one `test_<module>.py` per source module
 - **Current count:** 386 tests
 - **Scope:** Pure-logic layer (no Qt dependency in tests)
 
@@ -121,7 +121,7 @@ Execute the **Run Tests** VS Code task (`Ctrl+Shift+P` > Tasks: Run Task > Run T
 
 ### Writing Tests
 
-- Place tests in `followcursor/tests/test_<module>.py`
+- Place tests in `zumly/tests/test_<module>.py`
 - Use shared fixtures from `conftest.py`
 - Test data models, serialization roundtrips, algorithms, and edge cases
 - Tests must not depend on Qt (no widget instantiation)
@@ -194,7 +194,7 @@ Edit `app/frames.py` — add a `FramePreset` to `FRAME_PRESETS`. Use generic nam
 
 ## Versioning
 
-FollowCursor uses [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH):
+Zumly uses [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH):
 
 | Bump | When |
 | ---- | ---- |
@@ -202,7 +202,7 @@ FollowCursor uses [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH)
 | **MINOR** | New features, new export formats, new UI panels |
 | **PATCH** | Bug fixes, performance improvements, documentation fixes |
 
-The version lives in `followcursor/app/version.py`:
+The version lives in `zumly/app/version.py`:
 
 ```python
 __version__ = "X.Y.Z"
@@ -251,7 +251,7 @@ To add a dependency:
 .\scripts\Build-App.ps1
 ```
 
-Produces `dist\FollowCursor\FollowCursor.exe` — a single-folder PyInstaller distribution.
+Produces `dist\Zumly\Zumly.exe` — a single-folder PyInstaller distribution.
 
 ### MSIX Package
 
@@ -279,3 +279,4 @@ GitHub Actions runs on every push/PR to `main`:
 ## Questions?
 
 Open an issue on GitHub or check the [Quickstart Guide](QUICKSTART.md) for usage help.
+

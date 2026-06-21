@@ -27,8 +27,8 @@ Added backend support for an optional user-entered narration guidance prompt tha
 
 #### Files Changed
 
-- `followcursor/app/ai_service.py` — added `_build_narration_system_prompt`; updated `_generate_narration_segments` and `_polish_narration_segments_for_timing`
-- `followcursor/tests/test_ai_service.py` — added `TestNarrationGuidancePrompt` (6 tests)
+- `zumly/app/ai_service.py` — added `_build_narration_system_prompt`; updated `_generate_narration_segments` and `_polish_narration_segments_for_timing`
+- `zumly/tests/test_ai_service.py` — added `TestNarrationGuidancePrompt` (6 tests)
 - `.squad/decisions/inbox/fenster-narration-guidance.md` — decision record
 
 ---
@@ -149,9 +149,9 @@ Added `VoiceoverSegment.tts_generating` runtime-only flag to signal TTS synthesi
 
 ### Files Changed
 
-- `followcursor/app/models.py` — `tts_generating` field with `compare=False`
-- `followcursor/app/main_window.py` — toggle around synthesis workflow
-- `followcursor/tests/test_models.py` — 5 regression tests
+- `zumly/app/models.py` — `tts_generating` field with `compare=False`
+- `zumly/app/main_window.py` — toggle around synthesis workflow
+- `zumly/tests/test_models.py` — 5 regression tests
 
 ### Integration Point
 
@@ -186,4 +186,5 @@ Guidance is optional, session-only (not persisted to `.fcproj`). Reuses existing
 ### Coordination
 
 McManus built the UI field. Feature complete and working end-to-end.
+
 

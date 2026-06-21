@@ -9,7 +9,7 @@
 
 The user has two `gh` CLI accounts:
 - `asabbour_microsoft` — Enterprise Managed User (EMU), active by default
-- `sabbour` — personal GitHub account, owns the `sabbour/followcursor` repo
+- `sabbour` — personal GitHub account, owns the `sabbour/zumly` repo
 
 The EMU account **cannot write** to the personal public repo (PR comments, thread resolution, issue updates). It returns:
 ```
@@ -18,7 +18,7 @@ The EMU account **cannot write** to the personal public repo (PR comments, threa
 
 ## Pattern
 
-Before any **write operation** to the `sabbour/followcursor` repo via `gh` CLI (commenting on PRs, resolving threads, editing issues, merging PRs), switch to the personal account:
+Before any **write operation** to the `sabbour/zumly` repo via `gh` CLI (commenting on PRs, resolving threads, editing issues, merging PRs), switch to the personal account:
 
 ```bash
 gh auth switch --user sabbour
@@ -61,3 +61,4 @@ After writes complete:
 - `gh auth switch` is instant (no network call — just changes active keyring entry)
 - There is no per-command `--account` flag; switching is the only option
 - Read operations work with either account
+

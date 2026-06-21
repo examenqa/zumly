@@ -1,6 +1,6 @@
 # Visual Customization
 
-FollowCursor gives you full control over how your recording looks — from the background and device frame around the video to the effects shown when you click.
+Zumly gives you full control over how your recording looks — from the background and device frame around the video to the effects shown when you click.
 
 ---
 
@@ -70,3 +70,4 @@ Every mouse click in your recording can be shown as an animated visual effect, m
 ## Cursor
 
 Your mouse cursor is automatically rendered into the exported video at the recorded position — you don't need to configure anything. It appears as an arrow cursor scaled to match the output resolution.
+

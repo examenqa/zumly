@@ -10,7 +10,7 @@
 
 1. **Windows 11 uses Fluent 2 Design System** — emphasizing calm, natural UI with soft geometry (4px/8px corner radius), Mica/Acrylic materials, Segoe UI Variable typography, and a 4px spacing grid
 2. **PySide6-Fluent-Widgets library exists** — mature, GPLv3-licensed, provides 50+ Fluent-styled widgets (buttons, menus, dialogs, navigation) with acrylic support and theme switching
-3. **Current FollowCursor theme is close but incomplete** — uses Segoe UI Variable, 6-12px radius, purple accent (#8b5cf6), but lacks: proper spacing tokens, state animations, elevation shadows, and Fluent component patterns
+3. **Current Zumly theme is close but incomplete** — uses Segoe UI Variable, 6-12px radius, purple accent (#8b5cf6), but lacks: proper spacing tokens, state animations, elevation shadows, and Fluent component patterns
 4. **Implementation strategy: hybrid approach** — adopt PySide6-Fluent-Widgets for complex components (navigation, dialogs, menus); refine existing QSS for video-editor-specific UI (timeline, preview, panels)
 5. **Priority gaps to address** — spacing/padding consistency (4px grid), hover/pressed state animations (100ms ease-out), subtle shadows (QGraphicsDropShadowEffect), and rounded corners on all interactive elements
 
@@ -200,7 +200,7 @@ Fluent 2's four pillars:
 
 ---
 
-## 4. Current FollowCursor Theme Analysis
+## 4. Current Zumly Theme Analysis
 
 ### Strengths
 
@@ -398,7 +398,7 @@ QPushButton {{
 - Professional quality (used in production apps)
 
 **Cons:**
-- GPLv3 license (not an issue for FollowCursor, which is open-source)
+- GPLv3 license (not an issue for Zumly, which is open-source)
 - Some components may be overkill (e.g., full FluentWindow when we have custom title bar)
 - Acrylic blur has performance cost (but can be disabled)
 - Mixing library widgets with custom QSS may require careful theming coordination
@@ -534,6 +534,7 @@ QPushButton {{
 
 ## Conclusion
 
-FollowCursor is well-positioned to adopt Windows 11's Fluent 2 design language. The existing theme already uses Segoe UI Variable and a modern dark palette. By normalizing spacing to a 4px grid, unifying corner radius to 4px/8px, adding drop shadows, and selectively integrating PySide6-Fluent-Widgets for navigation/dialogs, we can achieve a polished, Windows 11-native appearance while preserving the app's unique video-editor identity.
+Zumly is well-positioned to adopt Windows 11's Fluent 2 design language. The existing theme already uses Segoe UI Variable and a modern dark palette. By normalizing spacing to a 4px grid, unifying corner radius to 4px/8px, adding drop shadows, and selectively integrating PySide6-Fluent-Widgets for navigation/dialogs, we can achieve a polished, Windows 11-native appearance while preserving the app's unique video-editor identity.
 
 The hybrid approach (library for standard UI + custom QSS/QPainter for specialized video controls) balances implementation speed with flexibility. Starting with quick wins (spacing normalization, radius unification, status colors) provides immediate visual improvement, while strategic integration of the Fluent library and design token system sets the foundation for long-term consistency and maintainability.
+

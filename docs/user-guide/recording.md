@@ -1,9 +1,9 @@
 # Screen & Window Recording
 
-FollowCursor captures your screen or any individual window, then tracks your mouse and clicks so you can add zoom effects in the editor.
+Zumly captures your screen or any individual window, then tracks your mouse and clicks so you can add zoom effects in the editor.
 
 !!! note "Startup splash"
-    FollowCursor shows a brief splash screen while the recorder, tray controls, and editor shell initialise. It closes automatically as soon as the main window is ready.
+    Zumly shows a brief splash screen while the recorder, tray controls, and editor shell initialise. It closes automatically as soon as the main window is ready.
 
 ---
 
@@ -49,7 +49,7 @@ You don't have to wait until the edit stage to add zoom — you can zoom in and 
 | **Ctrl+Shift+=** | Zoom in at your current cursor position |
 | **Ctrl+Shift+-** | Zoom back out to full view |
 
-These hotkeys work from any application while FollowCursor is recording in the background.
+These hotkeys work from any application while Zumly is recording in the background.
 
 ---
 
@@ -64,3 +64,4 @@ The app comes back up and switches straight to the editor with your recording lo
 
 !!! note "Processing moment"
     A brief processing overlay appears while the recording is being finalised. It disappears automatically when your video is ready to edit.
+

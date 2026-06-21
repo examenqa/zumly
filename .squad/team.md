@@ -1,6 +1,6 @@
 # Squad Team
 
-> followcursor
+> zumly
 
 ## Coordinator
 
@@ -19,5 +19,6 @@
 
 ## Project Context
 
-- **Project:** followcursor
+- **Project:** zumly
 - **Created:** 2026-04-03
+

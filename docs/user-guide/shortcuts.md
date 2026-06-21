@@ -1,12 +1,12 @@
 # Keyboard Shortcuts
 
-A quick reference for every keyboard shortcut and mouse interaction in FollowCursor.
+A quick reference for every keyboard shortcut and mouse interaction in Zumly.
 
 ---
 
 ## Global Hotkeys
 
-These work from **any application** while FollowCursor is running — you don't need to have the app window in focus.
+These work from **any application** while Zumly is running — you don't need to have the app window in focus.
 
 | Shortcut | Action |
 | -------- | ------ |
@@ -18,7 +18,7 @@ These work from **any application** while FollowCursor is running — you don't 
 
 ## Editor Shortcuts
 
-These work when the FollowCursor editor window is active.
+These work when the Zumly editor window is active.
 
 | Shortcut | Action |
 | -------- | ------ |
@@ -50,3 +50,4 @@ These work when the FollowCursor editor window is active.
 | Drag body | Zoom segment | Move the zoom to a different time |
 | Drag handle | Timeline edge | Set trim start or trim end |
 | Drag marker | Pan path point | Change the point's timestamp |
+

@@ -4,7 +4,7 @@ Documentation specialist maintaining history, decisions, and technical records.
 
 ## Project Context
 
-**Project:** followcursor
+**Project:** zumly
 
 
 ## Responsibilities
@@ -18,3 +18,4 @@ Documentation specialist maintaining history, decisions, and technical records.
 - Read project context and team decisions before starting work
 - Communicate clearly with team members
 - Follow established patterns and conventions
+

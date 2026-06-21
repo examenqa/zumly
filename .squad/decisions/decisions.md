@@ -46,7 +46,8 @@ Phase 2 adds the visual polish layer on top of the Phase 1 token system — shad
 
 #### Impact
 
-- New module: `followcursor/app/fluent_effects.py`
-- New tests: `followcursor/tests/test_fluent_effects.py` (13 tests)
+- New module: `zumly/app/fluent_effects.py`
+- New tests: `zumly/tests/test_fluent_effects.py` (13 tests)
 - Modified: tokens.py, theme.py, source_picker.py, editor_panel.py
 - All 347 tests pass
+

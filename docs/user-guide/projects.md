@@ -1,6 +1,6 @@
 # Project Files
 
-FollowCursor saves your entire session — the raw recording, zoom keyframes, narration, voiceover, chapter markers, and settings — into a single `.fcproj` file so you can close and pick up where you left off.
+Zumly saves your entire session — the raw recording, zoom keyframes, narration, voiceover, chapter markers, and settings — into a single `.fcproj` file so you can close and pick up where you left off.
 
 ---
 
@@ -27,9 +27,9 @@ A `.fcproj` file is a ZIP bundle containing everything needed to restore your se
 | `recording.mp4` | Your raw recorded video |
 | `voiceover_*.wav` | One audio file per synthesized voiceover segment (if any) |
 
-Generated narration markdown is stored in `project.json`, generated voiceover segments travel as normal `voiceover_*.wav` segment files, and chapter markers reopen exactly where you left them. When you reopen the project, FollowCursor rewrites the sidecar `<video_name>_voiceover.md` file beside the extracted recording so the saved script stays available.
+Generated narration markdown is stored in `project.json`, generated voiceover segments travel as normal `voiceover_*.wav` segment files, and chapter markers reopen exactly where you left them. When you reopen the project, Zumly rewrites the sidecar `<video_name>_voiceover.md` file beside the extracted recording so the saved script stays available.
 
-Older `.fcproj` files that still contain removed keystroke or annotation payloads will still open safely. FollowCursor ignores those legacy fields when loading and does not write them back out when you save again.
+Older `.fcproj` files that still contain removed keystroke or annotation payloads will still open safely. Zumly ignores those legacy fields when loading and does not write them back out when you save again.
 
 ---
 
@@ -42,3 +42,4 @@ Open a `.fcproj` file to fully restore a previous session. A loading overlay app
 ## Close Confirmation
 
 If you try to close the app with unsaved changes, a dialog will ask you: **Save / Don't Save / Cancel** — so you can never accidentally lose work.
+

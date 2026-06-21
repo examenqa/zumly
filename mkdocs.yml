@@ -1,8 +1,8 @@
-site_name: FollowCursor
+site_name: Zumly
 site_description: Windows screen recorder with cinematic cursor-following zoom
-site_url: https://sabbour.me/followcursor
-repo_url: https://github.com/sabbour/followcursor
-repo_name: sabbour/followcursor
+site_url: https://sabbour.me/zumly
+repo_url: https://github.com/sabbour/zumly
+repo_name: sabbour/zumly
 
 theme:
   name: material
@@ -68,3 +68,4 @@ nav:
     - Keyboard Shortcuts: user-guide/shortcuts.md
   - Architecture: ARCHITECTURE.md
   - Contributing: CONTRIBUTING.md
+

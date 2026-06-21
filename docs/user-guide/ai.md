@@ -1,6 +1,6 @@
 # AI Features
 
-FollowCursor includes optional AI-powered features that can analyze your recording, build aligned chapter markers, draft presentation-style voiceover segments, and generate speech — powered by Azure AI Foundry.
+Zumly includes optional AI-powered features that can analyze your recording, build aligned chapter markers, draft presentation-style voiceover segments, and generate speech — powered by Azure AI Foundry.
 
 ---
 
@@ -43,13 +43,13 @@ The AI Smart Zoom feature sends a summary of your mouse movements and clicks to 
 
 ## AI Chapters
 
-Generate chapter markers from the same shared recording understanding that powers narration. FollowCursor reuses frame samples plus mouse movement, clicks, and zoom edits so the chapter flags line up with the real beats of the walkthrough instead of only with idle gaps.
+Generate chapter markers from the same shared recording understanding that powers narration. Zumly reuses frame samples plus mouse movement, clicks, and zoom edits so the chapter flags line up with the real beats of the walkthrough instead of only with idle gaps.
 
 **To generate chapters:**
 
 1. After recording, open the **CHAPTERS** section
 2. Click **Generate chapters**
-3. Wait while FollowCursor samples the recording and drafts the chapter markers
+3. Wait while Zumly samples the recording and drafts the chapter markers
 4. Review the flag markers on the timeline. Hover a flag to see its name, left-click to jump there, or right-click to jump/delete it
 5. Re-running replaces only the previous generated chapter markers. Any manual chapter markers stay where you put them
 
@@ -59,7 +59,7 @@ Generated and manual chapter markers are written into MP4 chapter metadata durin
 
 ## Automated narration
 
-Generate five presentation-style voiceover segments for the whole recording. FollowCursor builds the narration context from the same shared recording understanding used by AI Chapters — steady frame samples plus mouse movement, clicks, and existing zoom edits — then asks **GPT-5.4** for a structured script with these sections in order:
+Generate five presentation-style voiceover segments for the whole recording. Zumly builds the narration context from the same shared recording understanding used by AI Chapters — steady frame samples plus mouse movement, clicks, and existing zoom edits — then asks **GPT-5.4** for a structured script with these sections in order:
 
 - **Context**
 - **Background**
@@ -67,29 +67,29 @@ Generate five presentation-style voiceover segments for the whole recording. Fol
 - **Walkthrough**
 - **Result**
 
-For longer recordings, FollowCursor analyzes the visuals in provider-safe batches and then synthesizes one final script, so narration quality stays high without overrunning image limits. The app saves that combined script as `<video_name>_voiceover.md` beside the current recording, creates generated voiceover segments at the returned timestamps, and starts speech automatically through the normal voiceover flow with your current default TTS voice from **AI Settings**. The timeline keeps short section labels, while the editor opens the clean spoken line instead of the markdown heading text. If the first draft is too short or too long for the recording, FollowCursor does one timing-aware rewrite and can apply a subtle TTS rate nudge per segment so the combined narration stays close to the video length without obvious silence padding. The prompt is tuned to sound like a peer presentation or pitch, not a screen-reader recap. Clicks and zoom cues still shape emphasis behind the scenes, but the spoken copy stays on the action, intent, and payoff rather than narrating on-screen mechanics directly. The same shared recording analysis also feeds AI chapter generation, so narration and chapter beats stay aligned instead of drifting apart.
+For longer recordings, Zumly analyzes the visuals in provider-safe batches and then synthesizes one final script, so narration quality stays high without overrunning image limits. The app saves that combined script as `<video_name>_voiceover.md` beside the current recording, creates generated voiceover segments at the returned timestamps, and starts speech automatically through the normal voiceover flow with your current default TTS voice from **AI Settings**. The timeline keeps short section labels, while the editor opens the clean spoken line instead of the markdown heading text. If the first draft is too short or too long for the recording, Zumly does one timing-aware rewrite and can apply a subtle TTS rate nudge per segment so the combined narration stays close to the video length without obvious silence padding. The prompt is tuned to sound like a peer presentation or pitch, not a screen-reader recap. Clicks and zoom cues still shape emphasis behind the scenes, but the spoken copy stays on the action, intent, and payoff rather than narrating on-screen mechanics directly. The same shared recording analysis also feeds AI chapter generation, so narration and chapter beats stay aligned instead of drifting apart.
 
 **To generate narration:**
 
 1. After recording, open the **NARRATION & VOICEOVER** section
 2. Click **Generate narration**
-3. Wait while FollowCursor writes the script, adds the generated voiceover segments, and starts speech automatically through the normal voiceover flow
+3. Wait while Zumly writes the script, adds the generated voiceover segments, and starts speech automatically through the normal voiceover flow
 4. Review the generated segments on the timeline's **Voice** track. Each block keeps a short section label, while the editor shows the spoken line if you double-click or right-click to edit it, drag it to retime it, or delete it with confirmation
 5. Save the project if you want the narration to travel with the `.fcproj` file
 
-If you generate narration again, FollowCursor replaces the previous generated voiceover segments but keeps any manual voiceover segments. If you later ripple-delete a clip segment, FollowCursor keeps generated narration when it can by trimming, retiming, rewriting the saved markdown, and re-synthesizing the affected generated voiceover segments. Manual voiceovers that overlap the deleted clip are still removed because their audio cannot be rewritten safely.
+If you generate narration again, Zumly replaces the previous generated voiceover segments but keeps any manual voiceover segments. If you later ripple-delete a clip segment, Zumly keeps generated narration when it can by trimming, retiming, rewriting the saved markdown, and re-synthesizing the affected generated voiceover segments. Manual voiceovers that overlap the deleted clip are still removed because their audio cannot be rewritten safely.
 
 ---
 
 ## AI chapter markers
 
-Generate chapter markers from the same shared recording knowledge used by narration. FollowCursor reuses the frame samples, activity summary, click beats, zoom edits, and any provider-safe batch notes so the chapter titles land on the same major beats as the narration draft without paying for a second disconnected analysis pass.
+Generate chapter markers from the same shared recording knowledge used by narration. Zumly reuses the frame samples, activity summary, click beats, zoom edits, and any provider-safe batch notes so the chapter titles land on the same major beats as the narration draft without paying for a second disconnected analysis pass.
 
 **To generate AI chapters:**
 
 1. Open **CHAPTERS**
 2. Click **Generate chapters**
-3. Wait while FollowCursor analyzes the shared recording context and replaces the previously generated chapter markers
+3. Wait while Zumly analyzes the shared recording context and replaces the previously generated chapter markers
 4. Review the chapter flags on the timeline. Any manual chapter markers you added stay in place
 
 Chapter titles are short timeline-friendly labels meant for navigation and MP4 metadata. They summarize major workflow shifts; they do not read out every click, zoom, or cursor movement literally.
@@ -98,7 +98,7 @@ Chapter titles are short timeline-friendly labels meant for navigation and MP4 m
 
 ## Manual voiceover segments
 
-Add spoken narration at specific points on the timeline. You write the text and FollowCursor synthesizes it into speech using Azure AI Foundry TTS.
+Add spoken narration at specific points on the timeline. You write the text and Zumly synthesizes it into speech using Azure AI Foundry TTS.
 
 ### Adding a Voiceover Segment
 
@@ -130,3 +130,4 @@ Available voices are loaded dynamically from your configured text-to-speech serv
 
 - Generated voiceover segments from narration and any manual voiceover segments are merged into a single audio track at their timeline positions
 - Voiceover is only included in **MP4 exports** — GIF files do not carry audio
+

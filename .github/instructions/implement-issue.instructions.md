@@ -1,15 +1,15 @@
 ---
-description: "Use when implementing a GitHub issue — covers FollowCursor-specific conventions for branching, testing, labels, and documentation"
+description: "Use when implementing a GitHub issue — covers Zumly-specific conventions for branching, testing, labels, and documentation"
 ---
 
-# Implementing a GitHub Issue — FollowCursor Conventions
+# Implementing a GitHub Issue — Zumly Conventions
 
 > Generic workflow (fetching issues, creating branches, implementation checklist, conflict resolution) is handled by the **work-issues**, **create-issues**, and **resolve-conflicts** skills. This file covers **project-specific** conventions only.
 
 ## Testing
 
 - Run tests via the **Run Tests** VS Code task (do not run pytest manually)
-- Tests live in `followcursor/tests/` — one `test_<module>.py` per source module
+- Tests live in `zumly/tests/` — one `test_<module>.py` per source module
 - Modules under test: models, zoom_engine, activity_analyzer, utils, frames, backgrounds, project_file, ai_service
 
 ## GitHub Issue Labels
@@ -36,5 +36,6 @@ description: "Use when implementing a GitHub issue — covers FollowCursor-speci
 When a change affects user-facing behaviour, update the relevant docs:
 
 - `docs/USER_GUIDE.md`, `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`
-- `followcursor/README.md`
+- `zumly/README.md`
 - `.github/copilot-instructions.md` and `.github/instructions/` if conventions change
+

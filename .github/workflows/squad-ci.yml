@@ -24,14 +24,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: followcursor/requirements.txt
+          cache-dependency-path: zumly/requirements.txt
 
       - name: Install dependencies
-        working-directory: followcursor
+        working-directory: zumly
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run tests
-        working-directory: followcursor
+        working-directory: zumly
         run: python -m pytest tests/ -x -v
+

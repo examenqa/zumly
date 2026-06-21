@@ -8,7 +8,7 @@ Get up and running in under 5 minutes.
 
 ### Option A: Download a release (recommended)
 
-Download the latest .msix installer or portable .zip from the [GitHub Releases](https://github.com/sabbour/followcursor/releases) page. The MSIX installer is signed and can be double-clicked to install on Windows 10/11.
+Download the latest .msix installer or portable .zip from the [GitHub Releases](https://github.com/sabbour/zumly/releases) page. The MSIX installer is signed and can be double-clicked to install on Windows 10/11.
 
 ### Option B: Run from source
 
@@ -26,7 +26,7 @@ Download the latest .msix installer or portable .zip from the [GitHub Releases](
 **One-command setup:**
 
 ```powershell
-cd followcursor
+cd zumly
 .\scripts\Start-Dev.ps1
 ```
 
@@ -35,7 +35,7 @@ This creates a virtual environment, installs all dependencies, and launches the 
 **Manual setup:**
 
 ```powershell
-cd followcursor
+cd zumly
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -119,16 +119,16 @@ While viewing a zoom segment, right-click the preview and select **Add pan point
 ### Generate narration
 
 1. In the **NARRATION & VOICEOVER** section, click **Generate narration**
-2. FollowCursor uses **GPT-5.4** to draft five presentation-style, timestamped voiceover segments — **Context**, **Background**, **Prompt / Action**, **Walkthrough**, and **Result** — from frame samples plus activity and zoom cues. The wording stays focused on the point of the work rather than on-screen mechanics
+2. Zumly uses **GPT-5.4** to draft five presentation-style, timestamped voiceover segments — **Context**, **Background**, **Prompt / Action**, **Walkthrough**, and **Result** — from frame samples plus activity and zoom cues. The wording stays focused on the point of the work rather than on-screen mechanics
 3. The combined script is saved as `<video_name>_voiceover.md` beside the recording, then speech starts automatically with the current default TTS voice from **AI Settings**, using timing-aware pacing so the narration stays close to the recording length without obvious silence padding
 4. The generated segments appear on the timeline's **Voice** track with short labels such as **Context** and **Result**. Double-click or right-click a segment to review the spoken line, drag it to retime it, or delete it with confirmation
-5. If you generate narration again, FollowCursor replaces only the previous generated voiceover segments and leaves manual voiceover segments alone
+5. If you generate narration again, Zumly replaces only the previous generated voiceover segments and leaves manual voiceover segments alone
 6. If you also add manual voiceover segments, they stay separate and are mixed into the same MP4 audio track during export
 
 ### Generate chapters
 
 1. In the **CHAPTERS** section, click **Generate chapters**
-2. FollowCursor reuses the same shared recording understanding as narration — frame samples, activity, and zoom beats — to suggest timeline-friendly chapter markers with **GPT-5.4**
+2. Zumly reuses the same shared recording understanding as narration — frame samples, activity, and zoom beats — to suggest timeline-friendly chapter markers with **GPT-5.4**
 3. Hover a chapter flag to review its name, left-click it to jump there, or right-click it to delete the marker
 4. Regenerating chapters replaces the previous generated chapter markers but keeps any manual chapter markers you added
 5. Exported MP4 files include those chapter markers as metadata for players that support navigation
@@ -247,3 +247,4 @@ Export renders every frame with zoom, cursor, click effects, device bezel, and b
 - Read the **[User Guide](user-guide/recording.md)** for the complete feature reference
 - Read the **[Architecture Guide](ARCHITECTURE.md)** to understand the codebase
 - Read the **[Contributing Guide](CONTRIBUTING.md)** to start developing
+

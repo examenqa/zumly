@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to FollowCursor are documented in this file.
+All notable changes to Zumly are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
@@ -170,7 +170,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **MSIX packaging** — Windows app package with .fcproj file association, automated build script, and CI integration for tagged releases
 - **Azure Trusted Signing** — CI signs MSIX packages via Azure Trusted Signing with OIDC; includes idempotent setup script for provisioning signing resources
-- **Error log file** — RotatingFileHandler writes ERROR+ entries to %LOCALAPPDATA%/FollowCursor/error.log (2 MB, 3 backups) with timestamps, module, file/line, and full tracebacks
+- **Error log file** — RotatingFileHandler writes ERROR+ entries to %LOCALAPPDATA%/Zumly/error.log (2 MB, 3 backups) with timestamps, module, file/line, and full tracebacks
 - **Discard recording** — discard a recording without saving, with improved error handling in AI worker
 
 ### Changed
@@ -240,3 +240,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ## [0.1.1] — 2025-12-16
 
 - Initial public release with README video
+

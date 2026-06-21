@@ -22,10 +22,10 @@ Hard-coded dark paint values in custom `paintEvent` implementations. The widgets
 
 ### Files Changed
 
-- `followcursor/app/tokens.py`
-- `followcursor/app/widgets/timeline_widget.py`
-- `followcursor/app/main_window.py`
-- `followcursor/tests/test_timeline_widget.py`
+- `zumly/app/tokens.py`
+- `zumly/app/widgets/timeline_widget.py`
+- `zumly/app/main_window.py`
+- `zumly/tests/test_timeline_widget.py`
 
 ### Validation
 
@@ -54,9 +54,9 @@ Hard-coded dark paint values in custom `paintEvent` implementations. The widgets
 - **Backward Compat:** Reuses export mixer, `.fcproj` persistence, timeline rendering; no new audio model
 
 ### Affected Files
-- `followcursor/app/main_window.py` — wiring
-- `followcursor/app/widgets/editor_panel.py` — **Generate narration** button
-- `followcursor/app/widgets/timeline_widget.py` — narration segment labels
+- `zumly/app/main_window.py` — wiring
+- `zumly/app/widgets/editor_panel.py` — **Generate narration** button
+- `zumly/app/widgets/timeline_widget.py` — narration segment labels
 - `README.md`, `docs/ARCHITECTURE.md`, `docs/QUICKSTART.md`, `docs/USER_GUIDE.md`
 - Optional: `docs/user-guide/ai.md`, `docs/user-guide/projects.md`
 
@@ -126,7 +126,7 @@ Orchestration log: .squad/orchestration-log/2026-04-15T21-27-39Z-mcmanus.md
 1. **Playback Time Readout Ghosting Fix**
    - Changed from multiple transparent `QLabel`s to single opaque custom-painted widget with grayscale antialiasing
    - Rapidly updating text on Windows composited surfaces was causing fringing artifacts
-   - Regression test added to `followcursor/tests/test_timeline_widget.py`
+   - Regression test added to `zumly/tests/test_timeline_widget.py`
    - Verified: timeline repaint ghost is compositing artifact in UI layer, not duplicate widgets
 
 2. **AI Chapters & Timeline Integration**
@@ -214,11 +214,11 @@ Added optional `QPlainTextEdit` in editor panel between voiceover description an
 
 ### Files Changed
 
-- `followcursor/app/widgets/timeline_widget.py` — spinner timer, arc rendering
-- `followcursor/app/widgets/editor_panel.py` — guidance field, label, signal update
-- `followcursor/app/main_window.py` — `_on_generate_narration_requested` signature
-- `followcursor/tests/test_timeline_widget.py` — 8 regression tests
-- `followcursor/tests/test_editor_panel.py` — 6 regression tests
+- `zumly/app/widgets/timeline_widget.py` — spinner timer, arc rendering
+- `zumly/app/widgets/editor_panel.py` — guidance field, label, signal update
+- `zumly/app/main_window.py` — `_on_generate_narration_requested` signature
+- `zumly/tests/test_timeline_widget.py` — 8 regression tests
+- `zumly/tests/test_editor_panel.py` — 6 regression tests
 
 ### Validation
 
@@ -237,7 +237,7 @@ Added optional `QPlainTextEdit` in editor panel between voiceover description an
 
 ### Outcome
 
-Added a `Guidance (optional)` field in `followcursor/app/widgets/editor_panel.py` to let users steer narration generation. Guidance is session-only (not persisted).
+Added a `Guidance (optional)` field in `zumly/app/widgets/editor_panel.py` to let users steer narration generation. Guidance is session-only (not persisted).
 
 ### Changes
 
@@ -248,4 +248,5 @@ Added a `Guidance (optional)` field in `followcursor/app/widgets/editor_panel.py
 ### Coordination
 
 Fenster completed backend guidance threading in ai_service.py. Feature works end-to-end: users can emphasize what narration focuses on.
+
 

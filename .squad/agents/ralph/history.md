@@ -1,6 +1,6 @@
 # Project Context
 
-- **Project:** followcursor
+- **Project:** zumly
 - **Created:** 2026-04-03
 
 ## Core Context
@@ -31,7 +31,7 @@ Initial setup complete.
    - #134 → McManus (User Guide restructure)
 3. **Created and implemented issue #135** — grouped README feature list under 6 categories (PR #136).
 4. **Fixed CI blocker** — docs-only PRs were permanently blocked because `paths-ignore: '**/*.md'` on the `pull_request` trigger prevented the required `build` check from ever running. Removed the filter from `pull_request` (kept it on `push`).
-5. **Populated `routing.md`** — replaced template stubs with real FollowCursor routing rules: 14 work-type rows and 27 module ownership rows. The heartbeat triage script (`ralph-triage.js`) now has the data it needs to route by file path and keyword.
+5. **Populated `routing.md`** — replaced template stubs with real Zumly routing rules: 14 work-type rows and 27 module ownership rows. The heartbeat triage script (`ralph-triage.js`) now has the data it needs to route by file path and keyword.
 
 ### Learnings
 
@@ -70,11 +70,12 @@ When PRs were created against an older `origin/main` (before newer files existed
 After merging each PR: `git worktree remove wt-{number}` + `git branch -d squad/{number}-*`. Never leave stale worktrees — they accumulate and cause `git worktree add` naming collisions.
 
 ### Key files in this project (for future reference)
-- `followcursor/app/theme.py` — central QSS stylesheet; high-churn, always check conflicts
-- `followcursor/app/tokens.py` — design token definitions (DARK_*, LIGHT_*, motion, spacing)
-- `followcursor/app/main_window.py` — app entry and theme wiring
-- `followcursor/app/title_bar.py` — custom title bar with theme toggle button
-- `followcursor/app/editor_panel.py` — recording settings panel (320px wide, spacing tokens)
-- `followcursor/app/mica.py` — Windows 11 Mica/Acrylic via DwmSetWindowAttribute (new in this session)
-- `followcursor/app/fluent_button.py` — animated Fluent 2 button component (new)
-- `followcursor/app/fluent_tab_bar.py` — animated Fluent 2 tab bar component (new)
+- `zumly/app/theme.py` — central QSS stylesheet; high-churn, always check conflicts
+- `zumly/app/tokens.py` — design token definitions (DARK_*, LIGHT_*, motion, spacing)
+- `zumly/app/main_window.py` — app entry and theme wiring
+- `zumly/app/title_bar.py` — custom title bar with theme toggle button
+- `zumly/app/editor_panel.py` — recording settings panel (320px wide, spacing tokens)
+- `zumly/app/mica.py` — Windows 11 Mica/Acrylic via DwmSetWindowAttribute (new in this session)
+- `zumly/app/fluent_button.py` — animated Fluent 2 button component (new)
+- `zumly/app/fluent_tab_bar.py` — animated Fluent 2 tab bar component (new)
+

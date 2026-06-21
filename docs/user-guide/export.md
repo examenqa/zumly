@@ -49,9 +49,9 @@ Deleted segments use **ripple delete** — the remaining clips close the gap aut
 
 Chapters appear as flag markers on your timeline and can be embedded as navigation points in the exported MP4 — useful for longer recordings or tutorials where viewers might want to skip to a section.
 
-FollowCursor can generate chapters with AI from the same shared recording analysis used by narration. That keeps chapter beats aligned with the recording's major workflow shifts, zoom emphasis, and presentation flow without re-running a separate disconnected pass.
+Zumly can generate chapters with AI from the same shared recording analysis used by narration. That keeps chapter beats aligned with the recording's major workflow shifts, zoom emphasis, and presentation flow without re-running a separate disconnected pass.
 
-You can also add chapters manually. If you regenerate AI chapters, FollowCursor replaces the previous generated chapter markers and keeps any manual chapter markers you already added. Chapters are included in the MP4 file metadata and supported by players like YouTube and VLC.
+You can also add chapters manually. If you regenerate AI chapters, Zumly replaces the previous generated chapter markers and keeps any manual chapter markers you already added. Chapters are included in the MP4 file metadata and supported by players like YouTube and VLC.
 
 !!! note "Chapters in GIF exports"
     Chapter markers are not embedded in GIF files — they are an MP4-only feature.
@@ -75,3 +75,4 @@ What you see in the preview is exactly what will be in the exported file.
 ## Export Progress
 
 A progress indicator appears in the **Export** button in the title bar while your video is rendering. For longer recordings, GPU-accelerated encoding significantly speeds this up.
+

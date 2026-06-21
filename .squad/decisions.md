@@ -107,7 +107,7 @@ Comprehensive analysis of Windows 11 Fluent 2 design system and PySide6 implemen
 
 1. **PySide6-Fluent-Widgets:** Mature, GPLv3-licensed library with 50+ Fluent-styled components (navigation, dialogs, cards, inputs). Supports acrylic effects, animations, and light/dark themes.
 
-2. **Current FollowCursor Theme:** 70% aligned with Fluent 2 — uses Segoe UI Variable and modern dark palette, but needs:
+2. **Current Zumly Theme:** 70% aligned with Fluent 2 — uses Segoe UI Variable and modern dark palette, but needs:
     - Spacing normalization (4px grid)
     - Corner radius unification (4px/8px)
     - Drop shadows and state animations
@@ -150,11 +150,11 @@ Create branches and worktrees before major work. All significant changes should 
 
 ### Context
 
-FollowCursor's theme.py used hardcoded hex colors, inconsistent spacing (2–28px, not on grid), and mixed corner radii (3–18px). Phase 1 of the Fluent 2 alignment creates a token-based architecture.
+Zumly's theme.py used hardcoded hex colors, inconsistent spacing (2–28px, not on grid), and mixed corner radii (3–18px). Phase 1 of the Fluent 2 alignment creates a token-based architecture.
 
 ### Decisions
 
-1. **Token module at `followcursor/app/tokens.py`** — all design constants live here, imported as `T` by theme.py. No other module should hardcode color hex or spacing values.
+1. **Token module at `zumly/app/tokens.py`** — all design constants live here, imported as `T` by theme.py. No other module should hardcode color hex or spacing values.
 
 2. **Spacing normalized to 4px grid** — named tokens: XXS=4, XS=8, SM=12, MD=16, LG=24, XL=32, XXL=48. Padding/margin values that were off-grid (2, 6, 10, 14, 18px) snapped to the nearest token.
 
@@ -181,7 +181,7 @@ FollowCursor's theme.py used hardcoded hex colors, inconsistent spacing (2–28p
 
 ### Context
 
-FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color names and spacing normalization, but used a custom purple-tinted dark palette. Phase 3 replaces these with authentic Fluent 2 values from Microsoft's design spec.
+Zumly's Phase 1 token system (created Jan 2026) introduced semantic color names and spacing normalization, but used a custom purple-tinted dark palette. Phase 3 replaces these with authentic Fluent 2 values from Microsoft's design spec.
 
 ### Research Findings
 
@@ -229,7 +229,7 @@ FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color
 
 **Decision**: This is a *spec alignment* pass, not a UX overhaul. The theme should look nearly identical before/after.
 
-**Rationale**: FollowCursor's dark theme was already ~70% Fluent-aligned. This change makes the palette *officially correct* without disrupting users or requiring new screenshots/docs. Visual changes can come later as a separate design iteration.
+**Rationale**: Zumly's dark theme was already ~70% Fluent-aligned. This change makes the palette *officially correct* without disrupting users or requiring new screenshots/docs. Visual changes can come later as a separate design iteration.
 
 **Result**: Colors shifted slightly (e.g., BG_PANEL #131221 → #1f1f1f), but the overall vibe remains the same dark purple-accented theme.
 
@@ -329,7 +329,7 @@ These workflows complete the Squad branch promotion pipeline: dev → (squad-ci)
 
 **Status:** Captured | **Date:** 2026-04-07T11:31:00Z | **By:** Ahmed Sabbour (via Copilot)
 
-The `gh` CLI default auth is an EMU account (`asabbour_microsoft`) that cannot write to the personal `sabbour/followcursor` repo. All agents performing GitHub write operations (PR comments, thread resolution, issue edits, merges) MUST run `gh auth switch --user sabbour` first, then switch back afterward. Read `.squad/skills/gh-auth-switching/SKILL.md` for full details.
+The `gh` CLI default auth is an EMU account (`asabbour_microsoft`) that cannot write to the personal `sabbour/zumly` repo. All agents performing GitHub write operations (PR comments, thread resolution, issue edits, merges) MUST run `gh auth switch --user sabbour` first, then switch back afterward. Read `.squad/skills/gh-auth-switching/SKILL.md` for full details.
 
 **Rationale:** EMU accounts are restricted from writing to personal/public repos. Agents were failing silently on PR comment/resolve operations until this was diagnosed.
 
@@ -340,7 +340,7 @@ The `gh` CLI default auth is an EMU account (`asabbour_microsoft`) that cannot w
 
 **Status:** Captured | **Date:** 2026-04-07T11:38:00Z | **By:** Ahmed Sabbour (via Copilot)
 
-When all issues in a milestone are closed, Ralph should bump the version in `followcursor/app/version.py`, update `CHANGELOG.md`, commit, tag the release (`git tag vX.Y.Z`), push the tag, and create a GitHub release. Follow the release checklist in `.github/instructions/` and use the `release` skill if available.
+When all issues in a milestone are closed, Ralph should bump the version in `zumly/app/version.py`, update `CHANGELOG.md`, commit, tag the release (`git tag vX.Y.Z`), push the tag, and create a GitHub release. Follow the release checklist in `.github/instructions/` and use the `release` skill if available.
 
 **Rationale:** User request — releases should be automated as part of the Ralph work loop, not a separate manual step.
 
@@ -353,7 +353,7 @@ When all issues in a milestone are closed, Ralph should bump the version in `fol
 
 ### Context
 
-FollowCursor's Phase 1 token system (created Jan 2026) introduced semantic color names and basic spacing (4px grid), but typography and spacing used simplified values that didn't match Microsoft's official Fluent 2 specifications. Issue #100 required full alignment with Fluent 2's type ramp, shape system, spacing tokens, and motion design.
+Zumly's Phase 1 token system (created Jan 2026) introduced semantic color names and basic spacing (4px grid), but typography and spacing used simplified values that didn't match Microsoft's official Fluent 2 specifications. Issue #100 required full alignment with Fluent 2's type ramp, shape system, spacing tokens, and motion design.
 
 ### Research Summary
 
@@ -622,9 +622,9 @@ Added a **runtime-only boolean field** `tts_generating: bool` to `VoiceoverSegme
 **Equality:** Carries `compare=False` — two segments that differ only in synthesis state are considered equal.
 
 **Files changed:**
-- `followcursor/app/models.py` — `tts_generating` field on `VoiceoverSegment`
-- `followcursor/app/main_window.py` — set/clear around `_synthesize_voiceover` and in `_on_ai_tts_result` / `_on_ai_error`
-- `followcursor/tests/test_models.py` — 5 focused regression tests
+- `zumly/app/models.py` — `tts_generating` field on `VoiceoverSegment`
+- `zumly/app/main_window.py` — set/clear around `_synthesize_voiceover` and in `_on_ai_tts_result` / `_on_ai_error`
+- `zumly/tests/test_models.py` — 5 focused regression tests
 
 
 ## Voiceover Generation UI Indicator (McManus, 2026-04-15T23:01:28.412Z)
@@ -650,8 +650,8 @@ Users need visual feedback while TTS audio is being synthesized for a voiceover 
 - Existing colour logic (teal filled / grey pending / teal-bright selected) unchanged.
 
 **Files changed:**
-- `followcursor/app/widgets/timeline_widget.py` — spinner timer, arc rendering
-- `followcursor/tests/test_timeline_widget.py` — 8 regression tests
+- `zumly/app/widgets/timeline_widget.py` — spinner timer, arc rendering
+- `zumly/tests/test_timeline_widget.py` — 8 regression tests
 
 
 ## Narration Guidance Prompt UI (McManus, 2026-04-15T23:04:02.621Z)
@@ -682,10 +682,10 @@ Height fixed at 64 px.
 `generate_narration()` in `ai_service.py` receives `guidance_prompt` parameter, forwarded as `guidance` keyword argument to `_generate_narration_segments()`, which passes it to `_build_narration_system_prompt()`. System prompt appends creator guidance block when non-empty.
 
 **Files changed:**
-- `followcursor/app/widgets/editor_panel.py` — guidance field, label, signal update
-- `followcursor/app/main_window.py` — `_on_generate_narration_requested` signature, `guidance_prompt` kwarg forwarded
-- `followcursor/app/ai_service.py` — `guidance_prompt` param on `generate_narration`
-- `followcursor/tests/test_editor_panel.py` — 6 regression tests
+- `zumly/app/widgets/editor_panel.py` — guidance field, label, signal update
+- `zumly/app/main_window.py` — `_on_generate_narration_requested` signature, `guidance_prompt` kwarg forwarded
+- `zumly/app/ai_service.py` — `guidance_prompt` param on `generate_narration`
+- `zumly/tests/test_editor_panel.py` — 6 regression tests
 
 
 ## User Directive: Narration Prompt Enrichment (Ahmed Sabbour, 2026-04-15T23:04:02.621Z)
@@ -720,11 +720,12 @@ The timeline widget and transport controls were rendering with dark-mode colors 
 
 ### Files Changed
 
-- `followcursor/app/tokens.py` — theme-aware color helpers
-- `followcursor/app/widgets/timeline_widget.py` — custom widget theme propagation
-- `followcursor/app/main_window.py` — theme propagation wiring
-- `followcursor/tests/test_timeline_widget.py` — regression tests
+- `zumly/app/tokens.py` — theme-aware color helpers
+- `zumly/app/widgets/timeline_widget.py` — custom widget theme propagation
+- `zumly/app/main_window.py` — theme propagation wiring
+- `zumly/tests/test_timeline_widget.py` — regression tests
 
 **Rationale:** Custom-painted widgets must follow theme propagation pattern for light/dark mode consistency.
 
 *Captured: 2026-04-15T23:04:02.621Z*
+

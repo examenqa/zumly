@@ -1,10 +1,10 @@
-# FollowCursor — Copilot Agent Instructions
+# Zumly — Copilot Agent Instructions
 
 > Additional instruction files in `.github/instructions/` cover issue implementation conventions and release/versioning.
 
 ## Project Overview
 
-FollowCursor is a **Windows screen recorder** with cinematic cursor-following zoom. It captures screen or window content, tracks mouse/keyboard/click activity, and exports polished MP4 or GIF files where the camera smoothly follows and zooms into the user's cursor movements.
+Zumly is a **Windows screen recorder** with cinematic cursor-following zoom. It captures screen or window content, tracks mouse/keyboard/click activity, and exports polished MP4 or GIF files where the camera smoothly follows and zooms into the user's cursor movements.
 
 **Target audience**: People creating tutorials, demos, and product walkthroughs.
 
@@ -27,7 +27,7 @@ FollowCursor is a **Windows screen recorder** with cinematic cursor-following zo
 ## Repository Structure
 
 ```
-followcursor/                    ← repo root
+zumly/                    ← repo root
 ├── .github/
 │   ├── copilot-instructions.md  ← This file (general context)
 │   ├── instructions/            ← Domain-specific Copilot instructions
@@ -35,11 +35,11 @@ followcursor/                    ← repo root
 │   └── workflows/build.yml     ← GitHub Actions CI
 │                  auto-rebase.yml ← Auto-rebase open PRs on push to main
 ├── .vscode/                     ← VS Code config (launch, tasks, settings)
-├── followcursor/                ← Python project root
+├── zumly/                ← Python project root
 │   ├── main.py                  ← Entry point
 │   ├── requirements.txt         ← Python dependencies
 │   ├── generate_msix_assets.py  ← Generate MSIX tile PNGs from app icon
-│   ├── followcursor.ico         ← App icon
+│   ├── zumly.ico         ← App icon
 │   ├── msix/                    ← MSIX packaging files
 │   │   ├── AppxManifest.xml     ← Package manifest template
 │   │   └── Assets/              ← Generated tile PNGs (gitignored)
@@ -108,8 +108,8 @@ When multiple issues are being worked on simultaneously (e.g. by Copilot coding 
 
 ### Test Suite
 
-- **Framework**: pytest (configured via `followcursor/pytest.ini`)
-- **Location**: `followcursor/tests/` — tests target the pure-logic layer (no Qt dependency)
+- **Framework**: pytest (configured via `zumly/pytest.ini`)
+- **Location**: `zumly/tests/` — tests target the pure-logic layer (no Qt dependency)
 - **Modules tested**: models, zoom_engine, activity_analyzer, utils, frames, backgrounds, project_file, ai_service
 - **CI**: tests run automatically before the PyInstaller build in GitHub Actions
 - **Convention**: one `test_<module>.py` per source module; shared fixtures in `conftest.py`
@@ -120,11 +120,11 @@ When multiple issues are being worked on simultaneously (e.g. by Copilot coding 
 - Dark theme via QSS in `theme.py`, not palette manipulation (palette is minimal base only)
 - Signals/slots for all inter-component communication
 - Background threads for: recording, export, input hooks, thumbnail generation
-- QSettings("FollowCursor", "FollowCursor") for persisted settings
+- QSettings("Zumly", "Zumly") for persisted settings
 - Type hints on all function signatures
 - Docstrings on classes and complex methods
 - **Logging** via Python's `logging` module — no bare `print()`. Each module uses `logger = logging.getLogger(__name__)`. `logging.basicConfig()` is configured in `main.py` with format `"%(name)s | %(levelname)s | %(message)s"` at level `INFO`
-- **Error log file**: A `RotatingFileHandler` in `main.py` writes ERROR+ entries to `%LOCALAPPDATA%/FollowCursor/error.log` (2 MB, 3 backups). Entries include timestamp, module, file path, line number, function name, and full traceback. Use the `/fix-errors` prompt to diagnose and fix logged errors.
+- **Error log file**: A `RotatingFileHandler` in `main.py` writes ERROR+ entries to `%LOCALAPPDATA%/Zumly/error.log` (2 MB, 3 backups). Entries include timestamp, module, file path, line number, function name, and full traceback. Use the `/fix-errors` prompt to diagnose and fix logged errors.
 
 ## Documentation Maintenance
 
@@ -134,7 +134,7 @@ Whenever a feature is **added, changed, or removed**, update the relevant docume
 2. **`docs/QUICKSTART.md`** — Getting-started workflow changes
 3. **`docs/ARCHITECTURE.md`** — System design, data flow, or component changes
 4. **`docs/CONTRIBUTING.md`** — Dev setup, coding conventions, or release process changes
-5. **`followcursor/README.md`** — Features, architecture, shortcuts, or project structure changes
+5. **`zumly/README.md`** — Features, architecture, shortcuts, or project structure changes
 6. **`.github/copilot-instructions.md`** and **`.github/instructions/`** — Architecture, tech stack, repo structure, or convention changes
 
 Do **not** skip documentation updates — they are part of completing any feature or bug fix.
@@ -148,7 +148,8 @@ Do **not** skip documentation updates — they are part of completing any featur
 5. **Never** run compositor during recording — use blur overlay instead
 6. Catch both `BrokenPipeError` and `OSError` on ffmpeg pipe writes — Windows raises `OSError(22)` instead of `BrokenPipeError`
 7. `closeEvent` uses `os._exit(0)` for clean shutdown — prevents Qt cleanup hangs with native hooks
-8. `.github/` folder lives at **repo root**, not inside `followcursor/`
+8. `.github/` folder lives at **repo root**, not inside `zumly/`
 9. `.gitignore` lives at **repo root**
 10. VS Code config (`.vscode/`) lives at **repo root**
-11. Python project files live inside `followcursor/` subfolder
+11. Python project files live inside `zumly/` subfolder
+

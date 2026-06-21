@@ -25,33 +25,33 @@ How to decide who handles what.
 
 | Module | Primary | Secondary |
 |--------|---------|-----------|
-| `followcursor/app/screen_recorder.py` | Fenster | — |
-| `followcursor/app/video_exporter.py` | Fenster | — |
-| `followcursor/app/zoom_engine.py` | Fenster | — |
-| `followcursor/app/activity_analyzer.py` | Fenster | — |
-| `followcursor/app/ai_service.py` | Fenster | — |
-| `followcursor/app/mouse_tracker.py` | Fenster | — |
-| `followcursor/app/keyboard_tracker.py` | Fenster | — |
-| `followcursor/app/click_tracker.py` | Fenster | — |
-| `followcursor/app/cursor_renderer.py` | Fenster | — |
-| `followcursor/app/window_utils.py` | Fenster | — |
-| `followcursor/app/project_file.py` | Fenster | — |
-| `followcursor/app/models.py` | Fenster | McManus |
-| `followcursor/app/main_window.py` | McManus | Fenster |
-| `followcursor/app/widgets/` | McManus | — |
-| `followcursor/app/theme.py` | McManus | — |
-| `followcursor/app/tokens.py` | McManus | — |
-| `followcursor/app/backgrounds.py` | McManus | — |
-| `followcursor/app/frames.py` | McManus | — |
-| `followcursor/app/compositor.py` | McManus | Fenster |
-| `followcursor/app/icon_loader.py` | McManus | — |
-| `followcursor/app/fluent_effects.py` | McManus | — |
-| `followcursor/app/global_hotkeys.py` | Fenster | — |
-| `followcursor/tests/` | Hockney | — |
+| `zumly/app/screen_recorder.py` | Fenster | — |
+| `zumly/app/video_exporter.py` | Fenster | — |
+| `zumly/app/zoom_engine.py` | Fenster | — |
+| `zumly/app/activity_analyzer.py` | Fenster | — |
+| `zumly/app/ai_service.py` | Fenster | — |
+| `zumly/app/mouse_tracker.py` | Fenster | — |
+| `zumly/app/keyboard_tracker.py` | Fenster | — |
+| `zumly/app/click_tracker.py` | Fenster | — |
+| `zumly/app/cursor_renderer.py` | Fenster | — |
+| `zumly/app/window_utils.py` | Fenster | — |
+| `zumly/app/project_file.py` | Fenster | — |
+| `zumly/app/models.py` | Fenster | McManus |
+| `zumly/app/main_window.py` | McManus | Fenster |
+| `zumly/app/widgets/` | McManus | — |
+| `zumly/app/theme.py` | McManus | — |
+| `zumly/app/tokens.py` | McManus | — |
+| `zumly/app/backgrounds.py` | McManus | — |
+| `zumly/app/frames.py` | McManus | — |
+| `zumly/app/compositor.py` | McManus | Fenster |
+| `zumly/app/icon_loader.py` | McManus | — |
+| `zumly/app/fluent_effects.py` | McManus | — |
+| `zumly/app/global_hotkeys.py` | Fenster | — |
+| `zumly/tests/` | Hockney | — |
 | `docs/` | McManus | — |
 | `README.md` | McManus | — |
 | `.github/workflows/` | Keaton | Fenster |
-| `followcursor/scripts/` | Fenster | — |
+| `zumly/scripts/` | Fenster | — |
 
 
 
@@ -76,3 +76,4 @@ How to decide who handles what.
 5. **"Team, ..." → fan-out.** Spawn all relevant agents in parallel as `mode: "background"`.
 6. **Anticipate downstream work.** If a feature is being built, spawn the tester to write test cases from requirements simultaneously.
 7. **Issue-labeled work** — when a `squad:{member}` label is applied to an issue, route to that member. The Lead handles all `squad` (base label) triage.
+

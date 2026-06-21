@@ -1,10 +1,10 @@
-# FollowCursor
+# Zumly
 
 **A Windows screen recorder with cinematic cursor-following zoom.**
 
 Record your screen or any individual window, then export a polished MP4 or GIF where the camera smoothly follows and zooms into your cursor movements. Perfect for tutorials, demos, and product walkthroughs.
 
-![FollowCursor screenshot](screenshot.png)
+![Zumly screenshot](screenshot.png)
 
 ---
 
@@ -78,3 +78,4 @@ Want to contribute? See the **[Contributing Guide](CONTRIBUTING.md)** for dev se
 | Design System | tokens.py + Fluent 2 | 4px grid, semantic colors, consistent spacing |
 
 For the full deep-dive, see the **[Architecture Guide](ARCHITECTURE.md)**.
+

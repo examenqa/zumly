@@ -28,6 +28,7 @@ def _read_version(version_file: str) -> str:
 def define_env(env: Any) -> None:
     """Called by mkdocs-macros-plugin to populate template variables."""
     version_file = os.path.join(
-        os.path.dirname(__file__), "..", "..", "followcursor", "app", "version.py"
+        os.path.dirname(__file__), "..", "..", "zumly", "app", "version.py"
     )
     env.variables["version"] = _read_version(version_file)
+

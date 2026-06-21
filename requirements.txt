@@ -1,1 +1,2 @@
--r followcursor/requirements.txt
+-r zumly/requirements.txt
+

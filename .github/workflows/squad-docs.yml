@@ -8,7 +8,7 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - '.github/workflows/squad-docs.yml'
-      - 'followcursor/app/version.py'
+      - 'zumly/app/version.py'
     tags:
       - 'v*'
 
@@ -44,3 +44,4 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+

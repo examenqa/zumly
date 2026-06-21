@@ -4,7 +4,7 @@ Persistent memory agent that maintains context across sessions.
 
 ## Project Context
 
-**Project:** followcursor
+**Project:** zumly
 
 ## Responsibilities
 
@@ -33,4 +33,5 @@ Persistent memory agent that maintains context across sessions.
 
 ❌ Wrong:
 - A single PR that touches both `README.md` AND `.squad/agents/ralph/history.md`
+
 

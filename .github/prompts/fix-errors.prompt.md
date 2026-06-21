@@ -1,9 +1,9 @@
 ---
-description: "Read the FollowCursor error log and diagnose/fix the bugs found there"
+description: "Read the Zumly error log and diagnose/fix the bugs found there"
 agent: "agent"
 ---
 
-Read the error log file at `%LOCALAPPDATA%/FollowCursor/error.log`.
+Read the error log file at `%LOCALAPPDATA%/Zumly/error.log`.
 
 For each distinct error in the log:
 
@@ -22,3 +22,4 @@ The log format is:
   Function: <function_name>
 <traceback if present>
 ```
+

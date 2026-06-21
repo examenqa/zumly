@@ -31,7 +31,7 @@ jobs:
 
       - name: Extract version
         id: version
-        working-directory: followcursor
+        working-directory: zumly
         shell: pwsh
         run: |
           $ver = python -c "exec(open('app/version.py').read()); print(__version__)"
@@ -61,3 +61,4 @@ jobs:
           git tag -a $tag -m "Release $tag"
           git push origin $tag
           Write-Host "✅ Created and pushed tag $tag — build.yml will handle the release"
+

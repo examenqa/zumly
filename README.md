@@ -1,4 +1,4 @@
-# FollowCursor [![Build](https://github.com/sabbour/followcursor/actions/workflows/build.yml/badge.svg)](https://github.com/sabbour/followcursor/actions/workflows/build.yml)
+# Zumly [![Build](https://github.com/sabbour/zumly/actions/workflows/build.yml/badge.svg)](https://github.com/sabbour/zumly/actions/workflows/build.yml)
 
 A Windows screen recorder with cinematic cursor-following zoom — built with **Python** and **PySide6 (Qt 6)**.
 
@@ -6,7 +6,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 
 > **New here?** Jump to the [Quickstart Guide](docs/QUICKSTART.md) to get recording in under 5 minutes.
 >
-> **📖 Full documentation:** [sabbour.me/followcursor](https://sabbour.me/followcursor)
+> **📖 Full documentation:** [sabbour.me/zumly](https://sabbour.me/zumly)
 
 <https://github.com/user-attachments/assets/b2e8bb7e-2f8e-4668-ab63-c4e4fe0ec552>
 
@@ -14,7 +14,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 
 | Document | Description |
 | -------- | ----------- |
-| [**Documentation Site**](https://sabbour.me/followcursor) | Full docs site with search and navigation |
+| [**Documentation Site**](https://sabbour.me/zumly) | Full docs site with search and navigation |
 | [User Guide](docs/USER_GUIDE.md) | Complete feature reference — every feature explained |
 | [Quickstart Guide](docs/QUICKSTART.md) | Install, record, edit, export — step by step |
 | [Architecture Guide](docs/ARCHITECTURE.md) | How the codebase works: data flow, zoom engine, capture pipeline |
@@ -22,7 +22,7 @@ Record your screen or any individual window, then export a polished MP4 video wh
 
 ## Features
 
-![FollowCursor screenshot](./screenshot.png)
+![Zumly screenshot](./screenshot.png)
 
 ### 🎬 Recording
 
@@ -108,7 +108,7 @@ Build a standalone `.exe` with PyInstaller:
 .\scripts\Build-App.ps1
 ```
 
-Output: `dist\FollowCursor\FollowCursor.exe`
+Output: `dist\Zumly\Zumly.exe`
 
 The build script automatically creates a virtual environment and installs all dependencies if needed.
 
@@ -120,7 +120,7 @@ All build steps are available as VS Code tasks (`Ctrl+Shift+P` → **Tasks: Run 
 | ---- | ------------ |
 | **Run** | Launches the app from source (`main.py`) |
 | **Start Dev** | Creates venv, installs deps, then launches the app |
-| **Build** (`Ctrl+Shift+B`) | Runs `Build-App.ps1` — produces `dist\FollowCursor\FollowCursor.exe` |
+| **Build** (`Ctrl+Shift+B`) | Runs `Build-App.ps1` — produces `dist\Zumly\Zumly.exe` |
 | **Build MSIX (Unsigned)** | Builds the app, then packages an unsigned `.msix` for local testing |
 | **Build MSIX (Signed with PFX)** | Builds the app, then packages and signs the `.msix` with a local certificate |
 | **Install Dependencies** | Runs `pip install -r requirements.txt` into the venv |
@@ -141,7 +141,7 @@ You can also trigger a build manually from the Actions tab.
 
 ### Releasing a new version
 
-1. Update `__version__` in `followcursor/app/version.py`
+1. Update `__version__` in `zumly/app/version.py`
 2. Commit and push to `main`
 3. Tag the commit: `git tag v0.2.0 && git push --tags`
 4. The CI workflow automatically creates a GitHub Release
@@ -167,10 +167,10 @@ You can also trigger a build manually from the Actions tab.
 ## Project Structure
 
 ```text
-followcursor/
+zumly/
 ├── main.py                          # Entry point, QApplication setup
 ├── requirements.txt                 # Python dependencies
-├── followcursor.ico                 # App icon
+├── zumly.ico                 # App icon
 ├── scripts/                         # Build & infra PowerShell scripts
 │   ├── Build-App.ps1                # PyInstaller build script
 │   ├── Start-Dev.ps1                # Dev setup & launch script
@@ -207,3 +207,4 @@ followcursor/
 │       ├── processing_overlay.py    # Pulsing banner while finishing recording
 │       └── recording_border.py      # Red border during recording
 ```
+

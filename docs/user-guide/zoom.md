@@ -1,6 +1,6 @@
 # Zoom & Pan
 
-The zoom system is what makes FollowCursor recordings feel cinematic — it creates smooth camera movements that glide between the areas of your screen your audience needs to see.
+The zoom system is what makes Zumly recordings feel cinematic — it creates smooth camera movements that glide between the areas of your screen your audience needs to see.
 
 ---
 
@@ -12,7 +12,7 @@ You add **zoom segments** to your timeline. Each segment tells the camera to zoo
 
 ## Auto-Generate Zoom Keyframes
 
-FollowCursor can analyze your recorded activity and automatically suggest where to zoom.
+Zumly can analyze your recorded activity and automatically suggest where to zoom.
 
 1. In the **Editor Panel** (right sidebar), find the **SMART ZOOM** section
 2. Pick a sensitivity level:
@@ -122,3 +122,4 @@ The camera smoothly interpolates between pan points using ease-in-out transition
 ## Zoom Timeline Visual
 
 The timeline shows zoom segments as gradient-colored blocks. Pan point markers appear as numbered yellow circles. This gives you a clear picture of where the camera is active and what path it takes through your recording.
+

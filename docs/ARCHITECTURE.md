@@ -1,6 +1,6 @@
 # Architecture Guide
 
-This document describes the internal architecture of FollowCursor: how the major subsystems work, how data flows through the app, and the key design decisions behind the implementation.
+This document describes the internal architecture of Zumly: how the major subsystems work, how data flows through the app, and the key design decisions behind the implementation.
 
 ---
 
@@ -187,7 +187,7 @@ Activity summarized into per-second text, sent to LLM. Returns JSON array of zoo
 
 ### Automated narration
 
-The narration path builds a `SharedRecordingKnowledge` artifact from steady frame samples plus mouse activity, clicks, and authoritative zoom keyframes. When the full frame pack would exceed the provider image cap, FollowCursor sends multimodal batches to **GPT-5.4**, saves the batch notes, and reuses those notes for both narration and chapter generation. Narration synthesizes that shared evidence into five timed voiceover drafts with **Context**, **Background**, **Prompt / Action**, **Walkthrough**, and **Result**. If the draft is too short or too long for the recording, a text-only pacing polish rewrites the same five sections against their timing windows before TTS. The final prompt steers the model toward a peer presentation or pitch instead of cursor-by-cursor recap prose, and the polish pass rewrites literal click/zoom/camera phrasing into action- or outcome-focused language when needed. FollowCursor saves the combined markdown beside the recording as `<video_name>_voiceover.md`, creates generated `VoiceoverSegment` entries, and then hands those segments to the same TTS path used by **Add voiceover** so each segment becomes a normal timeline WAV clip. Ripple clip deletes trim and retime overlapping generated narration segments, rewrite the markdown sidecar, and re-synthesize only the affected generated clips so narration stays aligned with the edited cut. TTS can retry each segment with a small speech-rate nudge (within ±12%) so the combined narration stays within about 1.5 seconds or 1.5% of the video duration, whichever is larger, without obvious silence padding.
+The narration path builds a `SharedRecordingKnowledge` artifact from steady frame samples plus mouse activity, clicks, and authoritative zoom keyframes. When the full frame pack would exceed the provider image cap, Zumly sends multimodal batches to **GPT-5.4**, saves the batch notes, and reuses those notes for both narration and chapter generation. Narration synthesizes that shared evidence into five timed voiceover drafts with **Context**, **Background**, **Prompt / Action**, **Walkthrough**, and **Result**. If the draft is too short or too long for the recording, a text-only pacing polish rewrites the same five sections against their timing windows before TTS. The final prompt steers the model toward a peer presentation or pitch instead of cursor-by-cursor recap prose, and the polish pass rewrites literal click/zoom/camera phrasing into action- or outcome-focused language when needed. Zumly saves the combined markdown beside the recording as `<video_name>_voiceover.md`, creates generated `VoiceoverSegment` entries, and then hands those segments to the same TTS path used by **Add voiceover** so each segment becomes a normal timeline WAV clip. Ripple clip deletes trim and retime overlapping generated narration segments, rewrite the markdown sidecar, and re-synthesize only the affected generated clips so narration stays aligned with the edited cut. TTS can retry each segment with a small speech-rate nudge (within ±12%) so the combined narration stays within about 1.5 seconds or 1.5% of the video duration, whichever is larger, without obvious silence padding.
 
 ### Voiceover (TTS)
 
@@ -358,7 +358,7 @@ GitHub Actions on push/PR to `main` and `v*` tags. Python 3.13 on Windows. Runs 
 
 ## Logging
 
-Python `logging` module. Format: `%(name)s | %(levelname)s | %(message)s`. `RotatingFileHandler` writes ERROR+ to `%LOCALAPPDATA%/FollowCursor/error.log` (2 MB, 3 backups).
+Python `logging` module. Format: `%(name)s | %(levelname)s | %(message)s`. `RotatingFileHandler` writes ERROR+ to `%LOCALAPPDATA%/Zumly/error.log` (2 MB, 3 backups).
 
 ---
 
@@ -401,3 +401,4 @@ Python `logging` module. Format: `%(name)s | %(levelname)s | %(message)s`. `Rota
 | `app/widgets/countdown_overlay.py` | 3-2-1 countdown animation |
 | `app/widgets/processing_overlay.py` | Pulsing banner overlay |
 | `app/widgets/recording_border.py` | Red border during recording |
+

@@ -1,6 +1,6 @@
 # Project Context
 
-- **Project:** followcursor
+- **Project:** zumly
 - **Created:** 2026-04-03
 
 ## Core Context
@@ -30,12 +30,13 @@ Logged a completed Ralph autonomous merge loop (6 Fluent 2 PRs). Files written:
 ### New components shipped in this session
 | File | Type | Purpose |
 |------|------|---------|
-| `followcursor/app/mica.py` | Module | Windows 11 Mica/Acrylic via DwmSetWindowAttribute |
-| `followcursor/app/fluent_button.py` | Component | Fluent 2 hover-animated button |
-| `followcursor/app/fluent_tab_bar.py` | Component | Fluent 2 hover-animated tab bar |
-| `followcursor/tests/test_fluent_button.py` | Test | FluentButton test suite |
-| `followcursor/app/icons/brightness_high_20_regular.svg` | Icon | Theme toggle icon |
+| `zumly/app/mica.py` | Module | Windows 11 Mica/Acrylic via DwmSetWindowAttribute |
+| `zumly/app/fluent_button.py` | Component | Fluent 2 hover-animated button |
+| `zumly/app/fluent_tab_bar.py` | Component | Fluent 2 hover-animated tab bar |
+| `zumly/tests/test_fluent_button.py` | Test | FluentButton test suite |
+| `zumly/app/icons/brightness_high_20_regular.svg` | Icon | Theme toggle icon |
 
 ### Tokens expanded in this session
 - `LIGHT_BRAND_*`, `LIGHT_BG_SUBTLE`, `LIGHT_FOCUS_RING` — full light-theme token set in `tokens.py`
 - `T.FG_1` — used for QSlider track and handle colour
+

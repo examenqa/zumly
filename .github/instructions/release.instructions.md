@@ -7,7 +7,7 @@ applyTo: "**/version.py"
 
 ## Single Source of Truth
 
-`followcursor/app/version.py` contains the canonical version:
+`zumly/app/version.py` contains the canonical version:
 
 ```python
 __version__ = "X.Y.Z"
@@ -26,7 +26,7 @@ Do **not** hard-code version strings anywhere else.
 
 ## Files That Must Be Updated
 
-1. **`followcursor/app/version.py`** — bump `__version__`
+1. **`zumly/app/version.py`** — bump `__version__`
 2. **`CHANGELOG.md`** — add a new `## [X.Y.Z] — YYYY-MM-DD` section at the top with categorized entries (Added, Changed, Fixed, Removed)
 
 ## CHANGELOG Format
@@ -54,7 +54,7 @@ Only include categories that have entries. Bold the feature/area name, then dash
 ## Release Checklist
 
 1. Create a release branch: `release/vX.Y.Z`
-2. Update `followcursor/app/version.py` with the new version
+2. Update `zumly/app/version.py` with the new version
 3. Add a new section to `CHANGELOG.md` with today's date
 4. Run the **Run Tests** VS Code task — all tests must pass
 5. Commit with message: `release: vX.Y.Z`
@@ -67,3 +67,4 @@ Only include categories that have entries. Bold the feature/area name, then dash
 - Builds PyInstaller executable
 - Builds & signs MSIX package (using version from `version.py`)
 - Creates a GitHub Release with zip + MSIX assets
+
