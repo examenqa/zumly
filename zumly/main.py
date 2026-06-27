@@ -7,11 +7,10 @@ from app.screen_recorder import ScreenRecorder
 from app.mouse_tracker import MouseTracker
 from app.click_tracker import ClickTracker
 from app.keyboard_tracker import KeyboardTracker
-from app.global_hotkeys import GlobalHotkeyTracker
+from app.global_hotkeys import GlobalHotkeys
 from app.activity_analyzer import analyze_activity
 from app.video_exporter import VideoExporter
 from app.backgrounds import DEFAULT_PRESET as DEFAULT_BG
-from app.frames import DEFAULT_FRAME
 from app.models import DEFAULT_CLICK_EFFECT
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -21,7 +20,7 @@ def main() -> None:
     parser.add_argument("--out", "-o", required=True, help="Output MP4 path")
     parser.add_argument("--monitor", "-m", type=int, default=1, help="Monitor index (default 1)")
     parser.add_argument("--fps", type=int, default=60, help="Recording FPS")
-    parser.add_argument("--duration", "-d", type=float, default=0.0, help="Optional duration to record in seconds (if 0, stops on hotkey CTRL+ALT+R)")
+    parser.add_argument("--duration", "-d", type=float, default=0.0, help="Optional duration to record in seconds (if 0, stops on hotkey CTRL+SHIFT+R)")
     args = parser.parse_args()
 
     # Determine monitor dimensions
@@ -39,7 +38,13 @@ def main() -> None:
     mouse_tracker = MouseTracker()
     click_tracker = ClickTracker()
     kbd_tracker = KeyboardTracker()
-    hotkey_tracker = GlobalHotkeyTracker()
+    
+    # Setup Hotkey Tracker (Callback based)
+    recording_toggled = [False]
+    def on_hotkey_triggered():
+        recording_toggled[0] = True
+        
+    hotkey_tracker = GlobalHotkeys(callback=on_hotkey_triggered)
     
     # Initialize recorder
     def on_recording_finished(path: str) -> None:
@@ -63,14 +68,14 @@ def main() -> None:
     mouse_tracker.start(start_time_ms)
     click_tracker.start(start_time_ms)
     kbd_tracker.start(start_time_ms)
-    hotkey_tracker.start()
+    hotkey_tracker.register_record_hotkey()
     
     raw_video_path = recorder.start_recording(start_time=start_time_ms/1000.0)
     logging.info(f"Recording started. Outputting raw video to: {raw_video_path}")
     if args.duration > 0:
         logging.info(f"Recording will stop automatically after {args.duration} seconds.")
     else:
-        logging.info("Press CTRL+ALT+R to stop recording.")
+        logging.info("Press CTRL+SHIFT+R to stop recording.")
     
     try:
         start_t = time.time()
@@ -81,7 +86,7 @@ def main() -> None:
                 logging.info(f"Reached duration of {args.duration}s. Stopping recording...")
                 break
             # Check if hotkey pressed
-            if hotkey_tracker.pop_recording_toggle():
+            if recording_toggled[0]:
                 logging.info("Hotkey pressed. Stopping recording...")
                 break
     except KeyboardInterrupt:
@@ -91,7 +96,7 @@ def main() -> None:
     mouse_events = mouse_tracker.stop()
     click_events = click_tracker.stop()
     kbd_events = kbd_tracker.stop()
-    hotkey_tracker.stop()
+    hotkey_tracker.unregister_record_hotkey()
     recorder.stop_recording()
     recorder.stop_capture()
     
@@ -149,10 +154,9 @@ def main() -> None:
         mouse_track=mouse_events,
         monitor_rect=monitor_rect,
         bg_preset=DEFAULT_BG,
-        frame_preset=DEFAULT_FRAME,
+        target_resolution=None,
         click_events=click_events,
         click_preset=DEFAULT_CLICK_EFFECT,
-        output_dim="auto",
         duration_ms=recorder.recording_duration_ms,
         frame_timestamps=recorder.frame_timestamps,
         encoder_id="libx264"

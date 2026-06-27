@@ -211,12 +211,9 @@ class ZoomEngine:
         progress = (
             min(elapsed / active_kf.duration, 1.0) if active_kf.duration > 0 else 1.0
         )
-        # Pan points use ease-in-out for smooth camera movement;
-        # zoom transitions use ease-out for snappy zoom-then-settle.
-        if active_kf.reason == "Pan point":
-            eased = ease_in_out(progress)
-        else:
-            eased = ease_out(progress)
+        # All transitions use ease-in-out for smooth camera movement:
+        # gentle start → accelerate → gentle stop.
+        eased = ease_in_out(progress)
 
         prev_zoom = self.keyframes[active_idx - 1].zoom if active_idx > 0 else 1.0
         prev_x = self.keyframes[active_idx - 1].x if active_idx > 0 else 0.5

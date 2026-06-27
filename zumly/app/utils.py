@@ -9,9 +9,15 @@ logger = logging.getLogger(__name__)
 
 
 def ffmpeg_exe() -> str:
-    """Return path to the ffmpeg binary bundled via imageio-ffmpeg."""
-    import imageio_ffmpeg
-    return imageio_ffmpeg.get_ffmpeg_exe()
+    """Returns the path to the ffmpeg executable."""
+    import os
+    if getattr(sys, 'frozen', False):
+        # Pyinstaller extracts bundled binaries to sys._MEIPASS in one-dir mode
+        base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        return os.path.join(base_dir, "ffmpeg.exe")
+    else:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        return get_ffmpeg_exe()
 
 
 def subprocess_kwargs() -> dict:

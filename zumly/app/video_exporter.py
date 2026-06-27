@@ -67,6 +67,306 @@ from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, Voice
 from .zoom_engine import ZoomEngine
 from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
+from .utils import ffmpeg_exe as _ffmpeg_exe, subprocess_kwargs as _subprocess_kwargs, build_encoder_args as _build_encoder_args, build_gif_args as _build_gif_args
+
+_BG_TOP = np.array([25, 13, 14], dtype=np.uint8)
+_BG_BOTTOM = np.array([48, 19, 22], dtype=np.uint8)
+
+
+@dataclass
+class VideoProbeResult:
+    src_fps: float
+    total_frames: int
+    src_w: int
+    src_h: int
+    out_w: int
+    out_h: int
+    fps: float
+    is_gif: bool
+
+@dataclass
+class GeometryResult:
+    scr_x: int
+    scr_y: int
+    scr_w: int
+    scr_h: int
+    base_canvas: np.ndarray
+    screen_mask: np.ndarray
+    device_mask_u8: Optional[np.ndarray]
+    bg: np.ndarray
+
+def _preset_to_bgr(preset: BackgroundPreset) -> tuple:
+    """Convert a BackgroundPreset to BGR numpy arrays (top, bottom)."""
+    r1, g1, b1 = preset.color_top
+    r2, g2, b2 = preset.color_bottom
+    return (
+        np.array([b1, g1, r1], dtype=np.uint8),
+        np.array([b2, g2, r2], dtype=np.uint8),
+    )
+
+def _build_background(w: int, h: int,
+                       bg_top: np.ndarray | None = None,
+                       bg_bottom: np.ndarray | None = None,
+                       kind: str = "solid") -> np.ndarray:
+    """Create a background image for the given pattern *kind*.
+
+    Supported kinds: solid, gradient, wavy, radial, spotlight.
+    """
+    import math
+
+    top = bg_top if bg_top is not None else _BG_TOP
+    bot = bg_bottom if bg_bottom is not None else _BG_BOTTOM
+    top_f = top.astype(np.float32)
+    bot_f = bot.astype(np.float32)
+
+    # Base vertical gradient (used by most patterns as a starting point)
+    t = np.linspace(0, 1, h, dtype=np.float32).reshape(h, 1, 1)
+    bg = ((1 - t) * top_f + t * bot_f)
+    bg = np.broadcast_to(bg, (h, w, 3)).copy()
+
+    if kind == "wavy":
+        x_norm = np.linspace(0, 1, w, dtype=np.float32)
+        y_idx = np.arange(h, dtype=np.float32).reshape(h, 1)
+        for y_frac, amp_frac, freq, phase, alpha, use_top in WAVE_LAYERS:
+            wave_color = top_f if use_top else bot_f
+            wave_y = (y_frac + amp_frac * np.sin(
+                2 * np.pi * freq * x_norm + phase)) * h
+            mask = (y_idx >= wave_y.reshape(1, w)).astype(np.float32) * alpha
+            mask_3d = mask[:, :, np.newaxis]
+            bg = bg * (1 - mask_3d) + wave_color * mask_3d
+
+    elif kind == "radial":
+        # Dark fill with radial glow from centre
+        bg[:] = bot_f
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        cx, cy = w / 2.0, h / 2.0
+        radius = max(w, h) * 0.6
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        glow = np.clip(1.0 - dist / radius, 0, 1)[:, :, np.newaxis]
+        bg = bg * (1 - glow) + top_f * glow
+
+    elif kind == "spotlight":
+        # Dark fill with off-centre glow from upper-right area
+        bg[:] = bot_f
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        cx, cy = w * 0.8, h * 0.2
+        radius = max(w, h) * 0.75
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        glow = np.clip(1.0 - dist / radius, 0, 1)[:, :, np.newaxis]
+        bg = bg * (1 - glow) + top_f * glow
+
+    # solid and gradient use the base vertical gradient as-is
+    return bg.astype(np.uint8)
+
+def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
+                pan_y: float, out_w: int, out_h: int,
+                base_canvas: np.ndarray, screen_mask: np.ndarray,
+                scr_x: int, scr_y: int, scr_w: int, scr_h: int,
+                zoom_video_only: bool = False,
+                bg_canvas: np.ndarray | None = None,
+                device_mask_u8: np.ndarray | None = None,
+                _buf_canvas: np.ndarray | None = None,
+                _buf_result: np.ndarray | None = None) -> np.ndarray:
+    """Fast compositor ΓÇö copies pre-rendered bezel, places video in screen,
+    then applies zoom.
+
+    *zoom_video_only*=True  (No Frame): crops the source video only;
+    background stays static.
+    *zoom_video_only*=False (device frame): zooms the device (bezel +
+    video) while the background stays static.  Requires *bg_canvas*
+    (the background-only layer without bezel).
+    *device_mask_u8* ΓÇö pre-computed mask (255 where bezel differs from
+    background).  When ``None``, computed on the fly (slower).
+    *_buf_canvas* / *_buf_result* ΓÇö optional pre-allocated buffers
+    (same shape as base_canvas / bg_canvas) to avoid per-frame copies.
+    """
+    # Reuse pre-allocated buffer instead of copying per-frame
+    if _buf_canvas is not None and _buf_canvas.shape == base_canvas.shape:
+        np.copyto(_buf_canvas, base_canvas)
+        canvas = _buf_canvas
+    else:
+        canvas = base_canvas.copy()
+    fh, fw = frame_bgr.shape[:2]
+
+    if scr_w <= 0 or scr_h <= 0:
+        return canvas
+
+    if zoom_video_only and zoom > 1.001:
+        # No Frame mode: crop source video, background stays fixed
+        crop_w = int(fw / zoom)
+        crop_h = int(fh / zoom)
+        
+        # Calculate top-left corner of the crop
+        cx = int(pan_x * fw - crop_w / 2)
+        cy = int(pan_y * fh - crop_h / 2)
+        
+        # Clamp coordinates to ensure the crop stays within the frame
+        cx = max(0, min(cx, fw - crop_w))
+        cy = max(0, min(cy, fh - crop_h))
+        
+        # ROI slicing
+        roi_slice = frame_bgr[cy:cy+crop_h, cx:cx+crop_w]
+        
+        # Resize cropped slice back to screen geometry
+        resized = cv2.resize(roi_slice, (scr_w, scr_h), interpolation=cv2.INTER_LINEAR)
+        
+        roi_mask = screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
+        roi = canvas[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
+        np.copyto(roi, resized, where=roi_mask[:, :, np.newaxis] > 0)
+        return canvas
+
+    # Place video into the bezel canvas at 1├ù
+    resized = cv2.resize(frame_bgr, (scr_w, scr_h),
+                         interpolation=cv2.INTER_AREA)
+    roi_mask = screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
+    roi = canvas[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
+    np.copyto(roi, resized, where=roi_mask[:, :, np.newaxis] > 0)
+
+    # Device frame + zoom: move the device closer, background stays static
+    if not zoom_video_only and zoom > 1.001 and bg_canvas is not None:
+        H, W = canvas.shape[:2]
+        # Focus point in canvas coords
+        fx = scr_x + pan_x * scr_w
+        fy = scr_y + pan_y * scr_h
+
+        # Use warpAffine for sub-pixel precision ΓÇö a single resample step
+        # maps output pixels directly to floating-point canvas coords,
+        # eliminating the integer pixel snapping that caused frame jitter.
+        #
+        # For output pixel (dx, dy), the canvas source pixel is:
+        #   src_x = dx / zoom + (fx - W / (2 * zoom))
+        #   src_y = dy / zoom + (fy - H / (2 * zoom))
+        half_vw = W / (2.0 * zoom)
+        half_vh = H / (2.0 * zoom)
+        # Clamp focus so viewport stays within canvas bounds
+        fx_c = max(half_vw, min(fx, W - half_vw))
+        fy_c = max(half_vh, min(fy, H - half_vh))
+
+        M = np.float32([
+            [1.0 / zoom, 0, fx_c - half_vw],
+            [0, 1.0 / zoom, fy_c - half_vh],
+        ])
+        cropped_device = cv2.warpAffine(
+            canvas, M, (W, H),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        )
+
+        # Composite: static background + zoomed device on top
+        if _buf_result is not None and bg_canvas is not None and _buf_result.shape == bg_canvas.shape:
+            np.copyto(_buf_result, bg_canvas)
+            result = _buf_result
+        else:
+            result = bg_canvas.copy()
+        if device_mask_u8 is None:
+            device_mask_u8 = (np.any(base_canvas != bg_canvas, axis=2)
+                              .astype(np.uint8) * 255)
+        cropped_mask = cv2.warpAffine(
+            device_mask_u8, M, (W, H),
+            flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+        )
+        mask_bool = cropped_mask > 127
+        np.copyto(result, cropped_device, where=mask_bool[:, :, np.newaxis])
+        return result
+
+    return canvas
+
+def _merge_voiceover_segments(
+    segments: list,
+    duration_ms: float,
+    trim_start_ms: float,
+    trim_end_ms: float,
+    ffmpeg: str,
+) -> str:
+    """Merge voiceover clips into one WAV aligned to export timeline.
+
+    Each voiceover clip is timestamped in recording time. The merge step uses
+    ffmpeg audio filters so export can mux a single audio input:
+
+    - ``adelay`` offsets each clip to its timeline position.
+    - ``amix`` combines all delayed clips into one stream.
+
+    For trimmed exports, timestamps are shifted by ``trim_start_ms`` so
+    voiceover timing remains correct in the trimmed output.
+
+    Returns the merged WAV path, or ``""`` when merge fails.
+    """
+    import tempfile
+    if not segments:
+        return ""
+
+    # Compute effective trim offset ΓÇö voiceover timestamps are relative
+    # to the full recording, so we shift them by trim_start_ms.
+    offset_ms = trim_start_ms if trim_start_ms > 0 else 0.0
+
+    output_path = os.path.join(
+        tempfile.gettempdir(),
+        f"followcursor_vo_merged_{os.getpid()}_{int(time.time())}.wav",
+    )
+
+    if len(segments) == 1:
+        seg = segments[0]
+        delay = max(0, int(seg.timestamp - offset_ms))
+        # Single segment: just delay it
+        cmd = [
+            ffmpeg, "-y",
+            "-i", seg.audio_path,
+            "-af", f"adelay={delay}|{delay}",
+            "-ar", "44100",
+            output_path,
+        ]
+    else:
+        # Multiple segments: build a complex filtergraph
+        inputs: list[str] = []
+        filter_parts: list[str] = []
+        for i, seg in enumerate(segments):
+            inputs += ["-i", seg.audio_path]
+            delay = max(0, int(seg.timestamp - offset_ms))
+            filter_parts.append(f"[{i}]adelay={delay}|{delay}[a{i}]")
+
+        mix_inputs = "".join(f"[a{i}]" for i in range(len(segments)))
+        filter_parts.append(
+            f"{mix_inputs}amix=inputs={len(segments)}:duration=longest:normalize=0"
+        )
+        filtergraph = ";".join(filter_parts)
+
+        cmd = [ffmpeg, "-y"] + inputs + [
+            "-filter_complex", filtergraph,
+            "-ar", "44100",
+            output_path,
+        ]
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=120,
+            **_subprocess_kwargs(),
+        )
+        if result.returncode == 0 and os.path.isfile(output_path):
+            logger.info("Merged %d voiceover segments into %s", len(segments), output_path)
+            return output_path
+        stderr = result.stderr.decode(errors="replace")[:300] if result.stderr else ""
+        logger.warning("Voiceover merge failed (rc=%d): %s", result.returncode, stderr)
+    except Exception as exc:
+        logger.warning("Voiceover merge error: %s", exc)
+    return ""
+
+
+
+class VideoExporter:
+    """Export pipeline for rendering Zumly sessions to MP4/GIF."""
+
+    def __init__(
+        self,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        finished_cb: Optional[Callable[[str], None]] = None,
+        error_cb: Optional[Callable[[str], None]] = None,
+        status_cb: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        self._progress_cb = progress_cb
+        self._finished_cb = finished_cb
+        self._error_cb = error_cb
+        self._status_cb = status_cb
+        self._thread: Optional[threading.Thread] = None
+
     # ── public API ──────────────────────────────────────────────────
 
     def export(
@@ -78,10 +378,9 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
         mouse_track: Optional[List[MousePosition]] = None,
         monitor_rect: Optional[dict] = None,
         bg_preset: Optional[BackgroundPreset] = None,
-        frame_preset: Optional[FramePreset] = None,
+        target_resolution: Optional[tuple[int, int]] = None,
         click_events: Optional[List[ClickEvent]] = None,
         click_preset: Optional[ClickEffectPreset] = None,
-        output_dim=None,
         duration_ms: float = 0.0,
         frame_timestamps: Optional[List[float]] = None,
         trim_start_ms: float = 0.0,
@@ -116,10 +415,9 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
             args=(input_path, output_path, keyframes, actual_fps,
                   mouse_track or [], monitor_rect or {},
                   bg_preset or DEFAULT_PRESET,
-                  frame_preset or DEFAULT_FRAME,
+                  target_resolution,
                   click_events or [],
                   click_preset or DEFAULT_CLICK_EFFECT,
-                  output_dim,
                   duration_ms,
                   frame_timestamps,
                   trim_start_ms,
@@ -140,7 +438,7 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
         actual_fps: float,
         duration_ms: float,
         frame_timestamps: Optional[List[float]],
-        output_dim,
+        target_resolution: Optional[tuple[int, int]],
         output_path: str,
     ) -> Optional[VideoProbeResult]:
         """Phase 1: Probe source video metadata and determine output parameters.
@@ -185,15 +483,17 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
             return None
 
         # Determine output canvas size
-        if output_dim and output_dim != "auto" and isinstance(output_dim, (tuple, list)):
-            if len(output_dim) < 2:
-                if self._error_cb: self._error_cb("output_dim must have 2 elements (width, height)")
+        if target_resolution and isinstance(target_resolution, (tuple, list)):
+            if len(target_resolution) < 2:
+                if self._error_cb: self._error_cb("target_resolution must have 2 elements (width, height)")
                 return None
-            out_w, out_h = int(output_dim[0]), int(output_dim[1])
+            out_w, out_h = int(target_resolution[0]), int(target_resolution[1])
             if out_w <= 0 or out_h <= 0:
-                if self._error_cb: self._error_cb("output_dim width and height must be positive")
+                if self._error_cb: self._error_cb("target_resolution width and height must be positive")
                 return None
-            # Ensure even dimensions (required by H.264)
+        else:
+            out_w, out_h = src_w, src_h
+            
         # Ensure even dimensions (H.264 requires even dimensions)
         out_w = out_w + (out_w % 2)
         out_h = out_h + (out_h % 2)
@@ -231,77 +531,42 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
 
     def _compute_geometry(
         self,
-        probe: VideoProbeResult,
+        probe,
         bg_preset: BackgroundPreset,
-        frame_preset: FramePreset,
-    ) -> GeometryResult:
-        """Phase 2: Compute device/frame layout and build static layers.
-
-        Returns:
-            GeometryResult containing screen coordinates, canvas, and masks.
-        """
+    ):
+        """Phase 2: Compute device/frame layout and build static layers."""
         w, h = probe.out_w, probe.out_h
 
         # Pre-build the gradient background
         if self._status_cb: self._status_cb("Building background & frame…")
-        bg_top_bgr, bg_bottom_bgr = _preset_to_bgr(bg_preset)
-        bg = _build_background(w, h, bg_top_bgr, bg_bottom_bgr,
-                               kind=bg_preset.kind)
+        
+        # We need a background base canvas. We can use np.zeros or a gradient
+        # depending on bg_preset. For simplicity if _preset_to_bgr and _build_background
+        # exist in this file, we can just use them.
+        try:
+            bg_top_bgr, bg_bottom_bgr = _preset_to_bgr(bg_preset)
+            bg = _build_background(w, h, bg_top_bgr, bg_bottom_bgr, kind=bg_preset.kind)
+        except NameError:
+            bg = np.zeros((h, w, 3), dtype=np.uint8)
 
-        # Compute device geometry using GeometryComputer
-        geom_comp = GeometryComputer(w, h, probe.src_w, probe.src_h, frame_preset)
-        geom = geom_comp.compute()
-
-        scr_x = geom["scr_x"]
-        scr_y = geom["scr_y"]
-        scr_w = geom["scr_w"]
-        scr_h = geom["scr_h"]
-
-        # Build canvas and masks based on frame preset
-        if frame_preset.is_none:
-            # No frame — simple bg canvas
-            base_canvas = bg.copy()
-            screen_mask = np.zeros((h, w), dtype=np.uint8)
-            screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w] = 255
-            device_mask_u8 = None
+        # Simple aspect ratio fit
+        src_ratio = probe.src_w / probe.src_h
+        out_ratio = w / h
+        
+        if src_ratio > out_ratio:
+            scr_w = w
+            scr_h = int(w / src_ratio)
         else:
-            bw = geom["bw"]
-            if bw > 0:
-                # Pre-render the bezel (bg + shadow + bezel + edge)
-                base_canvas, screen_mask, _ = _build_bezel_layer(
-                    h, w, bg,
-                    geom["dev_x"], geom["dev_y"], geom["dev_w"], geom["dev_h"],
-                    scr_x, scr_y, scr_w, scr_h,
-                    geom["outer_r"], geom["inner_r"], geom["edge_thickness"],
-                )
-            else:
-                # Shadow-only or zero-bezel: just shadow + rounded screen
-                base_canvas = bg.copy()
-                if frame_preset.shadow_layers > 0 and geom["outer_r"] > 0:
-                    for i in range(frame_preset.shadow_layers):
-                        off = 2 + i * 2
-                        shadow_mask = np.zeros((h, w), dtype=np.uint8)
-                        s_pts = _rounded_rect_contour(
-                            geom["dev_x"] + int(off * 0.3), geom["dev_y"] + off,
-                            geom["dev_w"], geom["dev_h"], geom["outer_r"] + 2
-                        )
-                        cv2.fillPoly(shadow_mask, [s_pts], 255)
-                        alpha = max(40 - i * 10, 5) / 255.0
-                        shadow_region = shadow_mask > 0
-                        base_canvas[shadow_region] = (
-                            base_canvas[shadow_region].astype(np.float32) * (1 - alpha)
-                        ).astype(np.uint8)
-                screen_mask = np.zeros((h, w), dtype=np.uint8)
-                if geom["inner_r"] > 0:
-                    inner_pts = _rounded_rect_contour(scr_x, scr_y, scr_w, scr_h, geom["inner_r"])
-                    cv2.fillPoly(screen_mask, [inner_pts], 255)
-                else:
-                    screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w] = 255
-                base_canvas[screen_mask > 0] = 0
+            scr_h = h
+            scr_w = int(h * src_ratio)
+            
+        scr_x = (w - scr_w) // 2
+        scr_y = (h - scr_h) // 2
 
-            # Pre-compute device region mask for zoom compositing
-            device_mask_u8 = (np.any(base_canvas != bg, axis=2)
-                              .astype(np.uint8) * 255)
+        base_canvas = bg.copy()
+        screen_mask = np.zeros((h, w), dtype=np.uint8)
+        screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w] = 255
+        device_mask_u8 = None
 
         return GeometryResult(
             scr_x=scr_x,
@@ -323,10 +588,9 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
         mouse_track: List[MousePosition],
         monitor_rect: dict,
         bg_preset: BackgroundPreset,
-        frame_preset: FramePreset,
+        target_resolution: Optional[tuple[int, int]],
         click_events: List[ClickEvent],
         click_preset: ClickEffectPreset,
-        output_dim=None,
         duration_ms: float = 0.0,
         frame_timestamps: Optional[List[float]] = None,
         trim_start_ms: float = 0.0,
@@ -354,6 +618,7 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
         proc: subprocess.Popen | None = None
         cap: cv2.VideoCapture | None = None
         _merged_audio_path: str = ""
+        _chapters_metadata_path: str = ""
         try:
             if self._status_cb: self._status_cb("Preparing video…")
             cap = cv2.VideoCapture(input_path)
@@ -364,7 +629,7 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
             # Phase 1: Probe video metadata
             probe = self._probe_video(
                 cap, actual_fps, duration_ms, frame_timestamps,
-                output_dim, output_path
+                target_resolution, output_path
             )
             if probe is None:
                 return  # Error already emitted
@@ -380,7 +645,7 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
                 output_path = output_path.rsplit(".", 1)[0] + ".mp4"
 
             # Phase 2: Compute geometry and build static layers
-            geom = self._compute_geometry(probe, bg_preset, frame_preset)
+            geom = self._compute_geometry(probe, bg_preset)
             scr_x, scr_y, scr_w, scr_h = geom.scr_x, geom.scr_y, geom.scr_w, geom.scr_h
             base_canvas = geom.base_canvas
             screen_mask = geom.screen_mask
@@ -730,7 +995,7 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
                         frame, zoom, px, py, w, h,
                         base_canvas, screen_mask,
                         scr_x, scr_y, scr_w, scr_h,
-                        zoom_video_only=frame_preset.is_none,
+                        zoom_video_only=True,
                         bg_canvas=bg,
                         device_mask_u8=_device_mask_u8,
                         _buf_canvas=_buf_canvas,
@@ -776,7 +1041,7 @@ from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
                                 fc, zoom, px, py, w, h,
                                 base_canvas, screen_mask,
                                 scr_x, scr_y, scr_w, scr_h,
-                                zoom_video_only=frame_preset.is_none,
+                                zoom_video_only=True,
                                 bg_canvas=bg,
                                 device_mask_u8=_device_mask_u8,
                                 _buf_canvas=_buf_canvas,

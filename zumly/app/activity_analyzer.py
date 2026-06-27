@@ -23,13 +23,13 @@ PEAK_TOP_N = 6            # max activity clusters
 ZOOM_LEVEL = 1.5          # zoom factor for auto-keyframes (overridden by depth setting)
 ZOOM_HOLD_TYPING_MS = 3000 # hold longer for typing (user is still working)
 ZOOM_HOLD_CLICK_MS = 2000  # hold for click clusters
-TRANSITION_MS = 600       # easing duration (zoom-in)
+TRANSITION_MS = 800       # easing duration (zoom-in)
 PAN_TRANSITION_MS = 400   # base duration for panning to new target while zoomed
 PAN_TRANSITION_MAX_MS = 700  # cap pan duration even for large distances
 PAN_MERGE_GAP_MS = 1500  # if next cluster starts within this gap of current cluster ending, pan instead of zoom-out/in
 MAX_CHAIN_LENGTH = 4     # max clusters in a single pan chain before forcing a zoom-out
 MAX_CLUSTER_DURATION_MS = 8000  # split clusters that exceed this total span
-ANTICIPATION_MS = 100     # arrive this many ms *before* action starts so the viewer sees the trigger
+ANTICIPATION_MS = 400     # arrive this many ms *before* action starts so the viewer sees the trigger
 
 # Thresholds
 TYPING_MIN_KPS = 1.0      # minimum keys-per-second to count as typing
