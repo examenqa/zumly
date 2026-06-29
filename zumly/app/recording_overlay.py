@@ -31,6 +31,9 @@ HWND_TOPMOST = -1
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
+BASE_DPI = 96.0
+BASE_WIDTH = 168
+BASE_HEIGHT = 34
 
 class WNDCLASSEX(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT),
@@ -71,6 +74,9 @@ user32.DefWindowProcW.restype = wintypes.LPARAM
 
 user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostThreadMessageW.restype = wintypes.BOOL
+if hasattr(user32, "GetDpiForSystem"):
+    user32.GetDpiForSystem.argtypes = []
+    user32.GetDpiForSystem.restype = wintypes.UINT
 user32.BeginPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PAINTSTRUCT)]
 user32.BeginPaint.restype = wintypes.HDC
 user32.EndPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PAINTSTRUCT)]
@@ -116,11 +122,25 @@ user32.DrawTextW.argtypes = [
 user32.DrawTextW.restype = ctypes.c_int
 
 
+def _get_system_scale_factor() -> float:
+    """Return the active system DPI scale relative to the 96-DPI baseline."""
+    try:
+        dpi = float(user32.GetDpiForSystem())
+    except Exception:
+        dpi = BASE_DPI
+    if dpi <= 0:
+        dpi = BASE_DPI
+    return dpi / BASE_DPI
+
+
 class RecordingOverlay:
     """A pure Win32 frameless, transparent window excluded from capture."""
     
     def __init__(self, monitor_rect: dict):
         self.monitor_rect = monitor_rect
+        self.scale_factor = _get_system_scale_factor()
+        self.width = self._px(BASE_WIDTH)
+        self.height = self._px(BASE_HEIGHT)
         self.hwnd = None
         self.thread_id = None
         self._class_name = ""
@@ -138,6 +158,17 @@ class RecordingOverlay:
             user32.PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0)
             self._thread.join(timeout=2.0)
 
+    def _px(self, value: float) -> int:
+        return max(1, int(round(value * self.scale_factor)))
+
+    def _rect(self, left: float, top: float, right: float, bottom: float) -> wintypes.RECT:
+        return wintypes.RECT(
+            self._px(left),
+            self._px(top),
+            self._px(right),
+            self._px(bottom),
+        )
+
     def _wndproc(self, hwnd, msg, wparam, lparam):
         if msg == WM_PAINT:
             ps = PAINTSTRUCT()
@@ -150,14 +181,22 @@ class RecordingOverlay:
             # Draw dark gray pill background
             hbrush_bg = gdi32.CreateSolidBrush(0x001C1C1C) # RGB(28,28,28) -> BGR(0x1c1c1c)
             old_brush = gdi32.SelectObject(hdc, hbrush_bg)
-            gdi32.RoundRect(hdc, 0, 0, 168, 34, 17, 17)
+            gdi32.RoundRect(
+                hdc,
+                0,
+                0,
+                self.width,
+                self.height,
+                self._px(17),
+                self._px(17),
+            )
             gdi32.SelectObject(hdc, old_brush)
             gdi32.DeleteObject(hbrush_bg)
 
             # Draw crimson red circle indicator
             hbrush_red = gdi32.CreateSolidBrush(0x002311E8) # RGB(232,17,35) -> BGR(0x2311e8)
             old_brush = gdi32.SelectObject(hdc, hbrush_red)
-            gdi32.Ellipse(hdc, 14, 9, 28, 23)
+            gdi32.Ellipse(hdc, self._px(14), self._px(9), self._px(28), self._px(23))
             gdi32.SelectObject(hdc, old_brush)
             gdi32.DeleteObject(hbrush_red)
 
@@ -165,17 +204,18 @@ class RecordingOverlay:
             text = "Recording"
             gdi32.SetBkMode(hdc, TRANSPARENT)
             
-            # Create Segoe UI 10pt font (-13 or -14 pixels for 10pt)
+            # Create Segoe UI at the scaled 10pt logical size
             # FW_NORMAL = 400, DEFAULT_CHARSET = 1, CLEARTYPE_QUALITY = 5
-            hfont = gdi32.CreateFontW(-14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+            font_height = -self._px(14)
+            hfont = gdi32.CreateFontW(font_height, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
             old_font = gdi32.SelectObject(hdc, hfont)
 
             flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
-            shadow_rect = wintypes.RECT(34, 1, 164, 34)
+            shadow_rect = self._rect(34, 1, 164, 34)
             gdi32.SetTextColor(hdc, 0x00000000)
             user32.DrawTextW(hdc, text, -1, ctypes.byref(shadow_rect), flags)
 
-            rect = wintypes.RECT(33, 0, 163, 34)
+            rect = self._rect(33, 0, 163, 34)
             gdi32.SetTextColor(hdc, 0x00FFFFFF)
             user32.DrawTextW(hdc, text, -1, ctypes.byref(rect), flags)
 
@@ -210,10 +250,10 @@ class RecordingOverlay:
         user32.RegisterClassExW(ctypes.byref(wndclass))
 
         # Position at the top-center of the recording monitor
-        width = 168
-        height = 34
+        width = self.width
+        height = self.height
         x = self.monitor_rect.get("left", 0) + (self.monitor_rect.get("width", 1920) - width) // 2
-        y = self.monitor_rect.get("top", 0) + 20
+        y = self.monitor_rect.get("top", 0) + self._px(20)
 
         self.hwnd = user32.CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
