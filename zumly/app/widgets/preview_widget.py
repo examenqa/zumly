@@ -9,6 +9,9 @@ import time as _time
 
 logger = logging.getLogger(__name__)
 
+MAX_INTERACTIVE_PREVIEW_PIXELS = 1920 * 1080
+MAX_INTERACTIVE_PREVIEW_EDGE = 1920
+
 # Heavy imports deferred to first use for faster startup
 # import cv2   — imported lazily
 # import numpy — imported lazily
@@ -446,8 +449,8 @@ class PreviewWidget(QWidget):
             # Anchor wall-clock time for incremental speed-aware playback
             self._last_playback_wall = _time.perf_counter()
             self._playing = True
-            # Use a fast timer (8ms) and select frames by wall-clock
-            self._playback_timer.start(16)
+            # Use a steady preview timer and select frames by wall-clock.
+            self._playback_timer.start(33)
             self.playback_state_changed.emit(True)
 
     def pause(self) -> None:
@@ -863,26 +866,51 @@ class PreviewWidget(QWidget):
         if has_margins:
             painter.fillRect(QRectF(0, 0, W, H), QColor(0, 0, 0))
 
-        # Render scene at canvas dimensions so the device frame fits
-        # properly within the output aspect ratio.
-        painter.translate(canvas_x, canvas_y)
-        painter.setClipRect(QRectF(0, 0, canvas_w, canvas_h))
+        # Render oversized/maximized previews through a bounded offscreen
+        # canvas. The editor preview is interactive, not the export path; this
+        # prevents high-DPI/fullscreen paint storms from exhausting Qt/GDI.
+        render_scale = self._interactive_render_scale(canvas_w, canvas_h)
+        if render_scale < 0.999:
+            rw = max(1, int(canvas_w * render_scale))
+            rh = max(1, int(canvas_h * render_scale))
+            preview_img = QImage(rw, rh, QImage.Format.Format_ARGB32_Premultiplied)
+            preview_img.fill(QColor(0, 0, 0, 0))
+            preview_painter = QPainter(preview_img)
+            preview_painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            preview_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            compose_scene(
+                preview_painter, self._frame,
+                rw, rh,
+                self._zoom, self._pan_x, self._pan_y,
+                mouse_track=self._mouse_track or None,
+                time_ms=self._current_time_ms,
+                monitor_rect=self._monitor_rect,
+                bg_preset=self._bg_preset,
+                frame_preset=self._frame_preset,
+                click_events=self._click_events or None,
+                click_preset=self._click_preset,
+            )
+            preview_painter.end()
+            painter.drawImage(QRectF(canvas_x, canvas_y, canvas_w, canvas_h), preview_img)
+        else:
+            painter.translate(canvas_x, canvas_y)
+            painter.setClipRect(QRectF(0, 0, canvas_w, canvas_h))
 
-        compose_scene(
-            painter, self._frame,
-            canvas_w, canvas_h,
-            self._zoom, self._pan_x, self._pan_y,
-            mouse_track=self._mouse_track or None,
-            time_ms=self._current_time_ms,
-            monitor_rect=self._monitor_rect,
-            bg_preset=self._bg_preset,
-            frame_preset=self._frame_preset,
-            click_events=self._click_events or None,
-            click_preset=self._click_preset,
-        )
+            compose_scene(
+                painter, self._frame,
+                canvas_w, canvas_h,
+                self._zoom, self._pan_x, self._pan_y,
+                mouse_track=self._mouse_track or None,
+                time_ms=self._current_time_ms,
+                monitor_rect=self._monitor_rect,
+                bg_preset=self._bg_preset,
+                frame_preset=self._frame_preset,
+                click_events=self._click_events or None,
+                click_preset=self._click_preset,
+            )
 
-        painter.setClipping(False)
-        painter.resetTransform()
+            painter.setClipping(False)
+            painter.resetTransform()
 
         # Crosshatch overlay on letterbox/pillarbox margins (areas not in final video)
         if has_margins:
@@ -897,6 +925,15 @@ class PreviewWidget(QWidget):
             self._draw_centroid_pick_banner(painter)
 
         painter.end()
+
+    @staticmethod
+    def _interactive_render_scale(canvas_w: float, canvas_h: float) -> float:
+        """Return an offscreen scale that bounds live preview paint cost."""
+        if canvas_w <= 0 or canvas_h <= 0:
+            return 1.0
+        pixel_scale = (MAX_INTERACTIVE_PREVIEW_PIXELS / max(canvas_w * canvas_h, 1.0)) ** 0.5
+        edge_scale = MAX_INTERACTIVE_PREVIEW_EDGE / max(canvas_w, canvas_h, 1.0)
+        return min(1.0, pixel_scale, edge_scale)
 
     # ── recording overlay helpers ─────────────────────────────────
 
