@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -75,47 +75,90 @@ class _CollapsibleSection(QWidget):
 
     def __init__(self, title: str, body: QWidget, collapsed: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("AccordionSection")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # Header button
         self._btn = QPushButton()
-        self._btn.setFixedHeight(32)
+        self._btn.setObjectName("AccordionHeader")
+        self._btn.setFixedHeight(42)
         self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn.setStyleSheet(
-            f"QPushButton {{ background: {T.BG_ELEVATED}; color: {T.FG_SECONDARY};"
+            f"QPushButton#AccordionHeader {{ background: {T.BG_LAYER_2}; color: {T.FG_2};"
             f"  font-size: {T.FONT_SIZE_CAPTION}px;"
-            f"  font-weight: 600; letter-spacing: 1px; border: none;"
+            f"  font-weight: 650; border: 1px solid {T.STROKE_2};"
+            f"  border-radius: {T.RADIUS_MEDIUM}px;"
             f"  text-align: left;"
-            f"  padding: 8px; }}"
-            f"QPushButton:hover {{ background: {T.BG_INTERACTIVE}; color: {T.FG_PRIMARY}; }}"
+            f"  padding: 0 12px; }}"
+            f"QPushButton#AccordionHeader:hover {{ background: {T.BG_LAYER_3}; color: {T.FG_PRIMARY};"
+            f"  border-color: {T.STROKE_1}; }}"
         )
         self._btn.clicked.connect(self._toggle)
         layout.addWidget(self._btn)
 
-        self._body = body
-        layout.addWidget(body)
+        self._body_shell = QFrame()
+        self._body_shell.setObjectName("AccordionBody")
+        self._body_shell.setStyleSheet(
+            f"QFrame#AccordionBody {{ background: {T.BG_LAYER_2};"
+            f"  border-left: 1px solid {T.STROKE_2};"
+            f"  border-right: 1px solid {T.STROKE_2};"
+            f"  border-bottom: 1px solid {T.STROKE_2};"
+            f"  border-bottom-left-radius: {T.RADIUS_MEDIUM}px;"
+            f"  border-bottom-right-radius: {T.RADIUS_MEDIUM}px; }}"
+        )
+        shell_layout = QVBoxLayout(self._body_shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        shell_layout.addWidget(body)
+        layout.addWidget(self._body_shell)
 
         self._title = title
         self._collapsed = collapsed
-        body.setVisible(not collapsed)
+        self._anim = QPropertyAnimation(self._body_shell, b"maximumHeight", self)
+        self._anim.setDuration(T.DURATION_GENTLE)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(self._on_animation_finished)
+        self._body_shell.setVisible(not collapsed)
+        self._body_shell.setMaximumHeight(0 if collapsed else 16777215)
         self._update_text()
 
     def _toggle(self) -> None:
-        self._collapsed = not self._collapsed
-        self._body.setVisible(not self._collapsed)
-        self._update_text()
+        self.set_collapsed(not self._collapsed)
 
     def expand(self) -> None:
+        self.set_collapsed(False)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        if self._collapsed == collapsed and self._anim.state() != QPropertyAnimation.State.Running:
+            return
+        self._anim.stop()
+        self._collapsed = collapsed
+        self._update_text()
+
+        if collapsed:
+            start = self._body_shell.height() or self._body_shell.sizeHint().height()
+            end = 0
+        else:
+            self._body_shell.setVisible(True)
+            self._body_shell.setMaximumHeight(0)
+            start = 0
+            end = max(1, self._body_shell.sizeHint().height())
+
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
+        self._anim.start()
+
+    def _on_animation_finished(self) -> None:
         if self._collapsed:
-            self._collapsed = False
-            self._body.setVisible(True)
-            self._update_text()
+            self._body_shell.setVisible(False)
+        else:
+            self._body_shell.setMaximumHeight(16777215)
 
     def _update_text(self) -> None:
         arrow = "▸" if self._collapsed else "▾"
-        self._btn.setText(f"  {arrow}  {self._title}")
+        self._btn.setText(f"{arrow}  {self._title}")
 
 
 class _AISettingsDialog(QDialog):
@@ -236,27 +279,44 @@ class EditorPanel(QWidget):
 
         self.setStyleSheet(f"""
             QWidget#EditorPanel {{
-                background-color: {T.SURFACE_BASE};
+                background-color: {T.BG_LAYER_1};
                 border-left: 1px solid {T.DIVIDER};
             }}
             QPushButton#CtrlBtn {{
-                background-color: #282828;
-                border-radius: 4px;
-                border: none;
+                background-color: {T.BG_LAYER_3};
+                border-radius: {T.RADIUS_SMALL}px;
+                border: 1px solid {T.STROKE_2};
                 color: {T.TEXT_PRIMARY};
+                padding: 0 {T.SPACE_MD}px;
+                font-size: {T.FONT_SIZE_BODY}px;
+                font-weight: {T.FONT_WEIGHT_MEDIUM};
             }}
             QPushButton#CtrlBtn:hover {{
-                background-color: #383838;
+                background-color: {T.BG_LAYER_4};
+                border-color: {T.STROKE_1};
+            }}
+            QPushButton#CtrlBtn:pressed {{
+                background-color: {T.BG_LAYER_2};
+            }}
+            QPushButton#CtrlBtn:disabled {{
+                color: {T.FG_DISABLED};
+                border-color: {T.STROKE_SUBTLE};
+                background-color: {T.BG_LAYER_2};
             }}
             QComboBox#DepthCombo {{
-                border: 1px solid #3E3E3E;
-                border-radius: 4px;
-                padding: 4px;
-                background-color: #1C1C1C;
+                border: 1px solid {T.STROKE_2};
+                border-radius: {T.RADIUS_SMALL}px;
+                padding: 4px 8px;
+                background-color: {T.BG_LAYER_1};
                 color: {T.TEXT_PRIMARY};
+                font-size: {T.FONT_SIZE_BODY}px;
             }}
             QComboBox#DepthCombo::drop-down {{
                 border: none;
+            }}
+            QComboBox#DepthCombo:hover {{
+                border-color: {T.STROKE_1};
+                background-color: {T.BG_LAYER_3};
             }}
             QGroupBox {{
                 border: none;
@@ -264,6 +324,7 @@ class EditorPanel(QWidget):
             }}
             QLabel#Secondary {{
                 color: {T.TEXT_MUTED};
+                font-size: {T.FONT_SIZE_CAPTION}px;
             }}
         """)
 
@@ -281,8 +342,8 @@ class EditorPanel(QWidget):
         )
         scroll_content = QWidget()
         self._container = QVBoxLayout(scroll_content)
-        self._container.setContentsMargins(0, T.SPACE_SM, 0, T.SPACE_SM)
-        self._container.setSpacing(T.SPACE_LG)
+        self._container.setContentsMargins(T.SPACE_MD, T.SPACE_MD, T.SPACE_MD, T.SPACE_MD)
+        self._container.setSpacing(T.SPACE_SM)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
 
@@ -644,61 +705,59 @@ class EditorPanel(QWidget):
         self._container.addStretch()
 
         # ── Fixed bottom bar (outside scroll area) ──────────────────
-        bottom_bar = QWidget()
+        bottom_bar = QFrame()
+        bottom_bar.setObjectName("PanelFooter")
         bottom_bar.setStyleSheet(
-            f"background: {T.BG_SURFACE}; border-top: 1px solid {T.BORDER_SUBTLE};"
+            f"QFrame#PanelFooter {{ background: {T.BG_LAYER_2};"
+            f"  border-top: 1px solid {T.STROKE_2}; }}"
+            f"QPushButton#FooterBtn {{ background-color: {T.BG_LAYER_3};"
+            f"  color: {T.FG_PRIMARY}; border: 1px solid {T.STROKE_2};"
+            f"  border-radius: {T.RADIUS_SMALL}px; padding: 0 {T.SPACE_SM}px;"
+            f"  font-size: {T.FONT_SIZE_CAPTION}px; font-weight: {T.FONT_WEIGHT_MEDIUM}; }}"
+            f"QPushButton#FooterBtn:hover {{ background-color: {T.BG_LAYER_4};"
+            f"  border-color: {T.STROKE_1}; }}"
+            f"QPushButton#FooterBtn:pressed {{ background-color: {T.BG_LAYER_1}; }}"
         )
         bottom_layout = QVBoxLayout(bottom_bar)
-        bottom_layout.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
-        bottom_layout.setSpacing(T.SPACE_XS)
+        bottom_layout.setContentsMargins(T.SPACE_MD, T.SPACE_SM, T.SPACE_MD, T.SPACE_MD)
+        bottom_layout.setSpacing(T.SPACE_SM)
 
         # Undo / Redo row
         undo_redo_row = QHBoxLayout()
-        undo_redo_row.setSpacing(T.SPACE_XS)
-        self._btn_undo = QPushButton("↩ Undo")
-        self._btn_undo.setObjectName("CtrlBtn")
-        self._btn_undo.setFixedHeight(28)
+        undo_redo_row.setSpacing(T.SPACE_SM)
+        self._btn_undo = QPushButton("Undo")
+        self._btn_undo.setObjectName("FooterBtn")
+        self._btn_undo.setFixedHeight(32)
         self._btn_undo.setToolTip("Undo last zoom change (Ctrl+Z)")
         self._btn_undo.clicked.connect(self.undo_requested.emit)
-        undo_redo_row.addWidget(self._btn_undo)
+        undo_redo_row.addWidget(self._btn_undo, 1)
 
-        self._btn_redo = QPushButton("Redo ↪")
-        self._btn_redo.setObjectName("CtrlBtn")
-        self._btn_redo.setFixedHeight(28)
+        self._btn_redo = QPushButton("Redo")
+        self._btn_redo.setObjectName("FooterBtn")
+        self._btn_redo.setFixedHeight(32)
         self._btn_redo.setToolTip("Redo last undone change (Ctrl+Y)")
         self._btn_redo.clicked.connect(self.redo_requested.emit)
-        undo_redo_row.addWidget(self._btn_redo)
+        undo_redo_row.addWidget(self._btn_redo, 1)
         bottom_layout.addLayout(undo_redo_row)
 
         # Info + settings row
         info_row = QHBoxLayout()
         info_row.setSpacing(T.SPACE_SM)
 
-        self._info_label = QLabel()
-        _info_icon = load_icon("info", color=T.FG_MUTED)
-        if not _info_icon.isNull():
-            self._info_label.setPixmap(_info_icon.pixmap(16, 16))
-        else:
-            self._info_label.setText("ℹ")
-        self._info_label.setObjectName("Secondary")
+        self._info_label = QPushButton("Info")
+        self._info_label.setObjectName("FooterBtn")
+        self._info_label.setFixedHeight(32)
         self._info_label.setToolTip("Duration: 0:00\nMouse samples: 0\nKeyframes: 0")
         self._info_label.setCursor(Qt.CursorShape.WhatsThisCursor)
-        self._info_label.setStyleSheet(
-            f"QLabel {{ color: {T.FG_MUTED}; font-size: {T.FONT_SIZE_BODY}px; padding: {T.SPACE_XXS}px 0; }}"
-            f"QToolTip {{ background: {T.BG_INTERACTIVE}; color: {T.FG_PRIMARY};"
-            f"  border: 1px solid {T.CARD_BORDER}; padding: 6px; }}"
-        )
-        info_row.addWidget(self._info_label)
-
-        info_row.addStretch()
+        info_row.addWidget(self._info_label, 1)
 
         self._btn_settings = QPushButton("Settings")
-        self._btn_settings.setObjectName("CtrlBtn")
-        self._btn_settings.setFixedHeight(28)
+        self._btn_settings.setObjectName("FooterBtn")
+        self._btn_settings.setFixedHeight(32)
         self._btn_settings.setToolTip("Settings")
         self._btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_settings.clicked.connect(self._show_settings_menu)
-        info_row.addWidget(self._btn_settings)
+        info_row.addWidget(self._btn_settings, 1)
 
         bottom_layout.addLayout(info_row)
         outer.addWidget(bottom_bar)

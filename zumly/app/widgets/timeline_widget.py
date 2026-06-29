@@ -1756,12 +1756,17 @@ class TimelineWidget(QWidget):
 
         # ── Bottom hints ────────────────────────────────────────
         hints_row = QHBoxLayout()
-        hint_kf = QLabel(
+        hints_row.setContentsMargins(0, 0, 0, 0)
+        hint_text = (
             "Right-click zoom to edit · Double-click voiceover to review speech · "
             "Hover chapter flags to review names · Del removes the selected item · "
             "Right-click empty space or press S to split a clip"
         )
-        hint_kf.setObjectName("Muted")
+        hint_kf = QPushButton("Timeline tips")
+        hint_kf.setObjectName("TimelineHintBtn")
+        hint_kf.setToolTip(hint_text.replace(" · ", "\n"))
+        hint_kf.setCursor(Qt.CursorShape.WhatsThisCursor)
+        hint_kf.setFixedHeight(24)
         hints_row.addWidget(hint_kf)
         hints_row.addStretch()
         layout.addLayout(hints_row)

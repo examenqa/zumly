@@ -711,6 +711,19 @@ QToolTip {{
     background-color: {T.BG_SUBTLE_HOVER};
     color: {T.FG_PRIMARY};
 }}
+#TimelineHintBtn {{
+    background-color: transparent;
+    color: {T.FG_3};
+    border: 1px solid {T.STROKE_2};
+    border-radius: {T.RADIUS_SMALL}px;
+    padding: 0 {T.SPACE_SM}px;
+    font-size: {T.FONT_SIZE_CAPTION_1}px;
+}}
+#TimelineHintBtn:hover {{
+    color: {T.FG_PRIMARY};
+    background-color: {T.BG_LAYER_3};
+    border-color: {T.STROKE_1};
+}}
 #TimeDisplay {{
     color: {T.FG_PRIMARY};
     font-size: {T.FONT_SIZE_BODY_1}px;
