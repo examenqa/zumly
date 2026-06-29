@@ -447,7 +447,7 @@ class PreviewWidget(QWidget):
             self._last_playback_wall = _time.perf_counter()
             self._playing = True
             # Use a fast timer (8ms) and select frames by wall-clock
-            self._playback_timer.start(8)
+            self._playback_timer.start(16)
             self.playback_state_changed.emit(True)
 
     def pause(self) -> None:

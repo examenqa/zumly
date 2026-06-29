@@ -22,9 +22,15 @@ WM_DESTROY = 0x0002
 WM_QUIT = 0x0012
 TRANSPARENT = 1
 DT_LEFT = 0x00000000
+DT_CENTER = 0x00000001
 DT_VCENTER = 0x00000004
 DT_SINGLELINE = 0x00000020
 DT_END_ELLIPSIS = 0x00008000
+SW_SHOWNOACTIVATE = 4
+HWND_TOPMOST = -1
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
 
 class WNDCLASSEX(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT),
@@ -65,6 +71,19 @@ user32.DefWindowProcW.restype = wintypes.LPARAM
 
 user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostThreadMessageW.restype = wintypes.BOOL
+user32.BeginPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PAINTSTRUCT)]
+user32.BeginPaint.restype = wintypes.HDC
+user32.EndPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PAINTSTRUCT)]
+user32.EndPaint.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, wintypes.UINT
+]
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.InvalidateRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT), wintypes.BOOL]
+user32.InvalidateRect.restype = wintypes.BOOL
+user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
+user32.UnregisterClassW.restype = wintypes.BOOL
 
 
 # Define GDI argtypes
@@ -75,6 +94,14 @@ gdi32.CreateFontW.argtypes = [
     wintypes.LPCWSTR
 ]
 gdi32.CreateFontW.restype = wintypes.HANDLE
+gdi32.GetStockObject.argtypes = [ctypes.c_int]
+gdi32.GetStockObject.restype = wintypes.HANDLE
+gdi32.CreateSolidBrush.argtypes = [wintypes.COLORREF]
+gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
+gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HANDLE]
+gdi32.SelectObject.restype = wintypes.HANDLE
+gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+gdi32.DeleteObject.restype = wintypes.BOOL
 gdi32.RoundRect.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 gdi32.Ellipse.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 gdi32.SetTextColor.argtypes = [wintypes.HDC, wintypes.COLORREF]
@@ -96,12 +123,15 @@ class RecordingOverlay:
         self.monitor_rect = monitor_rect
         self.hwnd = None
         self.thread_id = None
+        self._class_name = ""
+        self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         # Prevent garbage collection of the wndproc callback
         self._wndproc_c = WNDPROCTYPE(self._wndproc)
 
     def start(self):
         self._thread.start()
+        self._ready.wait(timeout=1.0)
 
     def stop(self):
         if self.thread_id:
@@ -120,14 +150,14 @@ class RecordingOverlay:
             # Draw dark gray pill background
             hbrush_bg = gdi32.CreateSolidBrush(0x001C1C1C) # RGB(28,28,28) -> BGR(0x1c1c1c)
             old_brush = gdi32.SelectObject(hdc, hbrush_bg)
-            gdi32.RoundRect(hdc, 0, 0, 150, 32, 16, 16)
+            gdi32.RoundRect(hdc, 0, 0, 168, 34, 17, 17)
             gdi32.SelectObject(hdc, old_brush)
             gdi32.DeleteObject(hbrush_bg)
 
             # Draw crimson red circle indicator
             hbrush_red = gdi32.CreateSolidBrush(0x002311E8) # RGB(232,17,35) -> BGR(0x2311e8)
             old_brush = gdi32.SelectObject(hdc, hbrush_red)
-            gdi32.Ellipse(hdc, 12, 8, 26, 22)
+            gdi32.Ellipse(hdc, 14, 9, 28, 23)
             gdi32.SelectObject(hdc, old_brush)
             gdi32.DeleteObject(hbrush_red)
 
@@ -140,12 +170,12 @@ class RecordingOverlay:
             hfont = gdi32.CreateFontW(-14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
             old_font = gdi32.SelectObject(hdc, hfont)
 
-            flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
-            shadow_rect = wintypes.RECT(35, 1, 148, 32)
+            flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
+            shadow_rect = wintypes.RECT(34, 1, 164, 34)
             gdi32.SetTextColor(hdc, 0x00000000)
             user32.DrawTextW(hdc, text, -1, ctypes.byref(shadow_rect), flags)
 
-            rect = wintypes.RECT(34, 0, 148, 32)
+            rect = wintypes.RECT(33, 0, 163, 34)
             gdi32.SetTextColor(hdc, 0x00FFFFFF)
             user32.DrawTextW(hdc, text, -1, ctypes.byref(rect), flags)
 
@@ -164,7 +194,8 @@ class RecordingOverlay:
     def _run(self):
         self.thread_id = kernel32.GetCurrentThreadId()
 
-        class_name = "ZumlyRecordingOverlay"
+        class_name = f"ZumlyRecordingOverlay_{kernel32.GetCurrentProcessId()}_{self.thread_id}"
+        self._class_name = class_name
         wndclass = WNDCLASSEX()
         wndclass.cbSize = ctypes.sizeof(WNDCLASSEX)
         wndclass.lpfnWndProc = self._wndproc_c
@@ -179,8 +210,8 @@ class RecordingOverlay:
         user32.RegisterClassExW(ctypes.byref(wndclass))
 
         # Position at the top-center of the recording monitor
-        width = 150
-        height = 32
+        width = 168
+        height = 34
         x = self.monitor_rect.get("left", 0) + (self.monitor_rect.get("width", 1920) - width) // 2
         y = self.monitor_rect.get("top", 0) + 20
 
@@ -193,11 +224,23 @@ class RecordingOverlay:
             0, 0, wndclass.hInstance, 0
         )
 
+        if not self.hwnd:
+            self._ready.set()
+            return
+
         user32.SetLayeredWindowAttributes(self.hwnd, magenta, 0, LWA_COLORKEY)
         user32.SetWindowDisplayAffinity(self.hwnd, WDA_EXCLUDEFROMCAPTURE)
 
-        user32.ShowWindow(self.hwnd, 5) # SW_SHOW
+        user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
+        user32.SetWindowPos(
+            self.hwnd,
+            HWND_TOPMOST,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+        user32.InvalidateRect(self.hwnd, None, True)
         user32.UpdateWindow(self.hwnd)
+        self._ready.set()
 
         msg = wintypes.MSG()
         while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) > 0:
@@ -207,3 +250,6 @@ class RecordingOverlay:
         if self.hwnd:
             user32.DestroyWindow(self.hwnd)
             self.hwnd = None
+        if self._class_name:
+            user32.UnregisterClassW(self._class_name, wndclass.hInstance)
+        gdi32.DeleteObject(hbrush)

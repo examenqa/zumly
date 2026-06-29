@@ -181,7 +181,7 @@ def generate_device_frame_png(preset: FramePreset, w: int, h: int, geom: dict) -
 
 def generate_click_png(preset: ClickEffectPreset) -> str:
     """Generate a visible click marker PNG for FFmpeg overlay."""
-    r = max(int(preset.radius), 1)
+    r = max(int(preset.radius), 12)
     d = max(1, r * 2)
     img = Image.new("RGBA", (d, d), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -207,6 +207,26 @@ def generate_click_png(preset: ClickEffectPreset) -> str:
         draw.ellipse([r - 5, r - 5, r + 5, r + 5], fill=color)
 
     path = os.path.join(tempfile.gettempdir(), f"click_{os.getpid()}_{int(time.time())}.png")
+    img.save(path)
+    return path
+
+
+def generate_cursor_png() -> str:
+    """Generate a high-contrast cursor marker PNG for click evidence overlays."""
+    scale = 1.55
+    pts = [
+        (0, 0), (0, 17), (4, 13), (7, 20), (9, 19), (6, 12), (12, 12)
+    ]
+    pts = [(int(x * scale) + 4, int(y * scale) + 4) for x, y in pts]
+    img = Image.new("RGBA", (28, 38), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    shadow = [(x + 2, y + 2) for x, y in pts]
+    draw.polygon(shadow, fill=(0, 0, 0, 120))
+    draw.line(shadow + [shadow[0]], fill=(0, 0, 0, 160), width=3)
+    draw.polygon(pts, fill=(255, 255, 255, 255))
+    draw.line(pts + [pts[0]], fill=(20, 20, 20, 255), width=2)
+
+    path = os.path.join(tempfile.gettempdir(), f"cursor_{os.getpid()}_{int(time.time())}.png")
     img.save(path)
     return path
 
@@ -370,12 +390,12 @@ class VideoExporter:
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, click_events, click_preset, actual_fps, monitor_rect, video_segments),
+            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments),
             daemon=True,
         )
         self._thread.start()
 
-    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]]):
+    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]]):
         temp_files = []
         try:
             if self._status_cb: self._status_cb("Starting export...")
@@ -455,9 +475,18 @@ class VideoExporter:
             local_click_count = sum(len(items) for items in local_click_sets)
 
             click_img_path = None
-            if local_click_count > 0 and click_preset:
+            if (
+                local_click_count > 0
+                and click_preset
+                and click_preset.duration_ms > 0
+                and click_preset.color[3] > 0
+            ):
                 click_img_path = generate_click_png(click_preset)
                 temp_files.append(click_img_path)
+            cursor_img_path = None
+            if local_click_count > 0:
+                cursor_img_path = generate_cursor_png()
+                temp_files.append(cursor_img_path)
 
             filter_lines = []
 
@@ -474,7 +503,15 @@ class VideoExporter:
             elif click_img_path and local_click_count == 1:
                 filter_lines.append("[2:v]null[cl0]")
 
+            cursor_input_index = 2 + (1 if click_img_path else 0)
+            if cursor_img_path and local_click_count > 1:
+                cursor_nodes = "".join(f"[cu{i}]" for i in range(local_click_count))
+                filter_lines.append(f"[{cursor_input_index}:v]split={local_click_count}{cursor_nodes}")
+            elif cursor_img_path and local_click_count == 1:
+                filter_lines.append(f"[{cursor_input_index}:v]null[cu0]")
+
             segment_outputs: List[str] = []
+            cursor_node_index = 0
             for seg_index, segment in enumerate(segments):
                 start_sec = segment.start_ms / 1000.0
                 end_sec = segment.end_ms / 1000.0
@@ -527,6 +564,32 @@ class VideoExporter:
                         current_comp_node = next_node
                         click_node_index += 1
 
+                if local_clicks and cursor_img_path:
+                    cursor_hold_sec = max(
+                        (click_preset.duration_ms / 1000.0) if click_preset else 0.0,
+                        0.75,
+                    )
+                    m_left = monitor_rect.get("left", 0) if monitor_rect else 0
+                    m_top = monitor_rect.get("top", 0) if monitor_rect else 0
+                    m_w = monitor_rect.get("width", src_w) if monitor_rect else src_w
+                    m_h = monitor_rect.get("height", src_h) if monitor_rect else src_h
+
+                    for local_click in local_clicks:
+                        t_s = max(local_click.timestamp / 1000.0, 0.0)
+                        t_e = min(t_s + cursor_hold_sec, segment_duration_sec)
+                        rel_x = (local_click.x - m_left) / max(m_w, 1)
+                        rel_y = (local_click.y - m_top) / max(m_h, 1)
+                        cx = int(scr_x + rel_x * scr_w)
+                        cy = int(scr_y + rel_y * scr_h)
+
+                        next_node = f"s{seg_index}cursor{cursor_node_index}"
+                        filter_lines.append(
+                            f"[{current_comp_node}][cu{cursor_node_index}]overlay=x={cx}:y={cy}:"
+                            f"enable='between(t,{t_s},{t_e})'[{next_node}]"
+                        )
+                        current_comp_node = next_node
+                        cursor_node_index += 1
+
                 framed_node = f"s{seg_index}framed"
                 filter_lines.append(f"[{current_comp_node}][fr{seg_index}]overlay=x=0:y=0[{framed_node}]")
 
@@ -560,6 +623,8 @@ class VideoExporter:
             ]
             if click_img_path:
                 cmd.extend(["-loop", "1", "-i", click_img_path])
+            if cursor_img_path:
+                cmd.extend(["-loop", "1", "-i", cursor_img_path])
                 
             cmd.extend([
                 "-filter_complex_script", graph_path,
