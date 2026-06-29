@@ -5,7 +5,7 @@ import threading
 import time
 import tempfile
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, List, Optional, Callable
 
 from PIL import Image, ImageDraw
@@ -211,6 +211,125 @@ def generate_click_png(preset: ClickEffectPreset) -> str:
     return path
 
 
+def _segment_speed(segment: VideoSegment) -> float:
+    """Return a bounded playback speed for export retiming."""
+    try:
+        speed = float(segment.speed)
+    except (TypeError, ValueError):
+        return 1.0
+    if speed <= 0:
+        return 1.0
+    return min(speed, 10.0)
+
+
+def _normalize_video_segments(
+    video_segments: Optional[List[VideoSegment]],
+    duration_ms: float,
+) -> List[VideoSegment]:
+    """Return sorted, gap-filled source-time segments for export.
+
+    The editor is expected to keep segments contiguous, but the exporter treats
+    JSON as an IPC boundary and defensively fills gaps at 1x so source material
+    is not silently dropped.
+    """
+    duration_ms = max(float(duration_ms or 0.0), 0.0)
+    if duration_ms <= 0:
+        return []
+
+    valid: List[VideoSegment] = []
+    for segment in sorted(video_segments or [], key=lambda s: float(s.start_ms)):
+        start = max(0.0, min(float(segment.start_ms), duration_ms))
+        end = max(0.0, min(float(segment.end_ms), duration_ms))
+        if end <= start:
+            continue
+        valid.append(
+            VideoSegment(
+                id=segment.id,
+                start_ms=start,
+                end_ms=end,
+                speed=_segment_speed(segment),
+            )
+        )
+
+    if not valid:
+        return [VideoSegment.create(0.0, duration_ms, 1.0)]
+
+    normalized: List[VideoSegment] = []
+    cursor = 0.0
+    for segment in valid:
+        if segment.start_ms > cursor:
+            normalized.append(VideoSegment.create(cursor, segment.start_ms, 1.0))
+        start = max(segment.start_ms, cursor)
+        if segment.end_ms > start:
+            normalized.append(
+                VideoSegment(
+                    id=segment.id,
+                    start_ms=start,
+                    end_ms=segment.end_ms,
+                    speed=segment.speed,
+                )
+            )
+            cursor = segment.end_ms
+    if cursor < duration_ms:
+        normalized.append(VideoSegment.create(cursor, duration_ms, 1.0))
+    return normalized
+
+
+def _local_keyframes_for_segment(
+    keyframes: List[ZoomKeyframe],
+    segment: VideoSegment,
+) -> List[ZoomKeyframe]:
+    """Filter absolute keyframes into a segment-local zero timeline."""
+    return [
+        replace(kf, timestamp=float(kf.timestamp) - segment.start_ms)
+        for kf in keyframes
+        if segment.start_ms <= float(kf.timestamp) < segment.end_ms
+    ]
+
+
+def _local_clicks_for_segment(
+    click_events: Optional[List[ClickEvent]],
+    segment: VideoSegment,
+) -> List[ClickEvent]:
+    """Filter absolute click events into a segment-local zero timeline."""
+    return [
+        replace(click, timestamp=float(click.timestamp) - segment.start_ms)
+        for click in (click_events or [])
+        if segment.start_ms <= float(click.timestamp) < segment.end_ms
+    ]
+
+
+def _build_zoompan_filter(keyframes: List[ZoomKeyframe], fps: float) -> str:
+    """Build the FFmpeg zoompan filter for a local segment timeline."""
+    expr_z = "1"
+    expr_px = "0.5"
+    expr_py = "0.5"
+
+    for kf in sorted(keyframes, key=lambda k: k.timestamp):
+        t_s = max(float(kf.timestamp) / 1000.0, 0.0)
+        dur = max(float(kf.duration) / 1000.0, 0.0)
+        t_e = t_s + dur
+
+        target_z = max(1.0, float(kf.zoom))
+        target_x = float(kf.x)
+        target_y = float(kf.y)
+
+        if dur > 0:
+            ease = f"(1 - pow(1 - (time - {t_s})/{dur}, 5))"
+            expr_z = f"if(lt(time, {t_s}), {expr_z}, if(lt(time, {t_e}), {expr_z} + ({target_z} - ({expr_z})) * {ease}, {target_z}))"
+            expr_px = f"if(lt(time, {t_s}), {expr_px}, if(lt(time, {t_e}), {expr_px} + ({target_x} - ({expr_px})) * {ease}, {target_x}))"
+            expr_py = f"if(lt(time, {t_s}), {expr_py}, if(lt(time, {t_e}), {expr_py} + ({target_y} - ({expr_py})) * {ease}, {target_y}))"
+        else:
+            expr_z = f"if(lt(time, {t_s}), {expr_z}, {target_z})"
+            expr_px = f"if(lt(time, {t_s}), {expr_px}, {target_x})"
+            expr_py = f"if(lt(time, {t_s}), {expr_py}, {target_y})"
+
+    z_var = f"({expr_z})"
+    zoompan_x = f"clip(({expr_px}) * iw - (iw/{z_var})/2, 0, iw - iw/{z_var})"
+    zoompan_y = f"clip(({expr_py}) * ih - (ih/{z_var})/2, 0, ih - ih/{z_var})"
+    return f"zoompan=z='{z_var}':x='{zoompan_x}':y='{zoompan_y}':d=1:fps={fps}"
+
+
 class VideoExporter:
     """Export pipeline for rendering Zumly sessions to MP4 (Phase 5 Motion Engine)."""
 
@@ -251,12 +370,12 @@ class VideoExporter:
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, click_events, click_preset, actual_fps, monitor_rect),
+            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, click_events, click_preset, actual_fps, monitor_rect, video_segments),
             daemon=True,
         )
         self._thread.start()
 
-    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict]):
+    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]]):
         temp_files = []
         try:
             if self._status_cb: self._status_cb("Starting export...")
@@ -320,95 +439,110 @@ class VideoExporter:
             # Generate assets
             frame_img_path = generate_device_frame_png(frame_preset, out_w, out_h, geom)
             temp_files.append(frame_img_path)
-            
+
+            source_duration_ms = duration_ms or (total_sec * 1000.0)
+            segments = _normalize_video_segments(video_segments, source_duration_ms)
+            if not segments:
+                if self._error_cb:
+                    self._error_cb("Export failed: unknown source duration")
+                return
+            output_total_sec = sum(
+                ((segment.end_ms - segment.start_ms) / 1000.0) / _segment_speed(segment)
+                for segment in segments
+            )
+            has_speed_changes = any(abs(_segment_speed(segment) - 1.0) > 0.01 for segment in segments)
+            local_click_sets = [_local_clicks_for_segment(click_events, segment) for segment in segments]
+            local_click_count = sum(len(items) for items in local_click_sets)
+
             click_img_path = None
-            if click_events and click_preset:
+            if local_click_count > 0 and click_preset:
                 click_img_path = generate_click_png(click_preset)
                 temp_files.append(click_img_path)
 
-            # Build motion nodes
-            expr_z = "1"
-            expr_px = "0.5"
-            expr_py = "0.5"
-            
-            if keyframes:
-                # Sort by timestamp
-                sorted_kfs = sorted(keyframes, key=lambda k: k.timestamp)
-                for kf in sorted_kfs:
-                    t_s = kf.timestamp / 1000.0
-                    dur = kf.duration / 1000.0
-                    t_e = t_s + dur
-                    
-                    target_z = max(1.0, kf.zoom)
-                    target_x = kf.x
-                    target_y = kf.y
-                    
-                    if dur > 0:
-                        ease = f"(1 - pow(1 - (time - {t_s})/{dur}, 5))"
-                        
-                        expr_z = f"if(lt(time, {t_s}), {expr_z}, if(lt(time, {t_e}), {expr_z} + ({target_z} - ({expr_z})) * {ease}, {target_z}))"
-                        expr_px = f"if(lt(time, {t_s}), {expr_px}, if(lt(time, {t_e}), {expr_px} + ({target_x} - ({expr_px})) * {ease}, {target_x}))"
-                        expr_py = f"if(lt(time, {t_s}), {expr_py}, if(lt(time, {t_e}), {expr_py} + ({target_y} - ({expr_py})) * {ease}, {target_y}))"
-                    else:
-                        expr_z = f"if(lt(time, {t_s}), {expr_z}, {target_z})"
-                        expr_px = f"if(lt(time, {t_s}), {expr_px}, {target_x})"
-                        expr_py = f"if(lt(time, {t_s}), {expr_py}, {target_y})"
-            
-            # clamp x and y to avoid out of bounds
-            # iw and ih are input width and height
-            # x_px = px * iw - (iw/z)/2
-            z_var = f"({expr_z})"
-            zoompan_x = f"clip(({expr_px}) * iw - (iw/{z_var})/2, 0, iw - iw/{z_var})"
-            zoompan_y = f"clip(({expr_py}) * ih - (ih/{z_var})/2, 0, ih - ih/{z_var})"
-            
-            zoompan_filter = f"zoompan=z='{z_var}':x='{zoompan_x}':y='{zoompan_y}':d=1:fps={src_fps}"
-            
             filter_lines = []
-            
-            # 1. Motion node
-            filter_lines.append(f"[0:v]{zoompan_filter}[zoomed]")
-            
-            # 2. Static composition
-            filter_lines.append(f"[{'zoomed'}]scale={scr_w}:{scr_h}[vid]")
-            color_args = f"color=c=0x{bg_color}:s={out_w}x{out_h}:r={src_fps}"
-            if total_sec > 0:
-                color_args += f":d={total_sec}"
-            filter_lines.append(f"{color_args}[bg]")
-            filter_lines.append(f"[bg][vid]overlay=x={scr_x}:y={scr_y}[bg_vid]")
 
-            # 3. Click effects are drawn on the final canvas so they remain
-            # visible even when the source video is zoomed or cropped.
-            current_comp_node = "bg_vid"
-            if click_events and click_img_path and click_preset and click_preset.duration_ms > 0 and click_preset.color[3] > 0:
-                r = max(int(click_preset.radius), 1)
-                dur_sec = click_preset.duration_ms / 1000.0
-                m_left = monitor_rect.get("left", 0) if monitor_rect else 0
-                m_top = monitor_rect.get("top", 0) if monitor_rect else 0
-                m_w = monitor_rect.get("width", src_w) if monitor_rect else src_w
-                m_h = monitor_rect.get("height", src_h) if monitor_rect else src_h
+            if len(segments) > 1:
+                frame_nodes = "".join(f"[fr{i}]" for i in range(len(segments)))
+                filter_lines.append(f"[1:v]split={len(segments)}{frame_nodes}")
+            else:
+                filter_lines.append("[1:v]null[fr0]")
 
-                if len(click_events) > 1:
-                    split_nodes = "".join([f"[cl{i}]" for i in range(len(click_events))])
-                    filter_lines.append(f"[2:v]split={len(click_events)}{split_nodes}")
-                elif len(click_events) == 1:
-                    filter_lines.append("[2:v]null[cl0]")
+            click_node_index = 0
+            if click_img_path and local_click_count > 1:
+                click_nodes = "".join(f"[cl{i}]" for i in range(local_click_count))
+                filter_lines.append(f"[2:v]split={local_click_count}{click_nodes}")
+            elif click_img_path and local_click_count == 1:
+                filter_lines.append("[2:v]null[cl0]")
 
-                for i, ce in enumerate(click_events):
-                    t_s = ce.timestamp / 1000.0
-                    t_e = t_s + dur_sec
-                    rel_x = (ce.x - m_left) / max(m_w, 1)
-                    rel_y = (ce.y - m_top) / max(m_h, 1)
-                    cx = int(scr_x + rel_x * scr_w - r)
-                    cy = int(scr_y + rel_y * scr_h - r)
+            segment_outputs: List[str] = []
+            for seg_index, segment in enumerate(segments):
+                start_sec = segment.start_ms / 1000.0
+                end_sec = segment.end_ms / 1000.0
+                segment_duration_sec = max(end_sec - start_sec, 0.001)
 
-                    next_node = f"fc{i}"
-                    filter_lines.append(
-                        f"[{current_comp_node}][cl{i}]overlay=x={cx}:y={cy}:"
-                        f"enable='between(t,{t_s},{t_e})'[{next_node}]"
-                    )
-                    current_comp_node = next_node
+                local_kfs = _local_keyframes_for_segment(keyframes, segment)
+                local_clicks = local_click_sets[seg_index]
+                zoompan_filter = _build_zoompan_filter(local_kfs, src_fps)
 
-            filter_lines.append(f"[{current_comp_node}][1:v]overlay=x=0:y=0[out]")
+                filter_lines.append(
+                    f"[0:v]trim=start={start_sec}:end={end_sec},setpts=PTS-STARTPTS[s{seg_index}trim]"
+                )
+                filter_lines.append(f"[s{seg_index}trim]{zoompan_filter}[s{seg_index}zoom]")
+                filter_lines.append(f"[s{seg_index}zoom]scale={scr_w}:{scr_h}[s{seg_index}vid]")
+
+                color_args = f"color=c=0x{bg_color}:s={out_w}x{out_h}:r={src_fps}:d={segment_duration_sec}"
+                filter_lines.append(f"{color_args}[s{seg_index}bg]")
+                filter_lines.append(
+                    f"[s{seg_index}bg][s{seg_index}vid]overlay=x={scr_x}:y={scr_y}[s{seg_index}comp0]"
+                )
+
+                current_comp_node = f"s{seg_index}comp0"
+                if (
+                    local_clicks
+                    and click_img_path
+                    and click_preset
+                    and click_preset.duration_ms > 0
+                    and click_preset.color[3] > 0
+                ):
+                    r = max(int(click_preset.radius), 1)
+                    dur_sec = click_preset.duration_ms / 1000.0
+                    m_left = monitor_rect.get("left", 0) if monitor_rect else 0
+                    m_top = monitor_rect.get("top", 0) if monitor_rect else 0
+                    m_w = monitor_rect.get("width", src_w) if monitor_rect else src_w
+                    m_h = monitor_rect.get("height", src_h) if monitor_rect else src_h
+
+                    for local_click in local_clicks:
+                        t_s = max(local_click.timestamp / 1000.0, 0.0)
+                        t_e = min(t_s + dur_sec, segment_duration_sec)
+                        rel_x = (local_click.x - m_left) / max(m_w, 1)
+                        rel_y = (local_click.y - m_top) / max(m_h, 1)
+                        cx = int(scr_x + rel_x * scr_w - r)
+                        cy = int(scr_y + rel_y * scr_h - r)
+
+                        next_node = f"s{seg_index}click{click_node_index}"
+                        filter_lines.append(
+                            f"[{current_comp_node}][cl{click_node_index}]overlay=x={cx}:y={cy}:"
+                            f"enable='between(t,{t_s},{t_e})'[{next_node}]"
+                        )
+                        current_comp_node = next_node
+                        click_node_index += 1
+
+                framed_node = f"s{seg_index}framed"
+                filter_lines.append(f"[{current_comp_node}][fr{seg_index}]overlay=x=0:y=0[{framed_node}]")
+
+                speed = _segment_speed(segment)
+                out_node = f"s{seg_index}out"
+                if abs(speed - 1.0) > 0.01:
+                    filter_lines.append(f"[{framed_node}]setpts={1.0 / speed:.8f}*PTS[{out_node}]")
+                else:
+                    filter_lines.append(f"[{framed_node}]setpts=PTS[{out_node}]")
+                segment_outputs.append(out_node)
+
+            if len(segment_outputs) > 1:
+                concat_inputs = "".join(f"[{node}]" for node in segment_outputs)
+                filter_lines.append(f"{concat_inputs}concat=n={len(segment_outputs)}:v=1:a=0[out]")
+            else:
+                filter_lines.append(f"[{segment_outputs[0]}]null[out]")
             
             filtergraph = ";\n".join(filter_lines)
             
@@ -430,13 +564,18 @@ class VideoExporter:
             cmd.extend([
                 "-filter_complex_script", graph_path,
                 "-map", "[out]",
-                "-map", "0:a?",  # Explicitly map audio from input 0, use ? in case it has no audio
                 "-c:v", "libx264",
                 "-preset", "fast",
-                "-c:a", "aac",
             ])
-            if total_sec > 0:
-                cmd.extend(["-t", f"{total_sec:.3f}", "-shortest"])
+            if has_speed_changes:
+                logger.info("Speed-adjusted export: dropping source audio for MVP segment retiming")
+            else:
+                cmd.extend([
+                    "-map", "0:a?",  # Explicitly map audio from input 0, use ? in case it has no audio
+                    "-c:a", "aac",
+                ])
+            if output_total_sec > 0:
+                cmd.extend(["-t", f"{output_total_sec:.3f}", "-shortest"])
             cmd.append(output_path)
             
             logger.info("Running FFmpeg with graph: %s", graph_path)
@@ -459,9 +598,9 @@ class VideoExporter:
                     stderr_tail = stderr_tail[-80:]
                 
                 time_m = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
-                if time_m and total_sec > 0:
+                if time_m and output_total_sec > 0:
                     curr_sec = int(time_m.group(1))*3600 + int(time_m.group(2))*60 + float(time_m.group(3))
-                    prog = min(1.0, curr_sec / total_sec)
+                    prog = min(1.0, curr_sec / output_total_sec)
                     if self._progress_cb: self._progress_cb(prog)
 
             proc.wait()

@@ -90,7 +90,8 @@ def main() -> None:
         click_preset=click_preset,
         duration_ms=session.duration,
         frame_timestamps=session.frame_timestamps,
-        encoder_id="libx264"
+        encoder_id="libx264",
+        video_segments=session.video_segments,
     )
 
     while not export_done[0]:
