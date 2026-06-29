@@ -175,7 +175,9 @@ def generate_device_frame_png(preset: FramePreset, w: int, h: int, geom: dict) -
                 width=max(geom["edge_thickness"], 1),
             )
     
-    path = os.path.join(tempfile.gettempdir(), f"frame_{os.getpid()}_{int(time.time())}.png")
+    f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    path = f.name
+    f.close()
     img.save(path)
     return path
 
@@ -206,7 +208,9 @@ def generate_click_png(preset: ClickEffectPreset) -> str:
         draw.ellipse([2, 2, d - 3, d - 3], outline=color, width=max(3, r // 6))
         draw.ellipse([r - 5, r - 5, r + 5, r + 5], fill=color)
 
-    path = os.path.join(tempfile.gettempdir(), f"click_{os.getpid()}_{int(time.time())}.png")
+    f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    path = f.name
+    f.close()
     img.save(path)
     return path
 
@@ -226,7 +230,9 @@ def generate_cursor_png() -> str:
     draw.polygon(pts, fill=(255, 255, 255, 255))
     draw.line(pts + [pts[0]], fill=(20, 20, 20, 255), width=2)
 
-    path = os.path.join(tempfile.gettempdir(), f"cursor_{os.getpid()}_{int(time.time())}.png")
+    f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    path = f.name
+    f.close()
     img.save(path)
     return path
 
@@ -610,7 +616,10 @@ class VideoExporter:
             filtergraph = ";\n".join(filter_lines)
             
             # Write filtergraph to temp file to bypass CLI limits
-            graph_path = os.path.join(tempfile.gettempdir(), f"graph_{os.getpid()}_{int(time.time())}.txt")
+            f = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+            graph_path = f.name
+            f.close()
+            temp_files.append(graph_path)
             
             with open(graph_path, "w", encoding="utf-8") as f:
                 f.write(filtergraph)
@@ -683,8 +692,7 @@ class VideoExporter:
             if self._error_cb: self._error_cb(str(exc))
         finally:
             for path in temp_files:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass

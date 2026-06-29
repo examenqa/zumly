@@ -293,9 +293,9 @@ class ScreenRecorder:
             except OSError:
                 pass
 
-        temp_path = os.path.join(
-            tempfile.gettempdir(), f"zumly_{int(time.time())}.mp4"
-        )
+        f = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        temp_path = f.name
+        f.close()
         with self._lock:
             self._output_path = temp_path
             self._start_time = start_time if start_time > 0 else time.time()
