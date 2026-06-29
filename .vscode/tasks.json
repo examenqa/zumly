@@ -4,12 +4,12 @@
 		{
 			"label": "Run",
 			"type": "process",
-			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
 			"args": [
-				"main.py"
+				"tray_app.py"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": "none",
 			"presentation": {
@@ -26,10 +26,10 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-File",
-				"${workspaceFolder}/followcursor/scripts/Start-Dev.ps1"
+				"${workspaceFolder}/zumly/scripts/Start-Dev.ps1"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": "none",
 			"presentation": {
@@ -47,10 +47,10 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-File",
-				"${workspaceFolder}/followcursor/scripts/Build-App.ps1"
+				"${workspaceFolder}/zumly/scripts/Build-App.ps1"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": {
 				"kind": "build",
@@ -70,13 +70,13 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-File",
-				"${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
+				"${workspaceFolder}/zumly/scripts/Build-Msix.ps1",
 				"-Version",
 				"${input:msixVersion}",
 				"-SkipSign"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": "build",
 			"dependsOn": "Build",
@@ -94,7 +94,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-File",
-				"${workspaceFolder}/followcursor/scripts/Build-Msix.ps1",
+				"${workspaceFolder}/zumly/scripts/Build-Msix.ps1",
 				"-Version",
 				"${input:msixVersion}",
 				"-Publisher",
@@ -105,7 +105,7 @@
 				"${input:pfxPassword}"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": "build",
 			"dependsOn": "Build",
@@ -118,7 +118,7 @@
 		{
 			"label": "Install Dependencies",
 			"type": "process",
-			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
 			"args": [
 				"-m",
 				"pip",
@@ -127,7 +127,7 @@
 				"requirements.txt"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"presentation": {
 				"reveal": "always",
@@ -138,16 +138,16 @@
 		{
 			"label": "Run Tests",
 			"type": "process",
-			"command": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
 			"args": [
 				"-m",
 				"pytest",
-				"tests/",
+				"zumly/tests/",
 				"-v",
 				"--tb=short"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": "test",
 			"presentation": {
@@ -164,10 +164,10 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"$certsDir = Join-Path '${workspaceFolder}' '.certs'; if (-not (Test-Path $certsDir)) { New-Item -ItemType Directory -Path $certsDir -Force | Out-Null }; $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=FollowCursor-Dev' -KeyUsage DigitalSignature -FriendlyName 'FollowCursor Dev' -CertStoreLocation 'Cert:\\CurrentUser\\My' -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3'); $cerPath = Join-Path $certsDir 'FollowCursor-Dev.cer'; $pfxPath = Join-Path $certsDir 'FollowCursor-Dev.pfx'; Export-Certificate -Cert $cert -FilePath $cerPath; Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\\CurrentUser\\TrustedPeople'; Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password (ConvertTo-SecureString -String 'dev' -Force -AsPlainText); Write-Host \"`nCertificate created and trusted.`nPFX path: $pfxPath`nPublisher: CN=FollowCursor-Dev`nPassword: dev\" -ForegroundColor Green"
+				"$certsDir = Join-Path '${workspaceFolder}' '.certs'; if (-not (Test-Path $certsDir)) { New-Item -ItemType Directory -Path $certsDir -Force | Out-Null }; $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=Zumly-Dev' -KeyUsage DigitalSignature -FriendlyName 'Zumly Dev' -CertStoreLocation 'Cert:\\CurrentUser\\My' -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3'); $cerPath = Join-Path $certsDir 'Zumly-Dev.cer'; $pfxPath = Join-Path $certsDir 'Zumly-Dev.pfx'; Export-Certificate -Cert $cert -FilePath $cerPath; Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\\CurrentUser\\TrustedPeople'; Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password (ConvertTo-SecureString -String 'dev' -Force -AsPlainText); Write-Host \"`nCertificate created and trusted.`nPFX path: $pfxPath`nPublisher: CN=Zumly-Dev`nPassword: dev\" -ForegroundColor Green"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/followcursor"
+				"cwd": "${workspaceFolder}"
 			},
 			"presentation": {
 				"reveal": "always",
@@ -190,13 +190,13 @@
 			"id": "msixPublisher",
 			"type": "promptString",
 			"description": "Certificate subject (e.g. CN=Name, O=Org, L=City, S=State, C=US)",
-			"default": "CN=FollowCursor-Dev"
+			"default": "CN=Zumly-Dev"
 		},
 		{
 			"id": "pfxPath",
 			"type": "promptString",
 			"description": "Path to .pfx certificate file",
-			"default": "${workspaceFolder}/.certs/FollowCursor-Dev.pfx"
+			"default": "${workspaceFolder}/.certs/Zumly-Dev.pfx"
 		},
 		{
 			"id": "pfxPassword",

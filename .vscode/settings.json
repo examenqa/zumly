@@ -4,5 +4,7 @@
 	},
 	"terminal.integrated.defaultProfile.linux": "",
 	"terminal.integrated.defaultProfile.windows": "Command Prompt",
-	"python-envs.defaultEnvManager": "ms-python.python:system"
+	"python-envs.defaultEnvManager": "ms-python.python:system",
+	"python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+	"python.terminal.activateEnvironment": true
 }

@@ -2,22 +2,22 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"name": "Run FollowCursor",
+			"name": "Run Zumly Tray",
 			"type": "debugpy",
 			"request": "launch",
-			"program": "main.py",
-			"cwd": "${workspaceFolder}/followcursor",
-			"python": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
+			"program": "tray_app.py",
+			"cwd": "${workspaceFolder}",
+			"python": "${workspaceFolder}/.venv/Scripts/python.exe",
 			"console": "integratedTerminal",
 			"justMyCode": true
 		},
 		{
-			"name": "Debug FollowCursor (All Code)",
+			"name": "Debug Zumly Capture Worker",
 			"type": "debugpy",
 			"request": "launch",
-			"program": "main.py",
-			"cwd": "${workspaceFolder}/followcursor",
-			"python": "${workspaceFolder}/followcursor/.venv/Scripts/python.exe",
+			"program": "zumly/main.py",
+			"cwd": "${workspaceFolder}",
+			"python": "${workspaceFolder}/.venv/Scripts/python.exe",
 			"console": "integratedTerminal",
 			"justMyCode": false
 		}

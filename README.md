@@ -83,23 +83,27 @@ The JSON project file is the IPC boundary between processes. Important fields:
 Requirements:
 
 - Windows 10/11
-- Python 3.10+
+- Python 3.13 x64
 - FFmpeg is provided through `imageio-ffmpeg`
 
-Install dependencies:
+Create the local virtual environment and install dependencies:
 
 ```powershell
-pip install -r requirements.txt
+py -3.13 -m venv .venv --without-pip
+py -3.13 -m pip --python .\.venv\Scripts\python.exe install pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The top-level `requirements.txt` delegates to `zumly/requirements.txt`.
+The top-level `requirements.txt` delegates to `zumly/requirements.txt`. Use
+`.\.venv\Scripts\python.exe` for local commands so development matches CI and
+does not accidentally run through a newer global Python install.
 
 ## Run From Source
 
 Start the tray app:
 
 ```powershell
-python tray_app.py
+.\.venv\Scripts\python.exe tray_app.py
 ```
 
 Start a recording:
@@ -121,13 +125,13 @@ Recordings and project JSON files are written by default to:
 Open an existing project in the editor:
 
 ```powershell
-python editor_app.py --project "C:\Users\<you>\Videos\Zumly\<timestamp>_project.json"
+.\.venv\Scripts\python.exe editor_app.py --project "C:\Users\<you>\Videos\Zumly\<timestamp>_project.json"
 ```
 
 Export an existing project without opening the editor:
 
 ```powershell
-python export_app.py --project "C:\Users\<you>\Videos\Zumly\<timestamp>_project.json"
+.\.venv\Scripts\python.exe export_app.py --project "C:\Users\<you>\Videos\Zumly\<timestamp>_project.json"
 ```
 
 ## Build
@@ -135,7 +139,7 @@ python export_app.py --project "C:\Users\<you>\Videos\Zumly\<timestamp>_project.
 Build the frozen app:
 
 ```powershell
-python -m PyInstaller --noconfirm zumly.spec
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean zumly.spec
 ```
 
 Output folder:
@@ -166,13 +170,19 @@ processes before rebuilding.
 Fast syntax check:
 
 ```powershell
-python -B -c "from pathlib import Path; files=['tray_app.py','editor_app.py','export_app.py','zumly/main.py','zumly/app/video_exporter.py']; [compile(Path(f).read_text(encoding='utf-8'), f, 'exec') for f in files]; print('syntax ok')"
+.\.venv\Scripts\python.exe -B -c "from pathlib import Path; files=['tray_app.py','editor_app.py','export_app.py','zumly/main.py','zumly/app/video_exporter.py']; [compile(Path(f).read_text(encoding='utf-8'), f, 'exec') for f in files]; print('syntax ok')"
+```
+
+Run the test suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest zumly/tests -q --tb=short
 ```
 
 Synthetic export smoke test, when `e2e_artifacts\synthetic_project.json` exists:
 
 ```powershell
-python export_app.py --project .\e2e_artifacts\synthetic_project.json
+.\.venv\Scripts\python.exe export_app.py --project .\e2e_artifacts\synthetic_project.json
 ```
 
 Frozen export smoke test:

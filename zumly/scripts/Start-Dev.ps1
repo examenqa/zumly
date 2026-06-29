@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Dev setup and launch script for FollowCursor.
+    Dev setup and launch script for Zumly.
 
 .DESCRIPTION
     Creates a virtual environment (if needed), installs dependencies,
@@ -8,22 +8,28 @@
 #>
 
 $ErrorActionPreference = "Stop"
-$FollowCursorRoot = Split-Path -Parent $PSScriptRoot
-Push-Location $FollowCursorRoot
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+Push-Location $RepoRoot
 
 try {
     # ── Ensure virtual environment exists ────────────────────────
     if (-not (Test-Path ".venv\Scripts\python.exe")) {
-        Write-Host "Creating virtual environment..."
-        python -m venv .venv
+        Write-Host "Creating Python 3.13 virtual environment..."
+        py -3.13 -m venv .venv --without-pip
         if ($LASTEXITCODE -ne 0) {
             Write-Host ""
             Write-Host "Failed to create virtual environment." -ForegroundColor Red
-            Write-Host "  Make sure Python 3.10+ (x64) is installed and on your PATH."
-            Write-Host "  Download from https://www.python.org/downloads/"
-            Write-Host "  NOTE: On ARM64 Windows, install the x64 edition."
+            Write-Host "  Make sure Python 3.13 (x64) is installed and visible to the py launcher."
+            Write-Host "  Install with: winget install --id Python.Python.3.13 -e"
             exit 1
         }
+    }
+
+    # ── Ensure pip exists without relying on ensurepip temp files ─
+    & .venv\Scripts\python.exe -m pip --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Installing pip into .venv..."
+        py -3.13 -m pip --python .\.venv\Scripts\python.exe install pip
     }
 
     # ── Verify Python is x64 ────────────────────────────────────
@@ -31,13 +37,11 @@ try {
     if ($archCheck -eq "True") {
         Write-Host ""
         Write-Host "ARM64 native Python detected in .venv." -ForegroundColor Red
-        Write-Host "  Several dependencies (OpenCV, dxcam) have no ARM64 wheels."
-        Write-Host "  Please install Python x64 and recreate the virtual environment:"
+        Write-Host "  Please install Python 3.13 x64 and recreate the virtual environment:"
         Write-Host ""
-        Write-Host '  1. Install "Windows installer (64-bit)" from https://www.python.org/downloads/'
+        Write-Host "  1. winget install --id Python.Python.3.13 -e"
         Write-Host "  2. Delete .venv:  Remove-Item -Recurse -Force .venv"
-        Write-Host '  3. Recreate:      & "C:\path\to\python-x64\python.exe" -m venv .venv'
-        Write-Host "  4. Run Start-Dev.ps1 again."
+        Write-Host "  3. Run Start-Dev.ps1 again."
         exit 1
     }
 
@@ -48,9 +52,9 @@ try {
 
     # ── Launch the app ───────────────────────────────────────────
     Write-Host ""
-    Write-Host "Starting FollowCursor..."
+    Write-Host "Starting Zumly tray..."
     Write-Host ""
-    & .venv\Scripts\python.exe main.py
+    & .venv\Scripts\python.exe tray_app.py
 } finally {
     Pop-Location
 }

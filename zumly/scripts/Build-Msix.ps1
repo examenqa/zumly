@@ -78,11 +78,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$FollowCursorRoot = Split-Path -Parent $PSScriptRoot   # followcursor/
-$DistDir = Join-Path $FollowCursorRoot "dist\FollowCursor"
-$MsixDir = Join-Path $FollowCursorRoot "msix"
-$StagingDir = Join-Path $FollowCursorRoot "dist\msix_staging"
-$OutputMsix = Join-Path $FollowCursorRoot "dist\FollowCursor-$Version.msix"
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$ZumlyPackageRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$DistDir = Join-Path $RepoRoot "dist\zumly"
+$MsixDir = Join-Path $ZumlyPackageRoot "msix"
+$StagingDir = Join-Path $RepoRoot "dist\msix_staging"
+$OutputMsix = Join-Path $RepoRoot "dist\Zumly-$Version.msix"
 
 # ── Validate prerequisites ──────────────────────────────────────
 if (-not (Test-Path $DistDir)) {
@@ -94,11 +95,11 @@ if (-not (Test-Path (Join-Path $MsixDir "AppxManifest.xml"))) {
 
 # ── 1. Generate MSIX visual assets ──────────────────────────────
 Write-Host "Generating MSIX visual assets..." -ForegroundColor Cyan
-$python = Join-Path $FollowCursorRoot ".venv\Scripts\python.exe"
+$python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
-    $python = "python"
+    $python = "py"
 }
-& $python (Join-Path $FollowCursorRoot "generate_msix_assets.py")
+& $python (Join-Path $ZumlyPackageRoot "generate_msix_assets.py")
 if ($LASTEXITCODE -ne 0) { Write-Error "Asset generation failed." }
 
 # ── 2. Patch manifest with version + publisher ──────────────────
@@ -122,7 +123,7 @@ New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 Write-Host "Staging MSIX content..." -ForegroundColor Cyan
 
 # Copy PyInstaller output (flatten _internal into root for MSIX)
-Copy-Item "$DistDir\FollowCursor.exe" $StagingDir
+Copy-Item "$DistDir\*.exe" $StagingDir
 if (Test-Path "$DistDir\_internal") {
     Copy-Item "$DistDir\_internal\*" $StagingDir -Recurse -Force
 }

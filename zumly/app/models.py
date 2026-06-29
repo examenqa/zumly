@@ -338,11 +338,20 @@ class RecordingSession:
         """
         """Deserialize from a JSON string."""
         d = json.loads(s)
+
+        try:
+            session_id = d["id"]
+            start_time = d["startTime"]
+            duration = d["duration"]
+        except KeyError as exc:
+            raise ValueError(f"RecordingSession missing required field: {exc}") from exc
         
         # Parse simple tracks
         mouse_track = [MousePosition.from_dict(m) for m in d.get("mouseTrack", [])]
         keyframes = [ZoomKeyframe.from_dict(k) for k in d.get("keyframes", [])]
-        click_events = [ClickEvent.from_dict(c) for c in d.get("clickEvents", [])]
+        click_events = None
+        if "clickEvents" in d:
+            click_events = [ClickEvent.from_dict(c) for c in d["clickEvents"]]
         
         # Legacy fallback
         key_events = None
@@ -362,9 +371,9 @@ class RecordingSession:
             chapters = [Chapter.from_dict(c) for c in d["chapters"]]
 
         return RecordingSession(
-            id=d["id"],
-            start_time=d["startTime"],
-            duration=d["duration"],
+            id=session_id,
+            start_time=start_time,
+            duration=duration,
             mouse_track=mouse_track,
             keyframes=keyframes,
             key_events=key_events,
@@ -896,4 +905,3 @@ class AnnotationCollection:
 
 DEFAULT_FPS = 60
 DEFAULT_MOUSE_INTERVAL = 16
-

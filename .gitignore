@@ -18,6 +18,8 @@ build/
 *_project.json
 e2e_artifacts/
 .agents/
+.tmp/
+codex_tmp/
 zumly/pytest-cache-files-*/
 
 # OS
@@ -25,7 +27,7 @@ zumly/pytest-cache-files-*/
 Thumbs.db
 
 # MSIX generated assets (rebuilt by generate_msix_assets.py)
-followcursor/msix/Assets/
+zumly/msix/Assets/
 
 # Logs
 *.log
