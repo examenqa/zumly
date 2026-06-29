@@ -227,6 +227,7 @@ class EditorPanel(QWidget):
     generate_chapters_requested = Signal()      # request AI chapter generation
     chapter_added = Signal(object)               # Chapter object
     chapter_removed = Signal(int)                # chapter timestamp_ms
+    segment_speed_changed = Signal(float)        # selected video segment speed
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -591,6 +592,30 @@ class EditorPanel(QWidget):
 
         self._click_section = _CollapsibleSection("CLICK EFFECTS", click_body, collapsed=True)
         self._container.addWidget(self._click_section)
+
+        # ── Retiming (collapsible) ───────────────────────────────────
+        retime_body = QWidget()
+        retime_lay = QVBoxLayout(retime_body)
+        retime_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
+        retime_lay.setSpacing(T.SPACE_SM)
+
+        self._speed_combo = QComboBox()
+        self._speed_combo.setObjectName("DepthCombo")
+        self._speed_combo.setFixedHeight(30)
+        for label, speed in (("1x", 1.0), ("1.5x", 1.5), ("2x", 2.0), ("4x", 4.0), ("8x", 8.0)):
+            self._speed_combo.addItem(label, speed)
+        self._speed_combo.setEnabled(False)
+        self._speed_combo.currentIndexChanged.connect(self._on_segment_speed_changed)
+        self._speed_combo.setToolTip("Select a clip in the timeline, then choose its playback speed.")
+        retime_lay.addWidget(self._speed_combo)
+
+        self._retime_status = QLabel("Select a clip in the timeline")
+        self._retime_status.setObjectName("Secondary")
+        self._retime_status.setWordWrap(True)
+        retime_lay.addWidget(self._retime_status)
+
+        self._retiming_section = _CollapsibleSection("RETIMING", retime_body, collapsed=True)
+        self._container.addWidget(self._retiming_section)
 
         # ── Output dimensions (collapsible) ──────────────────────────
         dim_body = QWidget()
@@ -1257,4 +1282,38 @@ class EditorPanel(QWidget):
         """Programmatically select a click effect preset by name."""
         preset = next((p for p in CLICK_EFFECT_PRESETS if p.name == name), DEFAULT_CLICK_EFFECT)
         self.set_click_preset(preset)
+
+    def _on_segment_speed_changed(self, index: int) -> None:
+        if index < 0 or not self._speed_combo.isEnabled():
+            return
+        speed = self._speed_combo.itemData(index)
+        try:
+            self.segment_speed_changed.emit(float(speed))
+        except (TypeError, ValueError):
+            self.segment_speed_changed.emit(1.0)
+
+    def set_selected_segment_speed(self, speed: float | None, index: int = -1) -> None:
+        """Reflect the selected timeline segment in the retiming controls."""
+        self._speed_combo.blockSignals(True)
+        self._speed_combo.setEnabled(speed is not None)
+        if speed is None:
+            self._retime_status.setText("Select a clip in the timeline")
+            self._speed_combo.setCurrentIndex(0)
+        else:
+            best_index = 0
+            best_delta = float("inf")
+            for i in range(self._speed_combo.count()):
+                item_speed = float(self._speed_combo.itemData(i))
+                delta = abs(item_speed - float(speed))
+                if delta < best_delta:
+                    best_delta = delta
+                    best_index = i
+            self._speed_combo.setCurrentIndex(best_index)
+            label = self._speed_combo.itemText(best_index)
+            if index >= 0:
+                self._retime_status.setText(f"Clip {index + 1} speed: {label}")
+            else:
+                self._retime_status.setText(f"Selected clip speed: {label}")
+            self._retiming_section.expand()
+        self._speed_combo.blockSignals(False)
 

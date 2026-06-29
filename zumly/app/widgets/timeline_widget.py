@@ -176,6 +176,7 @@ class _TimelineTrack(QWidget):
     chapter_clicked = Signal(float)       # chapter timestamp ms — seek
     chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)  # video segment id — delete
+    segment_selected = Signal(int)        # selected video segment index
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()                # reset both trim handles to full range
@@ -513,18 +514,24 @@ class _TimelineTrack(QWidget):
             self._selected_click_idx = -1
             self._selected_vo_id = ""
             self._selected_video_seg_id = vs_id
+            self._emit_video_segment_selected(vs_id)
             self.update()
-            # Only show delete if more than 1 segment remains
+            menu = QMenu(self)
+            menu.setStyleSheet(self._menu_style())
+            header = menu.addAction("  Clip segment")
+            header.setEnabled(False)
+            menu.addSeparator()
+            time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
+            split_act = menu.addAction("Split clip here")
+            split_act.setIcon(load_icon("cut", color=T.FG_PRIMARY))
+            split_act.triggered.connect(
+                lambda checked=False, split_time=time_ms: self.split_requested.emit(split_time)
+            )
             if len(self.video_segments) > 1:
-                menu = QMenu(self)
-                menu.setStyleSheet(self._menu_style())
-                header = menu.addAction("  Clip segment")
-                header.setEnabled(False)
-                menu.addSeparator()
                 del_act = menu.addAction("Delete clip…")
                 del_act.setIcon(load_icon("delete", color=T.DANGER))
                 del_act.triggered.connect(lambda: self._delete_selected_video_segment())
-                menu.exec(self.mapToGlobal(pos))
+            menu.exec(self.mapToGlobal(pos))
             return
         # Empty space — offer to add a zoom section, voiceover, or split
         if self._eff_dur > 0 and self.width() > 0:
@@ -593,8 +600,8 @@ class _TimelineTrack(QWidget):
         self._vo_h = 18
         self._draw_voiceover_segments(painter, w, self._vo_top, self._vo_h)
 
-        # video segments (below voiceover, only when multiple segments exist)
-        if len(self.video_segments) > 1:
+        # video segments (below voiceover)
+        if self.video_segments:
             self._video_seg_top = self._vo_top + self._vo_h + 2
             self._video_seg_h = 18
             self._draw_video_segments(painter, w, self._video_seg_top, self._video_seg_h)
@@ -1065,9 +1072,9 @@ class _TimelineTrack(QWidget):
     # ── video segments ─────────────────────────────────────────────
 
     def _draw_video_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
-        """Draw video segment blocks — teal rounded rects when multiple segments exist."""
+        """Draw video segment blocks with split dividers and speed labels."""
         self._video_seg_rects = []
-        if self.duration <= 0 or len(self.video_segments) <= 1:
+        if self.duration <= 0 or not self.video_segments:
             return
 
         # Track label
@@ -1092,7 +1099,24 @@ class _TimelineTrack(QWidget):
                 painter.setBrush(QBrush(QColor(34, 197, 168, 45)))
                 painter.setPen(QPen(QColor("#14b8a6"), 1.0))
             painter.drawRoundedRect(rect, 3, 3)
+            painter.setPen(QPen(QColor("#0f766e"), 1.2))
+            painter.drawLine(int(sx), top + 2, int(sx), top + h - 2)
+            if abs(float(seg.speed) - 1.0) > 0.01:
+                speed_text = f"{seg.speed:g}x"
+                font = QFont()
+                font.setFamily("Segoe UI Variable")
+                font.setPixelSize(10)
+                font.setWeight(QFont.Weight.DemiBold)
+                painter.setFont(font)
+                painter.setPen(QPen(QColor("#ecfeff"), 1))
+                painter.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignCenter, speed_text)
             self._video_seg_rects.append((sx, seg_w, seg.id))
+
+        if self.video_segments:
+            last = self.video_segments[-1]
+            ex = self._ms_to_x(last.end_ms)
+            painter.setPen(QPen(QColor("#0f766e"), 1.2))
+            painter.drawLine(int(ex), top + 2, int(ex), top + h - 2)
 
     def _video_seg_hit_test(self, mx: float, my: float) -> str:
         """Return the video segment id at (mx, my), or empty string."""
@@ -1104,6 +1128,13 @@ class _TimelineTrack(QWidget):
             if sx <= mx <= sx + sw:
                 return seg_id
         return ""
+
+    def _emit_video_segment_selected(self, seg_id: str) -> None:
+        """Emit the selected segment index for the editor panel."""
+        for idx, seg in enumerate(self.video_segments):
+            if seg.id == seg_id:
+                self.segment_selected.emit(idx)
+                return
 
     def _chapter_hit_test(self, mx: float, my: float) -> Chapter | None:
         """Return the chapter marker under the pointer, if any."""
@@ -1339,6 +1370,7 @@ class _TimelineTrack(QWidget):
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
                 self._selected_vo_id = ""
+                self._emit_video_segment_selected(vs_id)
                 self.update()
                 return
             # Check chapter marker seek
@@ -1635,6 +1667,7 @@ class TimelineWidget(QWidget):
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
     chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)   # video segment id — delete
+    segment_selected = Signal(int)        # selected video segment index
     split_requested = Signal(float)       # timestamp ms — split recording here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()               # reset both trim handles to full range
@@ -1706,6 +1739,7 @@ class TimelineWidget(QWidget):
         self._track.chapter_clicked.connect(self.seek_requested)
         self._track.chapter_deleted.connect(self.chapter_deleted)
         self._track.video_segment_deleted.connect(self.video_segment_deleted)
+        self._track.segment_selected.connect(self.segment_selected)
         self._track.split_requested.connect(self.split_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.trim_reset.connect(self.trim_reset)
@@ -1800,6 +1834,15 @@ class TimelineWidget(QWidget):
         # Clamp view state after duration changes (scale may exceed new max)
         self._track._clamp_view()
         self._sync_scrollbar()
+        self._track.update()
+
+    def set_video_segments(self, video_segments: List[VideoSegment], selected_index: int = -1) -> None:
+        """Update clip segments and optionally select one."""
+        self._track.video_segments = video_segments
+        if 0 <= selected_index < len(video_segments):
+            self._track._selected_video_seg_id = video_segments[selected_index].id
+        elif not video_segments:
+            self._track._selected_video_seg_id = ""
         self._track.update()
 
     def set_current_time(self, time_ms: float) -> None:

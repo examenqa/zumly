@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QWidget, QMenu
 from ..models import (
     MousePosition, ClickEvent, ZoomKeyframe,
     TextAnnotation, ArrowAnnotation, HighlightBox, AnnotationCollection,
+    VideoSegment,
 )
 from ..zoom_engine import speed_at_time
 from ..icon_loader import load_icon
@@ -76,6 +77,7 @@ class PreviewWidget(QWidget):
         # debug overlay
         self._debug_overlay: bool = False
         self._debug_keyframes: List[ZoomKeyframe] = []
+        self._video_segments: List[VideoSegment] = []
 
         # background preset
         self._bg_preset = None  # None → use default
@@ -196,6 +198,10 @@ class PreviewWidget(QWidget):
         self._debug_keyframes = keyframes
         if self._debug_overlay:
             self.update()
+
+    def set_video_segments(self, segments: List[VideoSegment] | None) -> None:
+        """Provide retiming segments for playback simulation."""
+        self._video_segments = list(segments or [])
 
     def set_recording_mode(self, enabled: bool) -> None:
         """Enable/disable recording overlay (blurred snapshot + indicator)."""
@@ -1254,7 +1260,13 @@ class PreviewWidget(QWidget):
         self.playback_time_changed.emit(self._playback_pos_ms)
 
     def _get_segment_speed(self, time_ms: float) -> float:
-        """Return the playback speed at *time_ms* based on zoom keyframes."""
+        """Return the playback speed at *time_ms* from video segments."""
+        for seg in self._video_segments:
+            if seg.start_ms <= time_ms < seg.end_ms:
+                try:
+                    return max(0.1, min(10.0, float(seg.speed)))
+                except (TypeError, ValueError):
+                    return 1.0
         return speed_at_time(self._debug_keyframes, time_ms, self._video_duration_ms)
 
     @staticmethod

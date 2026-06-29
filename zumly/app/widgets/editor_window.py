@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from .editor_panel import EditorPanel
 from .preview_widget import PreviewWidget
 from .timeline_widget import TimelineWidget
+from ..models import RecordingSession, VideoSegment
 from ..theme import get_theme
 from .. import tokens as T
 
@@ -100,7 +101,6 @@ class EditorWindow(QWidget):
         content.addWidget(v_divider)
         
         self._editor = EditorPanel()
-        self._editor.setStyleSheet(f"background-color: {T.SURFACE_ELEVATED};")
         content.addWidget(self._editor)
         
         root.addLayout(content)
@@ -110,6 +110,10 @@ class EditorWindow(QWidget):
         self._editor.frame_changed.connect(self._on_frame_changed)
         self._editor.click_effect_changed.connect(self._on_click_effect_changed)
         self._editor.output_dimensions_changed.connect(self._on_output_dimensions_changed)
+        self._editor.segment_speed_changed.connect(self._on_segment_speed_changed)
+        self._timeline.segment_selected.connect(self._on_segment_selected)
+        self._timeline.split_requested.connect(self._on_split_requested)
+        self._timeline.video_segment_deleted.connect(self._on_video_segment_deleted)
 
         self._title_bar.export_clicked.connect(self._on_export)
         self._title_bar.discard_clicked.connect(self.close)
@@ -119,6 +123,7 @@ class EditorWindow(QWidget):
         
         self._session = None
         self._project_data = {}
+        self._selected_video_segment_index = -1
         
         self._load_project()
         
@@ -129,8 +134,6 @@ class EditorWindow(QWidget):
         logger.info(f"Loading project from {self._project_path}")
         try:
             import os
-            from zumly.app.models import RecordingSession
-            
             with open(self._project_path, 'r', encoding='utf-8') as f:
                 self._project_data = json.load(f)
                 
@@ -161,7 +164,10 @@ class EditorWindow(QWidget):
                 duration_ms=self._session.duration,
                 frame_timestamps=self._session.frame_timestamps
             )
+            self._ensure_video_segments(duration)
+            self._zoom_engine.video_segments = self._session.video_segments
             self._preview.set_debug_keyframes(self._session.keyframes)
+            self._preview.set_video_segments(self._session.video_segments)
             self._preview.set_cursor_data(
                 self._session.mouse_track,
                 self._project_data.get("monitorRect", {}),
@@ -192,6 +198,8 @@ class EditorWindow(QWidget):
                 voiceover_segments=self._session.voiceover_segments if hasattr(self._session, 'voiceover_segments') else None,
                 video_segments=self._session.video_segments if hasattr(self._session, 'video_segments') else None
             )
+            if self._session.video_segments:
+                self._sync_video_segments(0, save=False)
 
             # Signal wiring between timeline and preview
             self._timeline.play_pause_clicked.connect(self._toggle_playback)
@@ -246,6 +254,117 @@ class EditorWindow(QWidget):
             else:
                 self._session.output_dimensions = dim
             self._save_project()
+
+    def _ensure_video_segments(self, duration_ms: float) -> None:
+        if not self._session:
+            return
+        duration = max(float(duration_ms or 0.0), float(self._session.duration or 0.0))
+        segments = []
+        for seg in self._session.video_segments or []:
+            start = max(0.0, min(float(seg.start_ms), duration))
+            end = max(0.0, min(float(seg.end_ms), duration))
+            if end - start >= 1.0:
+                seg.start_ms = start
+                seg.end_ms = end
+                try:
+                    seg.speed = max(0.1, min(10.0, float(seg.speed)))
+                except (TypeError, ValueError):
+                    seg.speed = 1.0
+                segments.append(seg)
+        if not segments and duration > 0:
+            segments = [VideoSegment.create(0.0, duration, 1.0)]
+        segments.sort(key=lambda s: s.start_ms)
+        self._session.video_segments = segments
+
+    def _find_video_segment_index(self, time_ms: float) -> int:
+        if not self._session or not self._session.video_segments:
+            return -1
+        for idx, seg in enumerate(self._session.video_segments):
+            if seg.start_ms <= time_ms <= seg.end_ms:
+                return idx
+        return -1
+
+    def _sync_video_segments(self, selected_index: int | None = None, save: bool = True) -> None:
+        if not self._session:
+            return
+        self._session.video_segments = sorted(self._session.video_segments or [], key=lambda s: s.start_ms)
+        if selected_index is not None:
+            self._selected_video_segment_index = selected_index
+        if self._session.video_segments:
+            self._selected_video_segment_index = max(
+                0,
+                min(self._selected_video_segment_index, len(self._session.video_segments) - 1),
+            )
+        else:
+            self._selected_video_segment_index = -1
+        self._zoom_engine.video_segments = self._session.video_segments
+        self._preview.set_video_segments(self._session.video_segments)
+        self._timeline.set_video_segments(self._session.video_segments, self._selected_video_segment_index)
+        if self._selected_video_segment_index >= 0:
+            seg = self._session.video_segments[self._selected_video_segment_index]
+            self._editor.set_selected_segment_speed(seg.speed, self._selected_video_segment_index)
+        else:
+            self._editor.set_selected_segment_speed(None)
+        if save:
+            self._save_project()
+
+    def _on_segment_selected(self, index: int) -> None:
+        if not self._session or not self._session.video_segments:
+            self._selected_video_segment_index = -1
+            self._editor.set_selected_segment_speed(None)
+            return
+        if index < 0 or index >= len(self._session.video_segments):
+            return
+        self._selected_video_segment_index = index
+        seg = self._session.video_segments[index]
+        self._editor.set_selected_segment_speed(seg.speed, index)
+
+    def _on_segment_speed_changed(self, speed: float) -> None:
+        if not self._session or not self._session.video_segments:
+            return
+        idx = self._selected_video_segment_index
+        if idx < 0 or idx >= len(self._session.video_segments):
+            return
+        self._session.video_segments[idx].speed = max(0.1, min(10.0, float(speed)))
+        self._sync_video_segments(idx, save=True)
+
+    def _on_split_requested(self, time_ms: float) -> None:
+        if not self._session:
+            return
+        duration = self._session.duration
+        if duration <= 0:
+            duration = getattr(self._preview, "_video_duration_ms", 0.0)
+        self._ensure_video_segments(duration)
+        idx = self._find_video_segment_index(float(time_ms))
+        if idx < 0:
+            return
+        seg = self._session.video_segments[idx]
+        split_at = max(seg.start_ms, min(float(time_ms), seg.end_ms))
+        min_len = 250.0
+        if split_at - seg.start_ms < min_len or seg.end_ms - split_at < min_len:
+            return
+        original_end = seg.end_ms
+        seg.end_ms = split_at
+        right = VideoSegment.create(split_at, original_end, seg.speed)
+        self._session.video_segments.insert(idx + 1, right)
+        self._sync_video_segments(idx + 1, save=True)
+
+    def _on_video_segment_deleted(self, segment_id: str) -> None:
+        if not self._session or not self._session.video_segments:
+            return
+        segments = self._session.video_segments
+        idx = next((i for i, seg in enumerate(segments) if seg.id == segment_id), -1)
+        if idx < 0 or len(segments) <= 1:
+            return
+        if idx > 0:
+            segments[idx - 1].end_ms = segments[idx].end_ms
+            del segments[idx]
+            next_selected = idx - 1
+        else:
+            segments[1].start_ms = segments[0].start_ms
+            del segments[0]
+            next_selected = 0
+        self._sync_video_segments(next_selected, save=True)
 
     def _save_project(self):
         if not self._project_path or not self._session:
