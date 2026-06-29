@@ -174,6 +174,7 @@ class ScreenRecorder:
         self._actual_fps: float = 30.0
         self._frame_count: int = 0
         self._frame_timestamps: List[float] = []  # ms offset per frame
+        self._recording_duration_ms: float = 0.0
         self._lock = threading.Lock()
         # window capture mode
         self._capture_mode: str = "monitor"  # "monitor" | "window"
@@ -220,9 +221,9 @@ class ScreenRecorder:
 
     @property
     def recording_duration_ms(self) -> float:
-        if not self._recording or self._start_time == 0:
-            return 0
-        return (time.time() - self._start_time) * 1000
+        if self._recording and self._start_time > 0:
+            return (time.time() - self._start_time) * 1000
+        return self._recording_duration_ms
 
     @property
     def actual_fps(self) -> float:
@@ -301,14 +302,18 @@ class ScreenRecorder:
             self._perf_start = time.perf_counter()
             self._frame_count = 0
             self._frame_timestamps = []
+            self._recording_duration_ms = 0.0
             self._recording = True
         return temp_path
 
     def stop_recording(self) -> str:
         """Stop recording and return the path to the raw AVI file."""
         with self._lock:
-            self._recording = False
             elapsed = time.perf_counter() - self._perf_start
+            self._recording_duration_ms = (
+                max(self._frame_timestamps) if self._frame_timestamps else elapsed * 1000.0
+            )
+            self._recording = False
             if elapsed > 0 and self._frame_count > 0:
                 self._actual_fps = self._frame_count / elapsed
             else:
@@ -758,4 +763,3 @@ class ScreenRecorder:
         finally:
             if _winmm:
                 _winmm.timeEndPeriod(1)
-

@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 import time
 
@@ -9,9 +10,6 @@ from app.click_tracker import ClickTracker
 from app.keyboard_tracker import KeyboardTracker
 from app.global_hotkeys import GlobalHotkeys
 from app.activity_analyzer import analyze_activity
-from app.video_exporter import VideoExporter
-from app.backgrounds import DEFAULT_PRESET as DEFAULT_BG
-from app.models import DEFAULT_CLICK_EFFECT
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -21,6 +19,7 @@ def main() -> None:
     parser.add_argument("--monitor", "-m", type=int, default=1, help="Monitor index (default 1)")
     parser.add_argument("--fps", type=int, default=60, help="Recording FPS")
     parser.add_argument("--duration", "-d", type=float, default=0.0, help="Optional duration to record in seconds (if 0, stops on hotkey CTRL+SHIFT+R)")
+    parser.add_argument("--stop-file", type=str, default="", help="Optional file path used by the tray app to request a graceful stop")
     args = parser.parse_args()
 
     # Determine monitor dimensions
@@ -68,7 +67,12 @@ def main() -> None:
     mouse_tracker.start(start_time_ms)
     click_tracker.start(start_time_ms)
     kbd_tracker.start(start_time_ms)
-    hotkey_tracker.register_record_hotkey()
+    if not args.stop_file:
+        hotkey_tracker.register_record_hotkey()
+    
+    from app.recording_overlay import RecordingOverlay
+    overlay = RecordingOverlay(monitor_rect)
+    overlay.start()
     
     raw_video_path = recorder.start_recording(start_time=start_time_ms/1000.0)
     logging.info(f"Recording started. Outputting raw video to: {raw_video_path}")
@@ -81,6 +85,9 @@ def main() -> None:
         start_t = time.time()
         while True:
             time.sleep(0.1)
+            if args.stop_file and os.path.exists(args.stop_file):
+                logging.info("Stop file detected. Stopping recording...")
+                break
             # Check duration
             if args.duration > 0 and (time.time() - start_t) >= args.duration:
                 logging.info(f"Reached duration of {args.duration}s. Stopping recording...")
@@ -97,8 +104,14 @@ def main() -> None:
     click_events = click_tracker.stop()
     kbd_events = kbd_tracker.stop()
     hotkey_tracker.unregister_record_hotkey()
+    overlay.stop()
     recorder.stop_recording()
     recorder.stop_capture()
+    if args.stop_file:
+        try:
+            os.remove(args.stop_file)
+        except OSError:
+            pass
     
     logging.info("Recording stopped. Generating AI auto-zooms...")
     
@@ -110,63 +123,41 @@ def main() -> None:
         click_events=click_events
     )
     
-    logging.info(f"Generated {len(keyframes)} zoom keyframes. Exporting video...")
+    logging.info(f"Generated {len(keyframes)} zoom keyframes. Saving session state...")
     
-    # Export
-    def on_progress(p: float) -> None:
-        sys.stdout.write(f"\rExport progress: {p*100:.1f}%")
-        sys.stdout.flush()
-        
-    def on_finished(path: str) -> None:
-        print(f"\nExport finished: {path}")
-        
-    def on_error(err: str) -> None:
-        print(f"\nExport error: {err}")
-        
-    def on_status(msg: str) -> None:
-        # print(f"\nStatus: {msg}")
-        pass
+    import uuid
+    import json
+    from app.models import RecordingSession
 
-    exporter = VideoExporter(
-        progress_cb=on_progress,
-        finished_cb=on_finished,
-        error_cb=on_error,
-        status_cb=on_status
-    )
-            
-    # Need to wait for export
-    export_done = [False]
-    def on_finished_wrapper(path: str) -> None:
-        on_finished(path)
-        export_done[0] = True
-    def on_error_wrapper(err: str) -> None:
-        on_error(err)
-        export_done[0] = True
+    session_id = str(uuid.uuid4())
+    duration_ms = recorder.recording_duration_ms
 
-    exporter._finished_cb = on_finished_wrapper
-    exporter._error_cb = on_error_wrapper
-
-    exporter.export(
-        input_path=raw_video_path,
-        output_path=args.out,
-        keyframes=keyframes,
-        actual_fps=recorder.actual_fps,
+    session = RecordingSession(
+        id=session_id,
+        start_time=start_time_ms / 1000.0,
+        duration=duration_ms,
         mouse_track=mouse_events,
-        monitor_rect=monitor_rect,
-        bg_preset=DEFAULT_BG,
-        target_resolution=None,
+        keyframes=keyframes,
         click_events=click_events,
-        click_preset=DEFAULT_CLICK_EFFECT,
-        duration_ms=recorder.recording_duration_ms,
         frame_timestamps=recorder.frame_timestamps,
-        encoder_id="libx264"
     )
+
+    data = json.loads(session.to_json())
+    data["monitorRect"] = monitor_rect
+    data["actualFps"] = recorder.actual_fps
+    data["videoPath"] = raw_video_path
+    data["outPath"] = args.out # Preserve intended export path
+
+    timestamp = int(start_time_ms)
+    out_dir = os.path.dirname(args.out) or "."
+    project_path = os.path.join(out_dir, f"{timestamp}_project.json")
     
-    while not export_done[0]:
-        time.sleep(0.5)
-        
-    logging.info("Done.")
+    with open(project_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+    logging.info(f"Session serialized to {project_path}")
+    logging.info("Force exiting to release WGC hooks...")
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
-

@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -30,10 +31,8 @@ import pystray
 # ── Paths ────────────────────────────────────────────────────────────
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_MAIN_PY = _SCRIPT_DIR / "zumly" / "main.py"
 _ICON_PATH = _SCRIPT_DIR / "zumly" / "followcursor.ico"
 _CONFIG_PATH = _SCRIPT_DIR / "config.json"
-_PYTHON_EXE = sys.executable
 
 # ── Logging ──────────────────────────────────────────────────────────
 
@@ -262,7 +261,7 @@ class ZumlyTray:
         self._hotkey_thread: Optional[_HotkeyThread] = None
         self._icon: Optional[pystray.Icon] = None
         self._cfg = load_config()
-        self._rec_count = 0  # counter for unique filenames
+        self._stop_file: Optional[str] = None
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -298,17 +297,19 @@ class ZumlyTray:
         )
         self._icon.run()
 
-    def _load_icon(self) -> Image.Image:
-        """Load the ICO file, falling back to a generated icon."""
-        try:
-            return Image.open(str(_ICON_PATH))
-        except Exception:
-            # Fallback: create a simple coloured circle
-            img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-            from PIL import ImageDraw
-            draw = ImageDraw.Draw(img)
-            draw.ellipse([8, 8, 56, 56], fill="#89b4fa")
-            return img
+    def _load_icon(self, is_recording: bool = False) -> Image.Image:
+        """Load or generate the Z-Screen icon."""
+        img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img)
+        # Z-Screen outer frame
+        draw.rounded_rectangle([2, 6, 29, 25], radius=3, outline="#FFFFFF", width=3)
+        # Z-Screen zigzag path
+        draw.line([(10, 11), (22, 11), (10, 21), (22, 21)], fill="#0078D4", width=4, joint="curve")
+        # Dynamic record dot
+        dynamic_color = "#E81123" if is_recording else "#666666"
+        draw.ellipse([22, 8, 28, 14], fill=dynamic_color)
+        return img
 
     # ── tray callbacks ──────────────────────────────────────────────
 
@@ -350,30 +351,36 @@ class ZumlyTray:
         os.makedirs(self._cfg["output_folder"], exist_ok=True)
 
         # Generate unique output filename
-        self._rec_count += 1
         ts = time.strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(
             self._cfg["output_folder"],
             f"zumly_{ts}.mp4",
         )
 
-        # Release our hotkey so main.py can register it
-        if self._hotkey_thread:
-            self._hotkey_thread.stop()
-            self._hotkey_thread = None
-            time.sleep(0.3)  # brief pause for Win32 to release
-
-        # Spawn the headless engine by calling ourselves with the routing flag
+        # Spawn the headless engine
+        main_py_path = str(Path(_SCRIPT_DIR) / "zumly" / "main.py")
         if getattr(sys, 'frozen', False):
+            # When frozen, we spawn ourselves with the headless flag
             cmd = [sys.executable, "--headless-engine"]
         else:
-            cmd = [sys.executable, sys.argv[0], "--headless-engine"]
+            cmd = [sys.executable, main_py_path]
+
             
         cmd += [
             "--out", out_path,
             "--monitor", str(self._cfg.get("monitor", 1)),
             "--fps", str(self._cfg.get("fps", 60)),
         ]
+        self._stop_file = os.path.join(
+            tempfile.gettempdir(),
+            f"zumly_stop_{os.getpid()}_{int(time.time() * 1000)}.signal",
+        )
+        try:
+            if os.path.exists(self._stop_file):
+                os.remove(self._stop_file)
+        except OSError:
+            pass
+        cmd += ["--stop-file", self._stop_file]
         logger.info("Starting recording: %s", " ".join(cmd))
 
         try:
@@ -402,20 +409,24 @@ class ZumlyTray:
         ).start()
 
     def _stop_recording(self):
-        """Request stop — the subprocess handles CTRL+SHIFT+R itself.
-
-        If the subprocess is still running (e.g. user clicked Stop in menu
-        instead of pressing the hotkey), we terminate it gracefully.
-        """
+        """Request a graceful stop through the recorder's stop-file IPC."""
         if not self._recording or self._process is None:
             return
 
         if self._process.poll() is None:
-            logger.info("Terminating recording subprocess (pid=%s)", self._process.pid)
-            self._process.terminate()
+            logger.info("Requesting graceful recording stop (pid=%s)", self._process.pid)
+            if self._stop_file:
+                try:
+                    with open(self._stop_file, "w", encoding="utf-8") as f:
+                        f.write("stop")
+                except OSError as exc:
+                    logger.error("Failed to write stop signal: %s", exc)
+            else:
+                self._process.terminate()
             try:
                 self._process.wait(timeout=15)
             except subprocess.TimeoutExpired:
+                logger.warning("Recorder did not stop gracefully; killing subprocess")
                 self._process.kill()
 
     def _monitor_process(self, out_path: str):
@@ -424,25 +435,69 @@ class ZumlyTray:
         if proc is None:
             return
 
-        # Stream stdout for logging
+        project_path = None
+        # Stream stdout for logging and intercepting project_path
         try:
             for line in proc.stdout:
                 line = line.rstrip()
                 if line:
                     logger.info("[engine] %s", line)
+                    if "Session serialized to" in line:
+                        project_path = line.split("Session serialized to")[1].strip()
         except (ValueError, OSError):
             pass
 
+        # Block until OS confirms the resource release (WGC hooks & COM threads)
         proc.wait()
         rc = proc.returncode
         logger.info("Engine exited with code %s", rc)
 
         self._recording = False
         self._process = None
+        if self._stop_file:
+            try:
+                if os.path.exists(self._stop_file):
+                    os.remove(self._stop_file)
+            except OSError:
+                pass
+            self._stop_file = None
 
-        if rc == 0 and os.path.isfile(out_path):
-            self._update_tray(f"Saved: {os.path.basename(out_path)}")
-            self._notify(f"Recording saved!\n{out_path}")
+        if rc == 0 and project_path and os.path.isfile(project_path):
+            review_in_editor = self._cfg.get("review_in_editor", True)
+            if review_in_editor:
+                logger.info(f"Handoff to editor: {project_path}")
+                
+                if getattr(sys, 'frozen', False):
+                    # We are in a compiled PyInstaller environment
+                    base_dir = os.path.dirname(sys.executable)
+                    editor_exe = os.path.join(base_dir, "editor_app.exe")
+                    cmd = [editor_exe, "--project", project_path]
+                else:
+                    # We are running from source
+                    cmd = [sys.executable, "editor_app.py", "--project", project_path]
+                    
+                subprocess.Popen(
+                    cmd,
+                    cwd=str(Path(_SCRIPT_DIR).parent) if _SCRIPT_DIR.name == "zumly" else str(_SCRIPT_DIR),
+                )
+                self._update_tray(f"Editing: {os.path.basename(project_path)}")
+                self._notify(f"Recording saved!\nOpening editor...")
+            else:
+                logger.info(f"Headless export fallback for: {project_path}")
+                # Spawn the headless exporter outside the editor process.
+                if getattr(sys, 'frozen', False):
+                    base_dir = os.path.dirname(sys.executable)
+                    export_exe = os.path.join(base_dir, "export_app.exe")
+                    cmd = [export_exe, "--project", project_path]
+                else:
+                    cmd = [sys.executable, "export_app.py", "--project", project_path]
+                    
+                subprocess.Popen(
+                    cmd,
+                    cwd=str(Path(_SCRIPT_DIR).parent) if _SCRIPT_DIR.name == "zumly" else str(_SCRIPT_DIR),
+                )
+                self._update_tray(f"Exporting: {os.path.basename(project_path)}")
+                self._notify(f"Recording saved!\nExporting video in background...")
         else:
             self._update_tray("Ready  (Ctrl+Shift+R)")
 
@@ -464,16 +519,7 @@ class ZumlyTray:
         """Update the tray icon tooltip."""
         if self._icon:
             self._icon.title = f"Zumly — {title}"
-            # Swap icon colour to indicate recording state
-            if recording:
-                img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-                from PIL import ImageDraw
-                draw = ImageDraw.Draw(img)
-                draw.ellipse([8, 8, 56, 56], fill="#f38ba8")  # red = recording
-                draw.rectangle([24, 24, 40, 40], fill="white")  # stop square
-                self._icon.icon = img
-            else:
-                self._icon.icon = self._load_icon()
+            self._icon.icon = self._load_icon(is_recording=recording)
 
     def _notify(self, message: str):
         """Show a Windows toast notification via the tray icon."""
@@ -492,6 +538,13 @@ def main():
     app = ZumlyTray()
     app.run()
 
+def entry():
+    if "--headless-engine" in sys.argv:
+        sys.argv.remove("--headless-engine")
+        from zumly.main import main as headless_main
+        headless_main()
+    else:
+        main()
 
 if __name__ == "__main__":
-    main()
+    entry()

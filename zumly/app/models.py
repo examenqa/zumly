@@ -284,6 +284,12 @@ class RecordingSession:
     voiceover_segments: List["VoiceoverSegment"] | None = None
     video_segments: List["VideoSegment"] | None = None
     chapters: List["Chapter"] | None = None
+    
+    # Aesthetic settings
+    background_id: str | None = None
+    frame_id: str | None = None
+    click_effect_id: str | None = None
+    output_dimensions: list | str | None = None  # e.g. [1920, 1080] or "auto"
 
     def to_json(self) -> str:
         """Serialize the entire session to a JSON string."""
@@ -303,11 +309,21 @@ class RecordingSession:
         if self.trim_end_ms > 0:
             data["trimEndMs"] = self.trim_end_ms
         if self.voiceover_segments:
-            data["voiceoverSegments"] = [v.to_dict() for v in self.voiceover_segments]
+            data["voiceoverSegments"] = [s.to_dict() for s in self.voiceover_segments]
         if self.video_segments:
-            data["videoSegments"] = [vs.to_dict() for vs in self.video_segments]
+            data["videoSegments"] = [s.to_dict() for s in self.video_segments]
         if self.chapters:
             data["chapters"] = [c.to_dict() for c in self.chapters]
+            
+        # Add aesthetic settings if they exist
+        if self.background_id:
+            data["backgroundId"] = self.background_id
+        if self.frame_id:
+            data["frameId"] = self.frame_id
+        if self.click_effect_id:
+            data["clickEffectId"] = self.click_effect_id
+        if self.output_dimensions:
+            data["outputDimensions"] = self.output_dimensions
         return json.dumps(data, indent=2)
 
     @staticmethod
@@ -320,48 +336,49 @@ class RecordingSession:
         message instead of raw ``KeyError``.  ``keyframes`` is optional
         (defaults to an empty list when absent) for backward compatibility.
         """
+        """Deserialize from a JSON string."""
         d = json.loads(s)
-        try:
-            session_id = d["id"]
-            start_time = d["startTime"]
-            duration = d["duration"]
-            mouse_track = [MousePosition.from_dict(m) for m in d["mouseTrack"]]
-            keyframes = [ZoomKeyframe.from_dict(k) for k in d.get("keyframes", [])]
-        except KeyError as exc:
-            raise ValueError(
-                f"Project file missing required field: {exc}"
-            ) from exc
-
+        
+        # Parse simple tracks
+        mouse_track = [MousePosition.from_dict(m) for m in d.get("mouseTrack", [])]
+        keyframes = [ZoomKeyframe.from_dict(k) for k in d.get("keyframes", [])]
+        click_events = [ClickEvent.from_dict(c) for c in d.get("clickEvents", [])]
+        
+        # Legacy fallback
         key_events = None
         if "keyEvents" in d:
             logger.debug("Ignoring legacy keyEvents during RecordingSession load")
-        click_events = None
-        if "clickEvents" in d:
-            click_events = [ClickEvent.from_dict(c) for c in d["clickEvents"]]
-        frame_timestamps = d.get("frameTimestamps")
+            
         voiceover_segments = None
         if "voiceoverSegments" in d:
             voiceover_segments = [VoiceoverSegment.from_dict(v) for v in d["voiceoverSegments"]]
+            
         video_segments = None
         if "videoSegments" in d:
-            video_segments = [VideoSegment.from_dict(vs) for vs in d["videoSegments"]]
+            video_segments = [VideoSegment.from_dict(v) for v in d["videoSegments"]]
+            
         chapters = None
         if "chapters" in d:
             chapters = [Chapter.from_dict(c) for c in d["chapters"]]
+
         return RecordingSession(
-            id=session_id,
-            start_time=start_time,
-            duration=duration,
+            id=d["id"],
+            start_time=d["startTime"],
+            duration=d["duration"],
             mouse_track=mouse_track,
             keyframes=keyframes,
             key_events=key_events,
             click_events=click_events,
-            frame_timestamps=frame_timestamps,
+            frame_timestamps=d.get("frameTimestamps"),
             trim_start_ms=d.get("trimStartMs", 0.0),
             trim_end_ms=d.get("trimEndMs", 0.0),
             voiceover_segments=voiceover_segments,
             video_segments=video_segments,
             chapters=chapters,
+            background_id=d.get("backgroundId"),
+            frame_id=d.get("frameId"),
+            click_effect_id=d.get("clickEffectId"),
+            output_dimensions=d.get("outputDimensions")
         )
 
 

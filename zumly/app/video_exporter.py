@@ -1,76 +1,21 @@
-"""Export pipeline for rendering Zumly sessions to MP4/GIF.
-
-Algorithm overview
-==================
-
-1. Read source video frames from OpenCV (recorded AVI).
-2. Build a *source timeline* from per-frame timestamps when available
-    (variable-rate WGC capture), otherwise derive timestamps from source FPS.
-3. Build a *constant-FPS output timeline* used by ffmpeg output.
-4. For each output timestamp:
-    - pick the source frame active at that time (binary search in timestamps),
-    - compute zoom/pan from :class:`ZoomEngine`,
-    - draw cursor/click overlays at the same timestamp,
-    - composite frame + bezel/background with NumPy/OpenCV,
-    - enqueue raw BGR bytes for the writer thread.
-5. Writer thread drains a bounded queue into ffmpeg stdin.
-6. ffmpeg encodes MP4 (hardware encoder with fallback chain) or GIF.
-
-The key design goal is timeline determinism: exported visuals, click effects,
-zoom transitions, and optional voiceover audio are all evaluated on the same
-timeline so playback stays synchronized.
-"""
-
 import logging
 import os
-import queue
-import subprocess
-"""Export pipeline for rendering Zumly sessions to MP4/GIF.
-
-Algorithm overview
-==================
-
-1. Read source video frames from OpenCV (recorded AVI).
-2. Build a *source timeline* from per-frame timestamps when available
-    (variable-rate WGC capture), otherwise derive timestamps from source FPS.
-3. Build a *constant-FPS output timeline* used by ffmpeg output.
-4. For each output timestamp:
-    - pick the source frame active at that time (binary search in timestamps),
-    - compute zoom/pan from :class:`ZoomEngine`,
-    - draw cursor/click overlays at the same timestamp,
-    - composite frame + bezel/background with NumPy/OpenCV,
-    - enqueue raw BGR bytes for the writer thread.
-5. Writer thread drains a bounded queue into ffmpeg stdin.
-6. ffmpeg encodes MP4 (hardware encoder with fallback chain) or GIF.
-
-The key design goal is timeline determinism: exported visuals, click effects,
-zoom transitions, and optional voiceover audio are all evaluated on the same
-timeline so playback stays synchronized.
-"""
-
-import logging
-import os
-import queue
 import subprocess
 import threading
 import time
-import bisect
+import tempfile
+import re
 from dataclasses import dataclass
+from typing import Any, List, Optional, Callable
 
-logger = logging.getLogger(__name__)
-from typing import List, Optional, Callable
-
-import cv2
-import numpy as np
+from PIL import Image, ImageDraw
 
 from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, Chapter
-from .zoom_engine import ZoomEngine
-from .cursor_renderer import draw_cursor_cv, draw_clicks_cv, _build_cursor_template
-from .backgrounds import BackgroundPreset, DEFAULT_PRESET, WAVE_LAYERS
-from .utils import ffmpeg_exe as _ffmpeg_exe, subprocess_kwargs as _subprocess_kwargs, build_encoder_args as _build_encoder_args, build_gif_args as _build_gif_args
+from .backgrounds import BackgroundPreset, DEFAULT_PRESET
+from .frames import FramePreset, DEFAULT_FRAME
+from .utils import ffmpeg_exe as _ffmpeg_exe, subprocess_kwargs as _subprocess_kwargs
 
-_BG_TOP = np.array([25, 13, 14], dtype=np.uint8)
-_BG_BOTTOM = np.array([48, 19, 22], dtype=np.uint8)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,275 +29,190 @@ class VideoProbeResult:
     fps: float
     is_gif: bool
 
+
 @dataclass
 class GeometryResult:
     scr_x: int
     scr_y: int
     scr_w: int
     scr_h: int
-    base_canvas: np.ndarray
-    screen_mask: np.ndarray
-    device_mask_u8: Optional[np.ndarray]
-    bg: np.ndarray
+    base_canvas: Any
+    screen_mask: Any
+    device_mask_u8: Any
+    bg: Any
 
-def _preset_to_bgr(preset: BackgroundPreset) -> tuple:
-    """Convert a BackgroundPreset to BGR numpy arrays (top, bottom)."""
-    r1, g1, b1 = preset.color_top
-    r2, g2, b2 = preset.color_bottom
-    return (
-        np.array([b1, g1, r1], dtype=np.uint8),
-        np.array([b2, g2, r2], dtype=np.uint8),
-    )
 
-def _build_background(w: int, h: int,
-                       bg_top: np.ndarray | None = None,
-                       bg_bottom: np.ndarray | None = None,
-                       kind: str = "solid") -> np.ndarray:
-    """Create a background image for the given pattern *kind*.
+class GeometryComputer:
+    """Pure geometry helper shared by tests and the FFmpeg export graph."""
 
-    Supported kinds: solid, gradient, wavy, radial, spotlight.
-    """
-    import math
+    def __init__(
+        self,
+        canvas_w: int,
+        canvas_h: int,
+        src_w: int,
+        src_h: int,
+        frame_preset: Optional[FramePreset] = None,
+    ) -> None:
+        self.canvas_w = int(canvas_w)
+        self.canvas_h = int(canvas_h)
+        self.src_w = max(int(src_w), 1)
+        self.src_h = max(int(src_h), 1)
+        self.frame_preset = frame_preset or DEFAULT_FRAME
 
-    top = bg_top if bg_top is not None else _BG_TOP
-    bot = bg_bottom if bg_bottom is not None else _BG_BOTTOM
-    top_f = top.astype(np.float32)
-    bot_f = bot.astype(np.float32)
+    def compute(self) -> dict:
+        W = max(self.canvas_w, 1)
+        H = max(self.canvas_h, 1)
+        video_aspect = self.src_w / self.src_h
+        fp = self.frame_preset
 
-    # Base vertical gradient (used by most patterns as a starting point)
-    t = np.linspace(0, 1, h, dtype=np.float32).reshape(h, 1, 1)
-    bg = ((1 - t) * top_f + t * bot_f)
-    bg = np.broadcast_to(bg, (h, w, 3)).copy()
+        if fp.is_none:
+            if W / H > video_aspect:
+                scr_h = H
+                scr_w = int(H * video_aspect)
+            else:
+                scr_w = W
+                scr_h = int(W / video_aspect)
+            return {
+                "scr_x": (W - scr_w) // 2,
+                "scr_y": (H - scr_h) // 2,
+                "scr_w": max(scr_w, 1),
+                "scr_h": max(scr_h, 1),
+            }
 
-    if kind == "wavy":
-        x_norm = np.linspace(0, 1, w, dtype=np.float32)
-        y_idx = np.arange(h, dtype=np.float32).reshape(h, 1)
-        for y_frac, amp_frac, freq, phase, alpha, use_top in WAVE_LAYERS:
-            wave_color = top_f if use_top else bot_f
-            wave_y = (y_frac + amp_frac * np.sin(
-                2 * np.pi * freq * x_norm + phase)) * h
-            mask = (y_idx >= wave_y.reshape(1, w)).astype(np.float32) * alpha
-            mask_3d = mask[:, :, np.newaxis]
-            bg = bg * (1 - mask_3d) + wave_color * mask_3d
+        preliminary_scale = max((W - 2 * W * fp.padding) / 900.0, 0.01)
+        bw_est = fp.bezel_width * preliminary_scale
+        pad_x = W * fp.padding
+        pad_y = H * fp.padding
+        avail_w = max(W - 2 * pad_x, 1.0)
+        avail_h = max(H - 2 * pad_y, 1.0)
 
-    elif kind == "radial":
-        # Dark fill with radial glow from centre
-        bg[:] = bot_f
-        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-        cx, cy = w / 2.0, h / 2.0
-        radius = max(w, h) * 0.6
-        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
-        glow = np.clip(1.0 - dist / radius, 0, 1)[:, :, np.newaxis]
-        bg = bg * (1 - glow) + top_f * glow
+        dev_h = avail_h
+        scr_h_try = max(dev_h - 2 * bw_est, 1.0)
+        scr_w_try = scr_h_try * video_aspect
+        dev_w = scr_w_try + 2 * bw_est
+        if dev_w > avail_w:
+            dev_w = avail_w
+            scr_w_try = max(dev_w - 2 * bw_est, 1.0)
+            scr_h_try = scr_w_try / video_aspect
+            dev_h = scr_h_try + 2 * bw_est
 
-    elif kind == "spotlight":
-        # Dark fill with off-centre glow from upper-right area
-        bg[:] = bot_f
-        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-        cx, cy = w * 0.8, h * 0.2
-        radius = max(w, h) * 0.75
-        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
-        glow = np.clip(1.0 - dist / radius, 0, 1)[:, :, np.newaxis]
-        bg = bg * (1 - glow) + top_f * glow
+        dev_x = (W - dev_w) / 2
+        dev_y = (H - dev_h) / 2
+        scale = max(dev_w / 900.0, 0.01)
+        bw = fp.bezel_width * scale
 
-    # solid and gradient use the base vertical gradient as-is
-    return bg.astype(np.uint8)
+        scr_x = dev_x + bw
+        scr_y = dev_y + bw
+        scr_w = max(dev_w - 2 * bw, 1.0)
+        scr_h = max(dev_h - 2 * bw, 1.0)
 
-def _compose_cv(frame_bgr: np.ndarray, zoom: float, pan_x: float,
-                pan_y: float, out_w: int, out_h: int,
-                base_canvas: np.ndarray, screen_mask: np.ndarray,
-                scr_x: int, scr_y: int, scr_w: int, scr_h: int,
-                zoom_video_only: bool = False,
-                bg_canvas: np.ndarray | None = None,
-                device_mask_u8: np.ndarray | None = None,
-                _buf_canvas: np.ndarray | None = None,
-                _buf_result: np.ndarray | None = None) -> np.ndarray:
-    """Fast compositor ΓÇö copies pre-rendered bezel, places video in screen,
-    then applies zoom.
+        return {
+            "scr_x": int(scr_x),
+            "scr_y": int(scr_y),
+            "scr_w": max(int(scr_w), 1),
+            "scr_h": max(int(scr_h), 1),
+            "dev_x": int(dev_x),
+            "dev_y": int(dev_y),
+            "dev_w": max(int(dev_w), 1),
+            "dev_h": max(int(dev_h), 1),
+            "bw": int(round(bw)),
+            "outer_r": int(round(fp.outer_radius * scale)),
+            "inner_r": int(round(fp.inner_radius * scale)),
+            "edge_thickness": max(int(round(fp.edge_width * scale)), 0),
+        }
 
-    *zoom_video_only*=True  (No Frame): crops the source video only;
-    background stays static.
-    *zoom_video_only*=False (device frame): zooms the device (bezel +
-    video) while the background stays static.  Requires *bg_canvas*
-    (the background-only layer without bezel).
-    *device_mask_u8* ΓÇö pre-computed mask (255 where bezel differs from
-    background).  When ``None``, computed on the fly (slower).
-    *_buf_canvas* / *_buf_result* ΓÇö optional pre-allocated buffers
-    (same shape as base_canvas / bg_canvas) to avoid per-frame copies.
-    """
-    # Reuse pre-allocated buffer instead of copying per-frame
-    if _buf_canvas is not None and _buf_canvas.shape == base_canvas.shape:
-        np.copyto(_buf_canvas, base_canvas)
-        canvas = _buf_canvas
-    else:
-        canvas = base_canvas.copy()
-    fh, fw = frame_bgr.shape[:2]
 
-    if scr_w <= 0 or scr_h <= 0:
-        return canvas
+def generate_device_frame_png(preset: FramePreset, w: int, h: int, geom: dict) -> str:
+    """Generate a device frame PNG and return the path."""
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
 
-    if zoom_video_only and zoom > 1.001:
-        # No Frame mode: crop source video, background stays fixed
-        crop_w = int(fw / zoom)
-        crop_h = int(fh / zoom)
-        
-        # Calculate top-left corner of the crop
-        cx = int(pan_x * fw - crop_w / 2)
-        cy = int(pan_y * fh - crop_h / 2)
-        
-        # Clamp coordinates to ensure the crop stays within the frame
-        cx = max(0, min(cx, fw - crop_w))
-        cy = max(0, min(cy, fh - crop_h))
-        
-        # ROI slicing
-        roi_slice = frame_bgr[cy:cy+crop_h, cx:cx+crop_w]
-        
-        # Resize cropped slice back to screen geometry
-        resized = cv2.resize(roi_slice, (scr_w, scr_h), interpolation=cv2.INTER_LINEAR)
-        
-        roi_mask = screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
-        roi = canvas[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
-        np.copyto(roi, resized, where=roi_mask[:, :, np.newaxis] > 0)
-        return canvas
-
-    # Place video into the bezel canvas at 1├ù
-    resized = cv2.resize(frame_bgr, (scr_w, scr_h),
-                         interpolation=cv2.INTER_AREA)
-    roi_mask = screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
-    roi = canvas[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w]
-    np.copyto(roi, resized, where=roi_mask[:, :, np.newaxis] > 0)
-
-    # Device frame + zoom: move the device closer, background stays static
-    if not zoom_video_only and zoom > 1.001 and bg_canvas is not None:
-        H, W = canvas.shape[:2]
-        # Focus point in canvas coords
-        fx = scr_x + pan_x * scr_w
-        fy = scr_y + pan_y * scr_h
-
-        # Use warpAffine for sub-pixel precision ΓÇö a single resample step
-        # maps output pixels directly to floating-point canvas coords,
-        # eliminating the integer pixel snapping that caused frame jitter.
-        #
-        # For output pixel (dx, dy), the canvas source pixel is:
-        #   src_x = dx / zoom + (fx - W / (2 * zoom))
-        #   src_y = dy / zoom + (fy - H / (2 * zoom))
-        half_vw = W / (2.0 * zoom)
-        half_vh = H / (2.0 * zoom)
-        # Clamp focus so viewport stays within canvas bounds
-        fx_c = max(half_vw, min(fx, W - half_vw))
-        fy_c = max(half_vh, min(fy, H - half_vh))
-
-        M = np.float32([
-            [1.0 / zoom, 0, fx_c - half_vw],
-            [0, 1.0 / zoom, fy_c - half_vh],
-        ])
-        cropped_device = cv2.warpAffine(
-            canvas, M, (W, H),
-            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-        )
-
-        # Composite: static background + zoomed device on top
-        if _buf_result is not None and bg_canvas is not None and _buf_result.shape == bg_canvas.shape:
-            np.copyto(_buf_result, bg_canvas)
-            result = _buf_result
-        else:
-            result = bg_canvas.copy()
-        if device_mask_u8 is None:
-            device_mask_u8 = (np.any(base_canvas != bg_canvas, axis=2)
-                              .astype(np.uint8) * 255)
-        cropped_mask = cv2.warpAffine(
-            device_mask_u8, M, (W, H),
-            flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-        )
-        mask_bool = cropped_mask > 127
-        np.copyto(result, cropped_device, where=mask_bool[:, :, np.newaxis])
-        return result
-
-    return canvas
-
-def _merge_voiceover_segments(
-    segments: list,
-    duration_ms: float,
-    trim_start_ms: float,
-    trim_end_ms: float,
-    ffmpeg: str,
-) -> str:
-    """Merge voiceover clips into one WAV aligned to export timeline.
-
-    Each voiceover clip is timestamped in recording time. The merge step uses
-    ffmpeg audio filters so export can mux a single audio input:
-
-    - ``adelay`` offsets each clip to its timeline position.
-    - ``amix`` combines all delayed clips into one stream.
-
-    For trimmed exports, timestamps are shifted by ``trim_start_ms`` so
-    voiceover timing remains correct in the trimmed output.
-
-    Returns the merged WAV path, or ``""`` when merge fails.
-    """
-    import tempfile
-    if not segments:
-        return ""
-
-    # Compute effective trim offset ΓÇö voiceover timestamps are relative
-    # to the full recording, so we shift them by trim_start_ms.
-    offset_ms = trim_start_ms if trim_start_ms > 0 else 0.0
-
-    output_path = os.path.join(
-        tempfile.gettempdir(),
-        f"followcursor_vo_merged_{os.getpid()}_{int(time.time())}.wav",
-    )
-
-    if len(segments) == 1:
-        seg = segments[0]
-        delay = max(0, int(seg.timestamp - offset_ms))
-        # Single segment: just delay it
-        cmd = [
-            ffmpeg, "-y",
-            "-i", seg.audio_path,
-            "-af", f"adelay={delay}|{delay}",
-            "-ar", "44100",
-            output_path,
+    if preset and not preset.is_none and "dev_x" in geom:
+        dev_box = [
+            geom["dev_x"],
+            geom["dev_y"],
+            geom["dev_x"] + geom["dev_w"],
+            geom["dev_y"] + geom["dev_h"],
         ]
-    else:
-        # Multiple segments: build a complex filtergraph
-        inputs: list[str] = []
-        filter_parts: list[str] = []
-        for i, seg in enumerate(segments):
-            inputs += ["-i", seg.audio_path]
-            delay = max(0, int(seg.timestamp - offset_ms))
-            filter_parts.append(f"[{i}]adelay={delay}|{delay}[a{i}]")
-
-        mix_inputs = "".join(f"[a{i}]" for i in range(len(segments)))
-        filter_parts.append(
-            f"{mix_inputs}amix=inputs={len(segments)}:duration=longest:normalize=0"
-        )
-        filtergraph = ";".join(filter_parts)
-
-        cmd = [ffmpeg, "-y"] + inputs + [
-            "-filter_complex", filtergraph,
-            "-ar", "44100",
-            output_path,
+        scr_box = [
+            geom["scr_x"],
+            geom["scr_y"],
+            geom["scr_x"] + geom["scr_w"],
+            geom["scr_y"] + geom["scr_h"],
         ]
+        if preset.shadow_layers > 0:
+            for layer in range(preset.shadow_layers, 0, -1):
+                spread = layer * 4
+                alpha = max(8, 34 - layer * 5)
+                draw.rounded_rectangle(
+                    [
+                        dev_box[0] - spread,
+                        dev_box[1] - spread,
+                        dev_box[2] + spread,
+                        dev_box[3] + spread,
+                    ],
+                    radius=geom["outer_r"] + spread,
+                    fill=(0, 0, 0, alpha),
+                )
+        if geom["bw"] > 0:
+            draw.rounded_rectangle(
+                dev_box,
+                radius=geom["outer_r"],
+                fill=preset.bezel_color + (255,),
+                outline=preset.edge_color + (255,),
+                width=max(geom["edge_thickness"], 1),
+            )
+            draw.rounded_rectangle(
+                scr_box,
+                radius=geom["inner_r"],
+                fill=(0, 0, 0, 0),
+            )
+        elif preset.shadow_layers > 0:
+            draw.rounded_rectangle(
+                scr_box,
+                radius=geom["inner_r"],
+                outline=preset.edge_color + (80,),
+                width=max(geom["edge_thickness"], 1),
+            )
+    
+    path = os.path.join(tempfile.gettempdir(), f"frame_{os.getpid()}_{int(time.time())}.png")
+    img.save(path)
+    return path
 
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, timeout=120,
-            **_subprocess_kwargs(),
-        )
-        if result.returncode == 0 and os.path.isfile(output_path):
-            logger.info("Merged %d voiceover segments into %s", len(segments), output_path)
-            return output_path
-        stderr = result.stderr.decode(errors="replace")[:300] if result.stderr else ""
-        logger.warning("Voiceover merge failed (rc=%d): %s", result.returncode, stderr)
-    except Exception as exc:
-        logger.warning("Voiceover merge error: %s", exc)
-    return ""
+def generate_click_png(preset: ClickEffectPreset) -> str:
+    """Generate a visible click marker PNG for FFmpeg overlay."""
+    r = max(int(preset.radius), 1)
+    d = max(1, r * 2)
+    img = Image.new("RGBA", (d, d), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    color = preset.color
+    style = preset.style if preset.style in ("ripple", "burst", "highlight") else "ripple"
 
+    if style == "highlight":
+        fill = (color[0], color[1], color[2], min(color[3], 120))
+        draw.ellipse([1, 1, d - 2, d - 2], fill=fill, outline=color, width=max(2, r // 8))
+    elif style == "burst":
+        import math
+        cx = cy = r
+        for i in range(8):
+            angle = 2.0 * math.pi * i / 8
+            x1 = cx + math.cos(angle) * r * 0.35
+            y1 = cy + math.sin(angle) * r * 0.35
+            x2 = cx + math.cos(angle) * r * 0.95
+            y2 = cy + math.sin(angle) * r * 0.95
+            draw.line([x1, y1, x2, y2], fill=color, width=max(2, r // 8))
+        draw.ellipse([r - 4, r - 4, r + 4, r + 4], fill=color)
+    else:
+        draw.ellipse([2, 2, d - 3, d - 3], outline=color, width=max(3, r // 6))
+        draw.ellipse([r - 5, r - 5, r + 5, r + 5], fill=color)
+
+    path = os.path.join(tempfile.gettempdir(), f"click_{os.getpid()}_{int(time.time())}.png")
+    img.save(path)
+    return path
 
 
 class VideoExporter:
-    """Export pipeline for rendering Zumly sessions to MP4/GIF."""
+    """Export pipeline for rendering Zumly sessions to MP4 (Phase 5 Motion Engine)."""
 
     def __init__(
         self,
@@ -367,8 +227,6 @@ class VideoExporter:
         self._status_cb = status_cb
         self._thread: Optional[threading.Thread] = None
 
-    # ── public API ──────────────────────────────────────────────────
-
     def export(
         self,
         input_path: str,
@@ -378,6 +236,7 @@ class VideoExporter:
         mouse_track: Optional[List[MousePosition]] = None,
         monitor_rect: Optional[dict] = None,
         bg_preset: Optional[BackgroundPreset] = None,
+        frame_preset: Optional[FramePreset] = None,
         target_resolution: Optional[tuple[int, int]] = None,
         click_events: Optional[List[ClickEvent]] = None,
         click_preset: Optional[ClickEffectPreset] = None,
@@ -390,870 +249,238 @@ class VideoExporter:
         video_segments: Optional[List[VideoSegment]] = None,
         chapters: Optional[List[Chapter]] = None,
     ) -> None:
-        """Start export in a background thread.
-
-        *output_dim* — (width, height) tuple or ``"auto"`` / ``None``
-        to use the source video's native resolution.
-        *duration_ms* — wall-clock recording duration for accurate
-        progress tracking (``cv2.CAP_PROP_FRAME_COUNT`` is unreliable
-        for huffyuv AVI containers).
-        *frame_timestamps* — per-frame ms offsets from recording start.
-        When provided, gives accurate time mapping for variable-rate
-        recordings (e.g. WGC capture).
-        *trim_start_ms* / *trim_end_ms* — if non-zero, only export the
-        trimmed region of the video.
-        *encoder_id* — ffmpeg encoder to use (e.g. ``"h264_nvenc"``,
-        ``"h264_qsv"``, ``"h264_amf"``, ``"libx264"``).
-        *voiceover_segments* — optional list of ``VoiceoverSegment``
-        objects; each with an audio file to mux at a specific time.
-        *video_segments* — optional list of ``VideoSegment`` objects;
-        when present, only frames within these time ranges are exported.
-        *chapters* — optional list of ``Chapter`` objects for MP4 chapter metadata.
-        """
         self._thread = threading.Thread(
             target=self._run,
-            args=(input_path, output_path, keyframes, actual_fps,
-                  mouse_track or [], monitor_rect or {},
-                  bg_preset or DEFAULT_PRESET,
-                  target_resolution,
-                  click_events or [],
-                  click_preset or DEFAULT_CLICK_EFFECT,
-                  duration_ms,
-                  frame_timestamps,
-                  trim_start_ms,
-                  trim_end_ms,
-                  encoder_id,
-                  voiceover_segments or [],
-                  video_segments or [],
-                  chapters or []),
+            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, click_events, click_preset, actual_fps, monitor_rect),
             daemon=True,
         )
         self._thread.start()
 
-    # ── internal ────────────────────────────────────────────────────
-
-    def _probe_video(
-        self,
-        cap: cv2.VideoCapture,
-        actual_fps: float,
-        duration_ms: float,
-        frame_timestamps: Optional[List[float]],
-        target_resolution: Optional[tuple[int, int]],
-        output_path: str,
-    ) -> Optional[VideoProbeResult]:
-        """Phase 1: Probe source video metadata and determine output parameters.
-
-        Returns:
-            VideoProbeResult on success, None on error (emits self.error signal).
-        """
-        src_fps = cap.get(cv2.CAP_PROP_FPS)
-        if src_fps <= 0 or src_fps > 120:
-            src_fps = 30.0
-        if actual_fps > 0:
-            src_fps = actual_fps
-        cap_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        # After the post-recording remux the metadata is correct.
-        # For legacy videos, detect metadata/duration mismatch and
-        # recount frames if needed.
-        meta_dur = (cap_frame_count / src_fps * 1000) if src_fps > 0 else 0
-        need_recount = False
-        if duration_ms > 0 and meta_dur > 0:
-            ratio = meta_dur / duration_ms
-            if ratio < 0.90 or ratio > 1.10:
-                need_recount = True
-
-        if need_recount:
-            real_frame_count = 0
-            while cap.grab():
-                real_frame_count += 1
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            if duration_ms > 0 and real_frame_count > 0:
-                src_fps = real_frame_count / (duration_ms / 1000.0)
-            total_frames = real_frame_count if real_frame_count > 0 else cap_frame_count
-        else:
-            total_frames = cap_frame_count
-        if total_frames <= 0 and frame_timestamps:
-            total_frames = len(frame_timestamps)
-        src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        if src_w == 0 or src_h == 0:
-            if self._error_cb: self._error_cb("Invalid video dimensions")
-            return None
-
-        # Determine output canvas size
-        if target_resolution and isinstance(target_resolution, (tuple, list)):
-            if len(target_resolution) < 2:
-                if self._error_cb: self._error_cb("target_resolution must have 2 elements (width, height)")
-                return None
-            out_w, out_h = int(target_resolution[0]), int(target_resolution[1])
-            if out_w <= 0 or out_h <= 0:
-                if self._error_cb: self._error_cb("target_resolution width and height must be positive")
-                return None
-        else:
-            out_w, out_h = src_w, src_h
-            
-        # Ensure even dimensions (H.264 requires even dimensions)
-        out_w = out_w + (out_w % 2)
-        out_h = out_h + (out_h % 2)
-
-        # Normalise extension: allow .gif; everything else becomes .mp4
-        is_gif = output_path.lower().endswith(".gif")
-
-        # Export on a stable CFR timeline.  WGC recordings can have sparse,
-        # irregular source frames (only when the image changes).  Keeping
-        # a very low averaged FPS here makes output choppy and drifts
-        # overlays/audio relative to visual content.  Use at least 24 fps
-        # for MP4 (cinematic standard — smooth enough without inflating
-        # frame count as much as 30 fps would).
-        fps = src_fps
-        if not is_gif and fps < 24.0:
-            fps = 24.0
-        logger.info(
-            "Export timing | source_fps=%.2f output_fps=%.2f total_frames=%d frame_timestamps=%d",
-            src_fps,
-            fps,
-            total_frames,
-            len(frame_timestamps or []),
-        )
-
-        return VideoProbeResult(
-            src_fps=src_fps,
-            total_frames=total_frames,
-            src_w=src_w,
-            src_h=src_h,
-            out_w=out_w,
-            out_h=out_h,
-            fps=fps,
-            is_gif=is_gif,
-        )
-
-    def _compute_geometry(
-        self,
-        probe,
-        bg_preset: BackgroundPreset,
-    ):
-        """Phase 2: Compute device/frame layout and build static layers."""
-        w, h = probe.out_w, probe.out_h
-
-        # Pre-build the gradient background
-        if self._status_cb: self._status_cb("Building background & frame…")
-        
-        # We need a background base canvas. We can use np.zeros or a gradient
-        # depending on bg_preset. For simplicity if _preset_to_bgr and _build_background
-        # exist in this file, we can just use them.
+    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict]):
+        temp_files = []
         try:
-            bg_top_bgr, bg_bottom_bgr = _preset_to_bgr(bg_preset)
-            bg = _build_background(w, h, bg_top_bgr, bg_bottom_bgr, kind=bg_preset.kind)
-        except NameError:
-            bg = np.zeros((h, w, 3), dtype=np.uint8)
-
-        # Simple aspect ratio fit
-        src_ratio = probe.src_w / probe.src_h
-        out_ratio = w / h
-        
-        if src_ratio > out_ratio:
-            scr_w = w
-            scr_h = int(w / src_ratio)
-        else:
-            scr_h = h
-            scr_w = int(h * src_ratio)
+            if self._status_cb: self._status_cb("Starting export...")
             
-        scr_x = (w - scr_w) // 2
-        scr_y = (h - scr_h) // 2
-
-        base_canvas = bg.copy()
-        screen_mask = np.zeros((h, w), dtype=np.uint8)
-        screen_mask[scr_y:scr_y + scr_h, scr_x:scr_x + scr_w] = 255
-        device_mask_u8 = None
-
-        return GeometryResult(
-            scr_x=scr_x,
-            scr_y=scr_y,
-            scr_w=scr_w,
-            scr_h=scr_h,
-            base_canvas=base_canvas,
-            screen_mask=screen_mask,
-            device_mask_u8=device_mask_u8,
-            bg=bg,
-        )
-
-    def _run(
-        self,
-        input_path: str,
-        output_path: str,
-        keyframes: List[ZoomKeyframe],
-        actual_fps: float,
-        mouse_track: List[MousePosition],
-        monitor_rect: dict,
-        bg_preset: BackgroundPreset,
-        target_resolution: Optional[tuple[int, int]],
-        click_events: List[ClickEvent],
-        click_preset: ClickEffectPreset,
-        duration_ms: float = 0.0,
-        frame_timestamps: Optional[List[float]] = None,
-        trim_start_ms: float = 0.0,
-        trim_end_ms: float = 0.0,
-        encoder_id: str = "libx264",
-        voiceover_segments: Optional[List[VoiceoverSegment]] = None,
-        video_segments: Optional[List[VideoSegment]] = None,
-        chapters: Optional[List] = None,
-    ) -> None:
-        """Execute the full export algorithm on a worker thread.
-
-        High-level phases:
-        1. Probe source metadata and reconcile FPS/frame-count uncertainty.
-        2. Precompute static composition layers (background, bezel masks).
-        3. Prepare audio (optional voiceover merge).
-        4. Render frames on a deterministic CFR output timeline:
-           source timestamp lookup -> zoom/cursor/click -> compose -> queue.
-        5. Encode via ffmpeg with hardware fallback chain.
-
-        Error handling strategy:
-        - Recover from unsupported HW encoders by retrying others.
-        - Catch pipe errors from ffmpeg stdin writes.
-        - Emit user-facing signal messages instead of raising to UI thread.
-        """
-        proc: subprocess.Popen | None = None
-        cap: cv2.VideoCapture | None = None
-        _merged_audio_path: str = ""
-        _chapters_metadata_path: str = ""
-        try:
-            if self._status_cb: self._status_cb("Preparing video…")
-            cap = cv2.VideoCapture(input_path)
-            if not cap.isOpened():
-                if self._error_cb: self._error_cb(f"Cannot open {input_path}")
-                return
-
-            # Phase 1: Probe video metadata
-            probe = self._probe_video(
-                cap, actual_fps, duration_ms, frame_timestamps,
-                target_resolution, output_path
-            )
-            if probe is None:
-                return  # Error already emitted
-
-            w, h = probe.out_w, probe.out_h
-            src_fps = probe.src_fps
-            total_frames = probe.total_frames
-            fps = probe.fps
-            _is_gif = probe.is_gif
-
-            # Update output_path extension if needed
-            if not _is_gif and not output_path.lower().endswith(".mp4"):
-                output_path = output_path.rsplit(".", 1)[0] + ".mp4"
-
-            # Phase 2: Compute geometry and build static layers
-            geom = self._compute_geometry(probe, bg_preset)
-            scr_x, scr_y, scr_w, scr_h = geom.scr_x, geom.scr_y, geom.scr_w, geom.scr_h
-            base_canvas = geom.base_canvas
-            screen_mask = geom.screen_mask
-            _device_mask_u8 = geom.device_mask_u8
-            bg = geom.bg
-
-            if w < 2 or h < 2:
-                if self._error_cb: self._error_cb("Output dimensions too small for encoding")
-                return
-
-            # Pipe raw BGR frames to ffmpeg for encoding (H.264 or GIF)
             ffmpeg = _ffmpeg_exe()
-            original_encoder_id = encoder_id
 
-            # Build merged audio from voiceover segments (if any)
-            _has_audio = False
-            if voiceover_segments and not _is_gif:
-                ready = [s for s in voiceover_segments if s.audio_path and os.path.isfile(s.audio_path)]
-                if ready:
-                    if self._status_cb: self._status_cb(f"Merging {len(ready)} voiceover segment(s)\u2026")
-                    _merged_audio_path = _merge_voiceover_segments(
-                        ready, duration_ms, trim_start_ms, trim_end_ms, ffmpeg
-                    )
-                    _has_audio = bool(_merged_audio_path) and os.path.isfile(_merged_audio_path)
-                    if _has_audio:
-                        logger.info("Voiceover audio ready: %s", _merged_audio_path)
+            # Probe source dimensions and FPS
+            ffprobe_cmd = [ffmpeg, "-i", input_path]
+            p = subprocess.run(ffprobe_cmd, capture_output=True, text=True, **_subprocess_kwargs())
+            
+            src_w, src_h = 1920, 1080 
+            src_fps = 30.0
+            
+            m = re.search(r"Video:.* (\d{3,5})x(\d{3,5})", p.stderr)
+            if m:
+                src_w, src_h = int(m.group(1)), int(m.group(2))
+            
+            fps_m = re.search(r"(\d+(?:\.\d+)?) fps", p.stderr)
+            if fps_m:
+                src_fps = float(fps_m.group(1))
+            if actual_fps > 0:
+                src_fps = actual_fps
+
+            dur_m = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", p.stderr)
+            total_sec = 0.0
+            if dur_m:
+                total_sec = int(dur_m.group(1))*3600 + int(dur_m.group(2))*60 + float(dur_m.group(3))
+            elif duration_ms:
+                total_sec = duration_ms / 1000.0
+
+            out_w, out_h = src_w, src_h
+            if target_resolution:
+                out_w, out_h = target_resolution
+                
+            out_w = out_w + (out_w % 2)
+            out_h = out_h + (out_h % 2)
+
+            frame_preset = frame_preset or DEFAULT_FRAME
+            if total_sec > 0:
+                keyframes = [kf for kf in keyframes if (kf.timestamp / 1000.0) <= total_sec]
+                if click_events:
+                    click_events = [ce for ce in click_events if (ce.timestamp / 1000.0) <= total_sec]
+
+            geom = GeometryComputer(
+                canvas_w=out_w,
+                canvas_h=out_h,
+                src_w=src_w,
+                src_h=src_h,
+                frame_preset=frame_preset,
+            ).compute()
+            scr_x = geom["scr_x"]
+            scr_y = geom["scr_y"]
+            scr_w = geom["scr_w"]
+            scr_h = geom["scr_h"]
+
+            bg_color = "000000"
+            if bg_preset and hasattr(bg_preset, "color_top") and bg_preset.color_top:
+                r, g, b = bg_preset.color_top
+                bg_color = f"{r:02x}{g:02x}{b:02x}"
+
+            # Generate assets
+            frame_img_path = generate_device_frame_png(frame_preset, out_w, out_h, geom)
+            temp_files.append(frame_img_path)
+            
+            click_img_path = None
+            if click_events and click_preset:
+                click_img_path = generate_click_png(click_preset)
+                temp_files.append(click_img_path)
+
+            # Build motion nodes
+            expr_z = "1"
+            expr_px = "0.5"
+            expr_py = "0.5"
+            
+            if keyframes:
+                # Sort by timestamp
+                sorted_kfs = sorted(keyframes, key=lambda k: k.timestamp)
+                for kf in sorted_kfs:
+                    t_s = kf.timestamp / 1000.0
+                    dur = kf.duration / 1000.0
+                    t_e = t_s + dur
+                    
+                    target_z = max(1.0, kf.zoom)
+                    target_x = kf.x
+                    target_y = kf.y
+                    
+                    if dur > 0:
+                        ease = f"(1 - pow(1 - (time - {t_s})/{dur}, 5))"
+                        
+                        expr_z = f"if(lt(time, {t_s}), {expr_z}, if(lt(time, {t_e}), {expr_z} + ({target_z} - ({expr_z})) * {ease}, {target_z}))"
+                        expr_px = f"if(lt(time, {t_s}), {expr_px}, if(lt(time, {t_e}), {expr_px} + ({target_x} - ({expr_px})) * {ease}, {target_x}))"
+                        expr_py = f"if(lt(time, {t_s}), {expr_py}, if(lt(time, {t_e}), {expr_py} + ({target_y} - ({expr_py})) * {ease}, {target_y}))"
                     else:
-                        logger.warning("Voiceover merge produced no output, exporting without audio")
+                        expr_z = f"if(lt(time, {t_s}), {expr_z}, {target_z})"
+                        expr_px = f"if(lt(time, {t_s}), {expr_px}, {target_x})"
+                        expr_py = f"if(lt(time, {t_s}), {expr_py}, {target_y})"
+            
+            # clamp x and y to avoid out of bounds
+            # iw and ih are input width and height
+            # x_px = px * iw - (iw/z)/2
+            z_var = f"({expr_z})"
+            zoompan_x = f"clip(({expr_px}) * iw - (iw/{z_var})/2, 0, iw - iw/{z_var})"
+            zoompan_y = f"clip(({expr_py}) * ih - (ih/{z_var})/2, 0, ih - ih/{z_var})"
+            
+            zoompan_filter = f"zoompan=z='{z_var}':x='{zoompan_x}':y='{zoompan_y}':d=1:fps={src_fps}"
+            
+            filter_lines = []
+            
+            # 1. Motion node
+            filter_lines.append(f"[0:v]{zoompan_filter}[zoomed]")
+            
+            # 2. Static composition
+            filter_lines.append(f"[{'zoomed'}]scale={scr_w}:{scr_h}[vid]")
+            color_args = f"color=c=0x{bg_color}:s={out_w}x{out_h}:r={src_fps}"
+            if total_sec > 0:
+                color_args += f":d={total_sec}"
+            filter_lines.append(f"{color_args}[bg]")
+            filter_lines.append(f"[bg][vid]overlay=x={scr_x}:y={scr_y}[bg_vid]")
 
-            # Build chapter metadata file (if chapters exist and not GIF)
-            _chapters_metadata_path = ""
-            if chapters and not _is_gif:
-                import tempfile
-                # Create metadata file in the same directory as the output
-                output_dir = os.path.dirname(output_path) or "."
-                fd, _chapters_metadata_path = tempfile.mkstemp(
-                    suffix=".txt", prefix="chapters_", dir=output_dir
-                )
-                try:
-                    # Compute trimmed video end time for last chapter's END
-                    if trim_end_ms > 0:
-                        video_end_ms_trimmed = int(trim_end_ms - trim_start_ms)
-                    elif duration_ms > 0:
-                        video_end_ms_trimmed = int(duration_ms - trim_start_ms)
-                    else:
-                        video_end_ms_trimmed = 0
+            # 3. Click effects are drawn on the final canvas so they remain
+            # visible even when the source video is zoomed or cropped.
+            current_comp_node = "bg_vid"
+            if click_events and click_img_path and click_preset and click_preset.duration_ms > 0 and click_preset.color[3] > 0:
+                r = max(int(click_preset.radius), 1)
+                dur_sec = click_preset.duration_ms / 1000.0
+                m_left = monitor_rect.get("left", 0) if monitor_rect else 0
+                m_top = monitor_rect.get("top", 0) if monitor_rect else 0
+                m_w = monitor_rect.get("width", src_w) if monitor_rect else src_w
+                m_h = monitor_rect.get("height", src_h) if monitor_rect else src_h
 
-                    # Collect valid chapters with adjusted start times
-                    valid_chapters = []
-                    for chapter in sorted(chapters, key=lambda c: c.timestamp_ms):
-                        chap_ms = chapter.timestamp_ms - trim_start_ms
-                        if chap_ms < 0:
-                            continue  # Chapter is before trim start
-                        if trim_end_ms > 0 and chapter.timestamp_ms > trim_end_ms:
-                            continue  # Chapter is after trim end
-                        valid_chapters.append((int(chap_ms), chapter.name))
+                if len(click_events) > 1:
+                    split_nodes = "".join([f"[cl{i}]" for i in range(len(click_events))])
+                    filter_lines.append(f"[2:v]split={len(click_events)}{split_nodes}")
+                elif len(click_events) == 1:
+                    filter_lines.append("[2:v]null[cl0]")
 
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        f.write(";FFMETADATA1\n")
-                        for idx, (start_ms, name) in enumerate(valid_chapters):
-                            # END = next chapter's start, or video end for last
-                            if idx + 1 < len(valid_chapters):
-                                end_ms = valid_chapters[idx + 1][0]
-                            elif video_end_ms_trimmed > start_ms:
-                                end_ms = video_end_ms_trimmed
-                            else:
-                                end_ms = start_ms + 1000  # fallback
-                            # Sanitize chapter name for ffmetadata format:
-                            # escape special chars and strip newlines.
-                            safe_name = name.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
-                            f.write("[CHAPTER]\n")
-                            f.write(f"TIMEBASE=1/1000\n")
-                            f.write(f"START={start_ms}\n")
-                            f.write(f"END={end_ms}\n")
-                            f.write(f"title={safe_name}\n")
-                    logger.info("Chapter metadata file created: %s", _chapters_metadata_path)
-                except Exception as exc:
-                    logger.warning("Failed to create chapter metadata: %s", exc)
-                    if _chapters_metadata_path and os.path.exists(_chapters_metadata_path):
-                        try:
-                            os.remove(_chapters_metadata_path)
-                        except Exception:
-                            pass
-                    _chapters_metadata_path = ""
+                for i, ce in enumerate(click_events):
+                    t_s = ce.timestamp / 1000.0
+                    t_e = t_s + dur_sec
+                    rel_x = (ce.x - m_left) / max(m_w, 1)
+                    rel_y = (ce.y - m_top) / max(m_h, 1)
+                    cx = int(scr_x + rel_x * scr_w - r)
+                    cy = int(scr_y + rel_y * scr_h - r)
 
-            def _launch_ffmpeg(enc_id: str) -> subprocess.Popen:
-                """Start ffmpeg process configured for current export mode.
-
-                MP4 mode:
-                - receives raw BGR frames on stdin,
-                - encodes using selected H.264 encoder args,
-                - optionally muxes merged voiceover WAV.
-
-                GIF mode:
-                - receives raw BGR frames on stdin,
-                - applies palettegen/paletteuse filtergraph.
-                """
-                if _is_gif:
-                    gif_args = _build_gif_args()
-                    cmd = [
-                        ffmpeg, "-y",
-                        "-f", "rawvideo",
-                        "-vcodec", "rawvideo",
-                        "-s", f"{w}x{h}",
-                        "-pix_fmt", "bgr24",
-                        "-r", str(fps),
-                        "-i", "pipe:",
-                    ] + gif_args + [
-                        output_path,
-                    ]
-                    logger.info("Launching ffmpeg for GIF export: %s", " ".join(cmd))
-                else:
-                    enc_args = _build_encoder_args(enc_id)
-                    cmd = [
-                        ffmpeg, "-y",
-                        "-f", "rawvideo",
-                        "-vcodec", "rawvideo",
-                        "-s", f"{w}x{h}",
-                        "-pix_fmt", "bgr24",
-                        "-r", str(fps),
-                        "-i", "pipe:",
-                    ]
-                    # Add merged audio input if available
-                    if _has_audio:
-                        cmd += ["-i", _merged_audio_path]
-                    # Add chapter metadata if available
-                    if _chapters_metadata_path:
-                        cmd += ["-f", "ffmetadata", "-i", _chapters_metadata_path]
-                        chap_input_idx = 2 if _has_audio else 1
-                        cmd += ["-map_metadata", str(chap_input_idx)]
-                        cmd += ["-map_chapters", str(chap_input_idx)]
-                    cmd += enc_args
-                    if _has_audio:
-                        cmd += ["-c:a", "aac", "-b:a", "192k"]
-                    cmd += [output_path]
-                    logger.info("Launching ffmpeg with encoder %s: %s", enc_id, " ".join(cmd))
-                return subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    **_subprocess_kwargs(),
-                )
-
-            def _encode_frames(proc: subprocess.Popen) -> bool:
-                """Render and feed frames to ffmpeg using producer/consumer flow.
-
-                Timeline algorithm
-                ------------------
-                - Build ``source_timestamps`` from recorded frame timestamps.
-                - Iterate output timeline in fixed steps: ``t = start + n/fps``.
-                - For each output time ``t``:
-                    - binary-search source frame index active at ``t``,
-                    - advance OpenCV decoder up to that index,
-                    - render overlays/composition evaluated at ``t``.
-
-                Concurrency algorithm
-                ---------------------
-                - Producer (this thread): compose ndarray -> bytes -> queue.
-                - Consumer (writer thread): queue -> ``proc.stdin.write``.
-
-                This overlap prevents encoder starvation and keeps export
-                throughput high without sacrificing timeline correctness.
-                """
-                nonlocal frame_timestamps  # read-only access
-
-                engine = ZoomEngine()
-                for kf in keyframes:
-                    engine.add_keyframe(kf)
-
-                # Pre-build cursor template for overlay
-                # Use scr_h (screen area height) with same factor as preview
-                # compositor (screen_rect_h * 0.032) for visual consistency
-                cursor_h_px = max(16, int(scr_h * 0.032))
-                c_bgr, c_alpha = _build_cursor_template(cursor_h_px)
-                m_left = monitor_rect.get("left", 0)
-                m_top = monitor_rect.get("top", 0)
-                m_w = max(monitor_rect.get("width", w), 1)
-                m_h = max(monitor_rect.get("height", h), 1)
-                _has_cursor = len(mouse_track) > 0 and m_w > 0
-                _has_clicks = len(click_events) > 0 and m_w > 0
-
-                # Build source-frame timestamps used to map output timeline
-                # time -> source frame index.  This mirrors preview playback,
-                # which also picks frames from per-frame timestamps.
-                if frame_timestamps:
-                    source_timestamps = []
-                    last_ts = 0.0
-                    for t in frame_timestamps[:total_frames]:
-                        ts = float(t)
-                        if ts < last_ts:
-                            ts = last_ts
-                        source_timestamps.append(ts)
-                        last_ts = ts
-                else:
-                    source_timestamps = [
-                        (i / src_fps) * 1000.0 for i in range(total_frames)
-                    ]
-                if not source_timestamps:
-                    return False
-
-                # ── Pipeline: compositor → queue → writer thread → ffmpeg ──
-                _QUEUE_DEPTH = 16
-                frame_q: queue.Queue = queue.Queue(maxsize=_QUEUE_DEPTH)
-                pipe_err = threading.Event()
-
-                def _pipe_writer() -> None:
-                    """Drain frame queue into ffmpeg's stdin pipe."""
-                    while True:
-                        data = frame_q.get()
-                        if data is None:
-                            break
-                        try:
-                            proc.stdin.write(data)
-                        except (BrokenPipeError, OSError, ValueError):
-                            pipe_err.set()
-                            break
-
-                writer_t = threading.Thread(target=_pipe_writer, daemon=True)
-                writer_t.start()
-
-                def _enqueue(data: bytes) -> bool:
-                    """Put frame data into the queue.  Returns False on pipe error."""
-                    while not pipe_err.is_set():
-                        try:
-                            frame_q.put(data, timeout=0.5)
-                            return True
-                        except queue.Full:
-                            continue
-                    return False
-
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                exported = 0
-                ret, first_frame = cap.read()
-                if not ret:
-                    frame_q.put(None)
-                    writer_t.join(timeout=5)
-                    return False
-                src_idx = 0
-                last_f = first_frame
-                _needs_overlay = _has_cursor or _has_clicks
-
-                eff_ts = trim_start_ms if trim_start_ms > 0 else 0.0
-                if trim_end_ms > 0:
-                    eff_te = trim_end_ms
-                elif duration_ms > 0:
-                    eff_te = duration_ms
-                else:
-                    eff_te = source_timestamps[-1]
-                if eff_te < eff_ts:
-                    eff_te = eff_ts
-
-                # Build a sorted list of (start, end) time ranges from video
-                # segments.  Only frames whose source timestamp falls inside
-                # one of these ranges will be exported (ripple delete).
-                _seg_ranges: list[tuple[float, float]] = []
-                _seg_starts: list[float] = []  # pre-extracted for bisect
-                if video_segments:
-                    _seg_ranges = sorted(
-                        (s.start_ms, s.end_ms) for s in video_segments
+                    next_node = f"fc{i}"
+                    filter_lines.append(
+                        f"[{current_comp_node}][cl{i}]overlay=x={cx}:y={cy}:"
+                        f"enable='between(t,{t_s},{t_e})'[{next_node}]"
                     )
-                    _seg_starts = [s for s, _ in _seg_ranges]
+                    current_comp_node = next_node
 
-                # Move decoder to the source frame active at trim start.
-                start_src_idx = max(0, bisect.bisect_right(source_timestamps, eff_ts) - 1)
-                start_src_idx = min(start_src_idx, len(source_timestamps) - 1)
-                while src_idx < start_src_idx:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    src_idx += 1
-                    last_f = frame
+            filter_lines.append(f"[{current_comp_node}][1:v]overlay=x=0:y=0[out]")
+            
+            filtergraph = ";\n".join(filter_lines)
+            
+            # Write filtergraph to temp file to bypass CLI limits
+            graph_path = os.path.join(tempfile.gettempdir(), f"graph_{os.getpid()}_{int(time.time())}.txt")
+            
+            with open(graph_path, "w", encoding="utf-8") as f:
+                f.write(filtergraph)
+            logger.info("FFmpeg filter graph retained for debugging: %s", graph_path)
 
-                t_total = max(1, int(engine.compute_output_duration(
-                    duration_ms or eff_te, eff_ts, eff_te,
-                ) / 1000.0 * fps) + 1)
-                out_idx = 0
-                t_ms = eff_ts  # recording-time cursor (advances by speed-adjusted intervals)
+            cmd = [
+                ffmpeg, "-y",
+                "-i", input_path,
+                "-i", frame_img_path,
+            ]
+            if click_img_path:
+                cmd.extend(["-loop", "1", "-i", click_img_path])
+                
+            cmd.extend([
+                "-filter_complex_script", graph_path,
+                "-map", "[out]",
+                "-map", "0:a?",  # Explicitly map audio from input 0, use ? in case it has no audio
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-c:a", "aac",
+            ])
+            if total_sec > 0:
+                cmd.extend(["-t", f"{total_sec:.3f}", "-shortest"])
+            cmd.append(output_path)
+            
+            logger.info("Running FFmpeg with graph: %s", graph_path)
+            
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                **_subprocess_kwargs()
+            )
 
-                # Pre-allocate reusable frame buffers to avoid per-frame copies
-                _buf_canvas = base_canvas.copy()
-                _buf_result = bg.copy() if bg is not None else None
+            stderr_tail = []
+            while True:
+                line = proc.stderr.readline()
+                if not line:
+                    break
+                stderr_tail.append(line)
+                if len(stderr_tail) > 80:
+                    stderr_tail = stderr_tail[-80:]
+                
+                time_m = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
+                if time_m and total_sec > 0:
+                    curr_sec = int(time_m.group(1))*3600 + int(time_m.group(2))*60 + float(time_m.group(3))
+                    prog = min(1.0, curr_sec / total_sec)
+                    if self._progress_cb: self._progress_cb(prog)
 
-                while True:
-                    if t_ms > eff_te + 0.0001:
-                        break
-
-                    # Skip frames outside any video segment (ripple delete).
-                    # Uses half-open intervals [start, end) for interior
-                    # segments; the last segment's end is inclusive to
-                    # avoid clipping the final frame.
-                    # Uses bisect for O(log n) membership check.
-                    if _seg_ranges:
-                        in_seg = False
-                        # Binary search: find the last segment whose start <= t_ms
-                        idx = bisect.bisect_right(_seg_starts, t_ms) - 1
-                        if idx >= 0:
-                            s, e = _seg_ranges[idx]
-                            # Last segment uses inclusive end [s, e]; others use [s, e)
-                            if idx == len(_seg_ranges) - 1:
-                                in_seg = (s <= t_ms <= e)
-                            else:
-                                in_seg = (s <= t_ms < e)
-                        if not in_seg:
-                            # Jump to the start of the next segment to avoid
-                            # spinning on the same t_ms (which never advances
-                            # and would loop forever).
-                            next_seg = bisect.bisect_right(_seg_starts, t_ms)
-                            if next_seg < len(_seg_starts):
-                                t_ms = _seg_starts[next_seg]
-                            else:
-                                break  # no more segments
-                            continue
-
-                    # Pick the source frame for this output timestamp
-                    target_src_idx = max(0, bisect.bisect_right(source_timestamps, t_ms) - 1)
-                    target_src_idx = min(target_src_idx, len(source_timestamps) - 1)
-
-                    while src_idx < target_src_idx:
-                        ret, frame = cap.read()
-                        if not ret:
-                            # Keep reusing the last decoded frame if the
-                            # container has fewer readable frames than expected.
-                            src_idx = target_src_idx
-                            break
-                        src_idx += 1
-                        last_f = frame
-
-                    # Only copy when overlays will draw in-place on this frame
-                    frame = last_f.copy() if _needs_overlay else last_f
-
-                    zoom, px, py = engine.compute_at(t_ms)
-
-                    if _has_cursor:
-                        draw_cursor_cv(
-                            frame, mouse_track, t_ms,
-                            m_left, m_top, m_w, m_h,
-                            c_bgr, c_alpha,
-                        )
-                    if _has_clicks:
-                        draw_clicks_cv(
-                            frame, click_events, t_ms,
-                            m_left, m_top, m_w, m_h,
-                            click_preset,
-                        )
-                    composed = _compose_cv(
-                        frame, zoom, px, py, w, h,
-                        base_canvas, screen_mask,
-                        scr_x, scr_y, scr_w, scr_h,
-                        zoom_video_only=True,
-                        bg_canvas=bg,
-                        device_mask_u8=_device_mask_u8,
-                        _buf_canvas=_buf_canvas,
-                        _buf_result=_buf_result,
-                    )
-                    if not _enqueue(composed.tobytes()):
-                        break
-                    exported += 1
-                    out_idx += 1
-                    # Advance recording-time cursor by speed-adjusted interval
-                    seg_speed = engine.get_speed_at(t_ms, duration_ms or eff_te)
-                    t_ms += (1.0 / fps) * 1000.0 * max(seg_speed, 0.01)
-
-                    if exported % 10 == 0:
-                        if self._progress_cb: self._progress_cb(min(1.0, exported / t_total))
-
-                # Extra frames for zoom-out tail
-                if last_f is not None and engine.keyframes and not pipe_err.is_set():
-                    last_kf = engine.keyframes[-1]
-                    end_time = last_kf.timestamp + last_kf.duration
-                    # Use output-aligned time for the last exported frame
-                    video_end_ms = eff_te
-                    if trim_end_ms <= 0 and end_time > video_end_ms:
-                        extra = int((end_time - video_end_ms) / 1000.0 * fps) + 1
-                        for ei in range(extra):
-                            t_ms = video_end_ms + ((ei + 1) / fps) * 1000.0
-                            zoom, px, py = engine.compute_at(t_ms)
-                            fc = last_f.copy()
-
-                            if _has_cursor:
-                                draw_cursor_cv(
-                                    fc, mouse_track, t_ms,
-                                    m_left, m_top, m_w, m_h,
-                                    c_bgr, c_alpha,
-                                )
-                            if _has_clicks:
-                                draw_clicks_cv(
-                                    fc, click_events, t_ms,
-                                    m_left, m_top, m_w, m_h,
-                                    click_preset,
-                                )
-                            composed = _compose_cv(
-                                fc, zoom, px, py, w, h,
-                                base_canvas, screen_mask,
-                                scr_x, scr_y, scr_w, scr_h,
-                                zoom_video_only=True,
-                                bg_canvas=bg,
-                                device_mask_u8=_device_mask_u8,
-                                _buf_canvas=_buf_canvas,
-                                _buf_result=_buf_result,
-                            )
-                            if not _enqueue(composed.tobytes()):
-                                break
-
-                # Signal writer thread to finish and wait for it
-                frame_q.put(None)
-                writer_t.join(timeout=30)
-                return not pipe_err.is_set()
-
-            # ── Try encoding (with HW fallback chain for MP4; direct for GIF) ──
-
-            if _is_gif:
-                # GIF export uses palette-based encoding — no fallback chain
-                if self._status_cb: self._status_cb("Rendering frames for GIF\u2026")
-                proc = _launch_ffmpeg(encoder_id)
-                pipe_ok = _encode_frames(proc)
-                proc.stdin.close()
-                if self._status_cb: self._status_cb("Generating GIF palette\u2026")
-                # GIF palettegen buffers all frames before writing; allow more time
-                try:
-                    stderr_out = proc.communicate(timeout=300)[1]
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    try:
-                        stderr_out = proc.communicate(timeout=5)[1]
-                    except subprocess.TimeoutExpired:
-                        logger.error("ffmpeg process still alive after kill+5s timeout (pid=%s)", proc.pid)
-                        stderr_out = b""
-                stderr_text = stderr_out.decode(errors="replace") if stderr_out else ""
-                if proc.returncode != 0:
-                    err_msg = stderr_text.strip()[-800:] if stderr_text else "Unknown ffmpeg error"
-                    logger.error("GIF export failed (rc=%s): %s", proc.returncode, err_msg)
-                    if self._error_cb: self._error_cb(f"GIF export error: {err_msg[:500]}")
-                    return
+            proc.wait()
+            if proc.returncode != 0:
+                stderr_excerpt = "".join(stderr_tail)[-4000:]
+                logger.error("FFmpeg export failed with return code %d. Stderr: %s", proc.returncode, stderr_excerpt)
+                if self._error_cb: self._error_cb("FFmpeg export failed")
+            else:
+                logger.info("Export completed successfully: %s", output_path)
                 if self._progress_cb: self._progress_cb(1.0)
                 if self._finished_cb: self._finished_cb(output_path)
-                return
-
-            # ── MP4: try encoding with HW fallback chain ──────────────
-            #
-            # Build a fallback chain: try other available HW encoders
-            # before falling back to software (libx264).
-            from .utils import detect_available_encoders, encoder_display_name
-            enc_label = encoder_display_name(encoder_id)
-            if self._status_cb: self._status_cb(f"Encoding with {enc_label}…")
-            available = detect_available_encoders()
-            # Build chain: encoders after the current one in preference order
-            _fallback_chain: List[str] = []
-            if encoder_id in available:
-                idx = available.index(encoder_id)
-                _fallback_chain = available[idx + 1:]
-            elif encoder_id != "libx264":
-                _fallback_chain = [e for e in available if e != encoder_id]
-            # Ensure libx264 is always at the end
-            if "libx264" not in _fallback_chain:
-                _fallback_chain.append("libx264")
-
-            proc = _launch_ffmpeg(encoder_id)
-
-            def _kill_proc(p: subprocess.Popen) -> None:
-                """Safely terminate an ffmpeg process and close its pipes."""
-                if p is None:
-                    return
-                try:
-                    if p.stdin and not p.stdin.closed:
-                        p.stdin.close()
-                except OSError:
-                    pass
-                try:
-                    p.kill()
-                    p.wait(timeout=5)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-                try:
-                    if p.stderr and not p.stderr.closed:
-                        p.stderr.close()
-                except OSError:
-                    pass
-
-            # Check for immediate launch failure
-            import time as _time
-            _time.sleep(0.1)
-            if proc.poll() is not None and encoder_id != "libx264":
-                stderr_early = proc.stderr.read().decode(errors="replace")[:500] if proc.stderr else ""
-                logger.warning(
-                    "Encoder %s failed immediately (%s)",
-                    encoder_id, stderr_early.strip(),
-                )
-                # Try next in fallback chain
-                launched = False
-                for fallback_id in _fallback_chain:
-                    fb_name = encoder_display_name(fallback_id)
-                    if self._status_cb: self._status_cb(f"{encoder_display_name(encoder_id)} failed, trying {fb_name}\u2026")
-                    logger.info("Trying fallback encoder: %s", fallback_id)
-                    encoder_id = fallback_id
-                    _kill_proc(proc)
-                    proc = _launch_ffmpeg(encoder_id)
-                    _time.sleep(0.1)
-                    if proc.poll() is None:
-                        launched = True
-                        break
-                    else:
-                        logger.warning("Fallback encoder %s also failed immediately", encoder_id)
-                if not launched:
-                    _kill_proc(proc)
-                    if self._error_cb: self._error_cb("All encoders failed to launch")
-                    return
-
-            pipe_ok = _encode_frames(proc)
-
-            proc.stdin.close()
-            if self._status_cb: self._status_cb("Finalizing…")
-            try:
-                stderr_out = proc.communicate(timeout=60)[1]
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    stderr_out = proc.communicate(timeout=5)[1]
-                except subprocess.TimeoutExpired:
-                    logger.error("ffmpeg process still alive after kill+5s timeout (pid=%s)", proc.pid)
-                    stderr_out = b""
-
-            stderr_text = stderr_out.decode(errors="replace") if stderr_out else ""
-
-            # If encoder failed mid-stream, try fallback chain
-            if (proc.returncode != 0 or not pipe_ok) and encoder_id != "libx264":
-                failed_id = encoder_id
-                logger.warning(
-                    "Encoder %s failed mid-export (rc=%s): %s",
-                    failed_id, proc.returncode, stderr_text[:300].strip(),
-                )
-                # Try remaining encoders in fallback chain
-                remaining = _fallback_chain[_fallback_chain.index(failed_id) + 1:] if failed_id in _fallback_chain else _fallback_chain
-                if not remaining:
-                    remaining = ["libx264"]
-
-                for fallback_id in remaining:
-                    fb_name = encoder_display_name(fallback_id)
-                    if self._status_cb: self._status_cb(f"{encoder_display_name(failed_id)} failed mid-export, trying {fb_name}\u2026")
-                    encoder_id = fallback_id
-                    _kill_proc(proc)
-                    proc = _launch_ffmpeg(encoder_id)
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    pipe_ok = _encode_frames(proc)
-                    proc.stdin.close()
-                    try:
-                        stderr_out = proc.communicate(timeout=60)[1]
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        try:
-                            stderr_out = proc.communicate(timeout=5)[1]
-                        except subprocess.TimeoutExpired:
-                            logger.error("ffmpeg process still alive after kill+5s timeout (pid=%s)", proc.pid)
-                            stderr_out = b""
-                    stderr_text = stderr_out.decode(errors="replace") if stderr_out else ""
-                    if proc.returncode == 0 and pipe_ok:
-                        break  # success
-                    failed_id = encoder_id
-                    logger.warning("Fallback encoder %s also failed (rc=%s)", encoder_id, proc.returncode)
-
-            if proc.returncode != 0:
-                err_msg = stderr_text.strip()[-800:] if stderr_text else "Unknown ffmpeg error"
-                logger.error("Export failed (encoder=%s, rc=%s): %s", encoder_id, proc.returncode, err_msg)
-                if self._error_cb: self._error_cb(f"ffmpeg error ({encoder_id}): {err_msg[:500]}")
-                return
-
-            # Verify the output file exists and is non-trivial.
-            # A valid MP4 is at least a few KB (moov atom + ftyp box).
-            if not os.path.isfile(output_path):
-                if self._error_cb: self._error_cb("Export produced no output file")
-                return
-            file_size = os.path.getsize(output_path)
-            if file_size < 1024:
-                logger.error("Export file suspiciously small (%d bytes): %s", file_size, output_path)
-                if self._error_cb: self._error_cb("Export failed: output file is empty or corrupt")
-                return
-
-            if encoder_id != original_encoder_id:
-                logger.info("Export completed with fallback encoder %s (originally %s)", encoder_id, original_encoder_id)
-
-            if self._progress_cb: self._progress_cb(1.0)
-            if self._finished_cb: self._finished_cb(output_path)
 
         except Exception as exc:
+            logger.exception("Export crashed")
             if self._error_cb: self._error_cb(str(exc))
         finally:
-            # Ensure cv2.VideoCapture is released
-            if cap is not None:
-                try:
-                    cap.release()
-                    logger.debug("cv2.VideoCapture released")
-                except Exception as e:
-                    logger.warning("Failed to release cv2.VideoCapture: %s", e)
-            # Ensure ffmpeg process is not leaked on any error path
-            if proc is not None and proc.poll() is None:
-                logger.warning("Cleaning up orphaned ffmpeg process (pid=%s)", proc.pid)
-                _kill_proc(proc)
-            # Clean up merged voiceover temp file
-            if _merged_audio_path and os.path.isfile(_merged_audio_path):
-                try:
-                    os.remove(_merged_audio_path)
-                except OSError:
-                    pass
-            # Clean up chapter metadata temp file
-            if _chapters_metadata_path and os.path.isfile(_chapters_metadata_path):
-                try:
-                    os.remove(_chapters_metadata_path)
-                except OSError:
-                    pass
-
-
+            for path in temp_files:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass

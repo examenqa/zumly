@@ -1,8 +1,10 @@
 """Shared utilities used by multiple modules."""
 
 import logging
+import os
 import subprocess
 import sys
+from glob import glob
 from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -10,14 +12,24 @@ logger = logging.getLogger(__name__)
 
 def ffmpeg_exe() -> str:
     """Returns the path to the ffmpeg executable."""
-    import os
     if getattr(sys, 'frozen', False):
-        # Pyinstaller extracts bundled binaries to sys._MEIPASS in one-dir mode
         base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-        return os.path.join(base_dir, "ffmpeg.exe")
-    else:
-        from imageio_ffmpeg import get_ffmpeg_exe
-        return get_ffmpeg_exe()
+        exe_dir = os.path.dirname(sys.executable)
+        candidates = [
+            os.path.join(base_dir, "ffmpeg.exe"),
+            os.path.join(exe_dir, "ffmpeg.exe"),
+            os.path.join(base_dir, "imageio_ffmpeg", "binaries", "ffmpeg.exe"),
+            os.path.join(exe_dir, "_internal", "imageio_ffmpeg", "binaries", "ffmpeg.exe"),
+        ]
+        candidates.extend(glob(os.path.join(base_dir, "imageio_ffmpeg", "binaries", "ffmpeg*.exe")))
+        candidates.extend(glob(os.path.join(exe_dir, "_internal", "imageio_ffmpeg", "binaries", "ffmpeg*.exe")))
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+        raise FileNotFoundError(f"Bundled FFmpeg executable not found under {base_dir}")
+
+    from imageio_ffmpeg import get_ffmpeg_exe
+    return get_ffmpeg_exe()
 
 
 def subprocess_kwargs() -> dict:

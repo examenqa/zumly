@@ -12,6 +12,13 @@ venv/
 dist/
 build/
 *.spec
+!zumly.spec
+
+# Local recording/debug artifacts
+*_project.json
+e2e_artifacts/
+.agents/
+zumly/pytest-cache-files-*/
 
 # OS
 .DS_Store
