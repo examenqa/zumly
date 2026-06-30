@@ -749,6 +749,7 @@ class EditorPanel(QWidget):
         self._info_label.setFixedHeight(32)
         self._info_label.setToolTip("Duration: 0:00\nMouse samples: 0\nKeyframes: 0")
         self._info_label.setCursor(Qt.CursorShape.WhatsThisCursor)
+        self._info_label.clicked.connect(self._show_session_info)
         info_row.addWidget(self._info_label, 1)
 
         self._btn_settings = QPushButton("Settings")
@@ -774,6 +775,7 @@ class EditorPanel(QWidget):
         self._key_events: List[KeyEvent] = []
         self._click_events: List[ClickEvent] = []
         self._monitor_rect: dict = {}
+        self.set_undo_redo_enabled(False, False)
 
         # Fluent 2 — focus ring glow on all interactive controls
         for child in self.findChildren(QPushButton):
@@ -1100,6 +1102,31 @@ class EditorPanel(QWidget):
             f"Keyframes: {len(keyframes)}"
         )
         self._info_label.setToolTip(tooltip)
+
+    def set_undo_redo_enabled(self, can_undo: bool, can_redo: bool) -> None:
+        """Reflect undo/redo stack availability in the footer buttons."""
+        self._btn_undo.setEnabled(can_undo)
+        self._btn_redo.setEnabled(can_redo)
+
+    def _show_session_info(self) -> None:
+        """Show the cached recording summary in a readable popup."""
+        from PySide6.QtWidgets import QMessageBox
+
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Recording Info")
+        dlg.setIcon(QMessageBox.Icon.NoIcon)
+        dlg.setTextFormat(Qt.TextFormat.PlainText)
+        dlg.setText(self._info_label.toolTip())
+        dlg.setStyleSheet(
+            f"QMessageBox {{ background: {T.BG_SURFACE}; }}"
+            f"QMessageBox QLabel {{ color: {T.FG_PRIMARY}; font-size: {T.FONT_SIZE_BODY}px; }}"
+            f"QPushButton {{ min-width: 80px; min-height: 28px;"
+            f"  background: {T.BG_INTERACTIVE}; color: {T.FG_PRIMARY};"
+            f"  border: 1px solid {T.CARD_BORDER};"
+            f"  border-radius: {T.RADIUS_SMALL}px; padding: {T.SPACE_XXS}px {T.SPACE_MD}px; }}"
+            f"QPushButton:hover {{ background: {T.BRAND}; }}"
+        )
+        dlg.exec()
 
     def _auto_keyframe(self) -> None:
         track = self._mouse_track

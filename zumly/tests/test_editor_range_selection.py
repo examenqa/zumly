@@ -1,5 +1,6 @@
 from app.models import RecordingSession, VideoSegment, ZoomKeyframe
 from app.widgets.editor_window import EditorWindow
+from app.zoom_engine import ZoomEngine
 
 
 class _StubPreview:
@@ -8,6 +9,9 @@ class _StubPreview:
 
     def set_video_segments(self, segments):
         self.video_segments = segments
+
+    def set_cursor_data(self, mouse_track, monitor_rect, click_events=None):
+        self.cursor_data = (mouse_track, monitor_rect, click_events or [])
 
     def set_debug_keyframes(self, keyframes):
         self.keyframes = keyframes
@@ -33,14 +37,12 @@ class _StubEditor:
         self.speed = speed
         self.index = index
 
+    def refresh(self, **kwargs):
+        self.info = kwargs
 
-class _StubZoomEngine:
-    def __init__(self) -> None:
-        self.video_segments = []
-        self.keyframes = []
-
-    def compute_at(self, time_ms):
-        return 1.0, 0.5, 0.5
+    def set_undo_redo_enabled(self, can_undo, can_redo):
+        self.can_undo = can_undo
+        self.can_redo = can_redo
 
 
 def _window_with_segments(segments: list[VideoSegment]) -> EditorWindow:
@@ -63,8 +65,11 @@ def _window_with_state(
     window._preview = _StubPreview()
     window._timeline = _StubTimeline()
     window._editor = _StubEditor()
-    window._zoom_engine = _StubZoomEngine()
+    window._zoom_engine = ZoomEngine()
+    window._zoom_engine.keyframes = window._session.keyframes
+    window._zoom_engine.video_segments = window._session.video_segments or []
     window._selected_video_segment_index = -1
+    window._timeline_drag_undo_pushed = False
     window._project_path = None
     window._project_data = {}
     window._save_project = lambda: None
@@ -107,6 +112,7 @@ def test_zoom_segment_move_updates_start_and_end_keyframes_together() -> None:
     assert zoom_out.timestamp == 5000.0
     assert window._zoom_engine.keyframes == [zoom_in, pan_point, zoom_out]
     assert window._timeline.data["keyframes"] == [zoom_in, pan_point, zoom_out]
+    assert window._editor.can_undo
 
 
 def test_zoom_segment_move_clamps_visible_end_to_recording_duration() -> None:
@@ -142,3 +148,36 @@ def test_zoom_segment_delete_removes_pan_points_inside_segment() -> None:
     EditorWindow._on_zoom_segment_deleted(window, zoom_in.id)
 
     assert window._session.keyframes == [next_zoom]
+
+
+def test_undo_redo_restores_zoom_edit_state() -> None:
+    zoom_in = ZoomKeyframe.create(timestamp=1000.0, zoom=1.6, duration=500.0)
+    zoom_out = ZoomKeyframe.create(timestamp=4000.0, zoom=1.0, duration=600.0)
+    window = _window_with_state(keyframes=[zoom_in, zoom_out])
+
+    EditorWindow._on_zoom_segment_moved(window, zoom_in.id, zoom_out.id, 2000.0, 5000.0)
+    EditorWindow._on_timeline_drag_finished(window)
+    EditorWindow._on_undo_requested(window)
+
+    assert [kf.timestamp for kf in window._session.keyframes] == [1000.0, 4000.0]
+    assert window._editor.can_redo
+
+    EditorWindow._on_redo_requested(window)
+
+    assert [kf.timestamp for kf in window._session.keyframes] == [2000.0, 5000.0]
+
+
+def test_undo_redo_restores_range_speed_state() -> None:
+    segment = VideoSegment.create(0.0, 10000.0, 1.0)
+    window = _window_with_segments([segment])
+    window._selected_video_segment_index = 0
+
+    EditorWindow._on_segment_speed_changed(window, 4.0)
+    EditorWindow._on_undo_requested(window)
+
+    assert window._session.video_segments[0].speed == 1.0
+    assert window._editor.can_redo
+
+    EditorWindow._on_redo_requested(window)
+
+    assert window._session.video_segments[0].speed == 4.0

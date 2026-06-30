@@ -111,6 +111,8 @@ class EditorWindow(QWidget):
         self._editor.click_effect_changed.connect(self._on_click_effect_changed)
         self._editor.output_dimensions_changed.connect(self._on_output_dimensions_changed)
         self._editor.segment_speed_changed.connect(self._on_segment_speed_changed)
+        self._editor.undo_requested.connect(self._on_undo_requested)
+        self._editor.redo_requested.connect(self._on_redo_requested)
         self._preview.play_pause_requested.connect(self._toggle_playback)
         self._timeline.segment_selected.connect(self._on_segment_selected)
         self._timeline.split_requested.connect(self._on_split_requested)
@@ -130,6 +132,7 @@ class EditorWindow(QWidget):
         self._session = None
         self._project_data = {}
         self._selected_video_segment_index = -1
+        self._timeline_drag_undo_pushed = False
         
         self._load_project()
         
@@ -161,6 +164,8 @@ class EditorWindow(QWidget):
                 self._zoom_engine.voiceover_segments = self._session.voiceover_segments
             if hasattr(self._session, 'video_segments'):
                 self._zoom_engine.video_segments = self._session.video_segments
+            self._zoom_engine.clear_history()
+            self._update_undo_redo_controls()
                 
             # Load video into preview widget
             actual_fps = self._project_data.get("actualFps", 30.0)
@@ -206,6 +211,7 @@ class EditorWindow(QWidget):
             )
             if self._session.video_segments:
                 self._sync_video_segments(0, save=False)
+            self._refresh_editor_info()
 
             # Signal wiring between timeline and preview
             self._timeline.play_pause_clicked.connect(self._toggle_playback)
@@ -228,6 +234,74 @@ class EditorWindow(QWidget):
         zoom, px, py = self._zoom_engine.compute_at(time_ms)
         self._preview.set_zoom(zoom, px, py)
 
+    def _sync_zoom_engine_from_session(self) -> None:
+        if not self._session:
+            return
+        self._zoom_engine.keyframes = self._session.keyframes or []
+        self._zoom_engine.click_events = self._session.click_events or []
+        self._zoom_engine.video_segments = self._session.video_segments or []
+        self._zoom_engine.voiceover_segments = self._session.voiceover_segments or []
+
+    def _push_undo_snapshot(self, once_per_drag: bool = False) -> None:
+        if not self._session:
+            return
+        if once_per_drag and self._timeline_drag_undo_pushed:
+            return
+        self._sync_zoom_engine_from_session()
+        self._zoom_engine.push_undo()
+        if once_per_drag:
+            self._timeline_drag_undo_pushed = True
+        self._update_undo_redo_controls()
+
+    def _update_undo_redo_controls(self) -> None:
+        if hasattr(self, "_editor") and hasattr(self, "_zoom_engine"):
+            self._editor.set_undo_redo_enabled(
+                self._zoom_engine.can_undo,
+                self._zoom_engine.can_redo,
+            )
+
+    def _refresh_editor_info(self) -> None:
+        if not self._session:
+            return
+        duration = getattr(self._preview, "_video_duration_ms", self._session.duration)
+        self._editor.refresh(
+            keyframes=self._session.keyframes or [],
+            mouse_track=self._session.mouse_track or [],
+            duration=duration,
+            monitor_rect=self._project_data.get("monitorRect", {}),
+            key_events=self._session.key_events,
+            click_events=self._session.click_events,
+            trim_start_ms=self._session.trim_start_ms,
+            trim_end_ms=self._session.trim_end_ms,
+        )
+
+    def _apply_zoom_engine_state(self, save: bool = True) -> None:
+        if not self._session:
+            return
+        self._session.keyframes = self._zoom_engine.keyframes
+        self._session.click_events = self._zoom_engine.click_events
+        self._session.video_segments = self._zoom_engine.video_segments
+        self._session.voiceover_segments = self._zoom_engine.voiceover_segments
+        self._preview.set_cursor_data(
+            self._session.mouse_track,
+            self._project_data.get("monitorRect", {}),
+            self._session.click_events,
+        )
+        self._refresh_zoom_timeline(save=False)
+        self._sync_video_segments(self._selected_video_segment_index, save=False)
+        self._refresh_editor_info()
+        self._update_undo_redo_controls()
+        if save:
+            self._save_project()
+
+    def _on_undo_requested(self) -> None:
+        if self._zoom_engine.undo():
+            self._apply_zoom_engine_state(save=True)
+
+    def _on_redo_requested(self) -> None:
+        if self._zoom_engine.redo():
+            self._apply_zoom_engine_state(save=True)
+
     def _refresh_zoom_timeline(self, save: bool = False) -> None:
         if not self._session:
             return
@@ -247,6 +321,7 @@ class EditorWindow(QWidget):
             video_segments=self._session.video_segments if hasattr(self._session, "video_segments") else None,
         )
         self._on_playback_time_changed(getattr(self._preview, "_current_time_ms", 0.0))
+        self._refresh_editor_info()
         if save:
             self._save_project()
 
@@ -261,6 +336,7 @@ class EditorWindow(QWidget):
     def _on_zoom_keyframe_moved(self, kf_id: str, new_time_ms: float) -> None:
         if not self._session:
             return
+        self._push_undo_snapshot(once_per_drag=True)
         self._session.keyframes.sort(key=lambda k: k.timestamp)
         keyframes = self._session.keyframes
         idx = next((i for i, kf in enumerate(keyframes) if kf.id == kf_id), -1)
@@ -301,6 +377,7 @@ class EditorWindow(QWidget):
     def _on_zoom_segment_moved(self, start_kf_id: str, end_kf_id: str, start_ms: float, end_ms: float) -> None:
         if not self._session:
             return
+        self._push_undo_snapshot(once_per_drag=True)
         keyframes = sorted(self._session.keyframes, key=lambda k: k.timestamp)
         start_kf = next((kf for kf in keyframes if kf.id == start_kf_id), None)
         end_kf = next((kf for kf in keyframes if kf.id == end_kf_id), None) if end_kf_id else None
@@ -336,6 +413,7 @@ class EditorWindow(QWidget):
         start_idx = next((i for i, kf in enumerate(keyframes) if kf.id == start_kf_id), -1)
         if start_idx < 0:
             return
+        self._push_undo_snapshot()
         out_idx = -1
         for idx in range(start_idx + 1, len(keyframes)):
             if keyframes[idx].zoom <= 1.01:
@@ -348,6 +426,8 @@ class EditorWindow(QWidget):
 
     def _on_timeline_drag_finished(self) -> None:
         if self._session:
+            self._timeline_drag_undo_pushed = False
+            self._update_undo_redo_controls()
             self._save_project()
 
     def _toggle_playback(self):
@@ -433,6 +513,8 @@ class EditorWindow(QWidget):
             self._editor.set_selected_segment_speed(seg.speed, self._selected_video_segment_index)
         else:
             self._editor.set_selected_segment_speed(None)
+        self._refresh_editor_info()
+        self._update_undo_redo_controls()
         if save:
             self._save_project()
 
@@ -453,6 +535,7 @@ class EditorWindow(QWidget):
         idx = self._selected_video_segment_index
         if idx < 0 or idx >= len(self._session.video_segments):
             return
+        self._push_undo_snapshot()
         self._session.video_segments[idx].speed = max(0.1, min(10.0, float(speed)))
         self._sync_video_segments(idx, save=True)
 
@@ -471,6 +554,7 @@ class EditorWindow(QWidget):
         min_len = 250.0
         if split_at - seg.start_ms < min_len or seg.end_ms - split_at < min_len:
             return
+        self._push_undo_snapshot()
         original_end = seg.end_ms
         seg.end_ms = split_at
         right = VideoSegment.create(split_at, original_end, seg.speed)
@@ -493,6 +577,7 @@ class EditorWindow(QWidget):
             start, end = end, start
         if end - start < 250.0:
             return
+        self._push_undo_snapshot()
 
         old_segments = sorted(self._session.video_segments or [], key=lambda s: s.start_ms)
         eps = 0.5
@@ -548,6 +633,7 @@ class EditorWindow(QWidget):
         idx = next((i for i, seg in enumerate(segments) if seg.id == segment_id), -1)
         if idx < 0 or len(segments) <= 1:
             return
+        self._push_undo_snapshot()
         if idx > 0:
             segments[idx - 1].end_ms = segments[idx].end_ms
             del segments[idx]
