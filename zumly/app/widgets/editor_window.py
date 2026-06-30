@@ -115,6 +115,10 @@ class EditorWindow(QWidget):
         self._timeline.split_requested.connect(self._on_split_requested)
         self._timeline.range_selection_requested.connect(self._on_range_selection_requested)
         self._timeline.video_segment_deleted.connect(self._on_video_segment_deleted)
+        self._timeline.keyframe_moved.connect(self._on_zoom_keyframe_moved)
+        self._timeline.zoom_segment_moved.connect(self._on_zoom_segment_moved)
+        self._timeline.segment_deleted.connect(self._on_zoom_segment_deleted)
+        self._timeline.drag_finished.connect(self._on_timeline_drag_finished)
 
         self._title_bar.export_clicked.connect(self._on_export)
         self._title_bar.discard_clicked.connect(self.close)
@@ -222,6 +226,128 @@ class EditorWindow(QWidget):
         self._timeline.set_current_time(time_ms)
         zoom, px, py = self._zoom_engine.compute_at(time_ms)
         self._preview.set_zoom(zoom, px, py)
+
+    def _refresh_zoom_timeline(self, save: bool = False) -> None:
+        if not self._session:
+            return
+        self._session.keyframes.sort(key=lambda k: k.timestamp)
+        self._zoom_engine.keyframes = self._session.keyframes
+        self._preview.set_debug_keyframes(self._session.keyframes)
+        self._timeline.set_data(
+            duration=getattr(self._preview, "_video_duration_ms", self._session.duration),
+            current_time=getattr(self._preview, "_current_time_ms", 0.0),
+            keyframes=self._session.keyframes,
+            mouse_track=self._session.mouse_track,
+            key_events=self._session.key_events if hasattr(self._session, "key_events") else None,
+            click_events=self._session.click_events,
+            trim_start_ms=0.0,
+            trim_end_ms=getattr(self._preview, "_video_duration_ms", self._session.duration),
+            voiceover_segments=self._session.voiceover_segments if hasattr(self._session, "voiceover_segments") else None,
+            video_segments=self._session.video_segments if hasattr(self._session, "video_segments") else None,
+        )
+        self._on_playback_time_changed(getattr(self._preview, "_current_time_ms", 0.0))
+        if save:
+            self._save_project()
+
+    def _find_next_zoom_out_keyframe_index(self, start_index: int) -> int:
+        if not self._session:
+            return -1
+        for idx in range(start_index + 1, len(self._session.keyframes)):
+            if self._session.keyframes[idx].zoom <= 1.01:
+                return idx
+        return -1
+
+    def _on_zoom_keyframe_moved(self, kf_id: str, new_time_ms: float) -> None:
+        if not self._session:
+            return
+        self._session.keyframes.sort(key=lambda k: k.timestamp)
+        keyframes = self._session.keyframes
+        idx = next((i for i, kf in enumerate(keyframes) if kf.id == kf_id), -1)
+        if idx < 0:
+            return
+
+        duration = getattr(self._preview, "_video_duration_ms", self._session.duration)
+        keyframe = keyframes[idx]
+        min_gap = 100.0
+        proposed = float(new_time_ms)
+
+        if keyframe.zoom > 1.01:
+            next_idx = self._find_next_zoom_out_keyframe_index(idx)
+            min_time = 0.0
+            if idx > 0:
+                prev_kf = keyframes[idx - 1]
+                if prev_kf.zoom <= 1.01:
+                    min_time = prev_kf.timestamp + max(0.0, float(prev_kf.duration)) + min_gap
+                else:
+                    min_time = prev_kf.timestamp + min_gap
+            max_time = float(duration)
+            if next_idx >= 0:
+                max_time = keyframes[next_idx].timestamp - min_gap
+            keyframe.timestamp = max(min_time, min(proposed, max_time))
+        else:
+            prev_idx = idx - 1
+            while prev_idx >= 0 and keyframes[prev_idx].zoom <= 1.01:
+                prev_idx -= 1
+            min_time = keyframes[prev_idx].timestamp + min_gap if prev_idx >= 0 else 0.0
+            max_time = max(0.0, float(duration) - max(0.0, float(keyframe.duration)))
+            next_idx = idx + 1
+            if next_idx < len(keyframes):
+                max_time = min(max_time, keyframes[next_idx].timestamp - max(0.0, float(keyframe.duration)) - min_gap)
+            keyframe.timestamp = max(min_time, min(proposed, max_time))
+
+        self._refresh_zoom_timeline(save=False)
+
+    def _on_zoom_segment_moved(self, start_kf_id: str, end_kf_id: str, start_ms: float, end_ms: float) -> None:
+        if not self._session:
+            return
+        keyframes = sorted(self._session.keyframes, key=lambda k: k.timestamp)
+        start_kf = next((kf for kf in keyframes if kf.id == start_kf_id), None)
+        end_kf = next((kf for kf in keyframes if kf.id == end_kf_id), None) if end_kf_id else None
+        if not start_kf:
+            return
+        start_idx = next((idx for idx, kf in enumerate(keyframes) if kf.id == start_kf.id), -1)
+        end_idx = next((idx for idx, kf in enumerate(keyframes) if kf.id == end_kf.id), -1) if end_kf else -1
+        if start_idx < 0:
+            return
+
+        duration = float(getattr(self._preview, "_video_duration_ms", self._session.duration))
+        old_start = float(start_kf.timestamp)
+        old_end = float(end_kf.timestamp) if end_kf else old_start
+        timestamp_span = old_end - old_start if end_kf else 0.0
+        visual_duration = float(end_kf.timestamp + end_kf.duration - old_start) if end_kf else duration - old_start
+        if end_kf:
+            visual_duration = max(visual_duration, float(end_ms) - float(start_ms) + max(0.0, float(end_kf.duration)))
+        else:
+            visual_duration = max(0.0, duration - float(start_ms))
+
+        new_start = max(0.0, min(float(start_ms), max(0.0, duration - visual_duration)))
+        delta = new_start - old_start
+        move_until = end_idx if end_idx >= 0 else len(keyframes) - 1
+        for idx in range(start_idx, move_until + 1):
+            keyframes[idx].timestamp += delta
+
+        self._refresh_zoom_timeline(save=False)
+
+    def _on_zoom_segment_deleted(self, start_kf_id: str) -> None:
+        if not self._session:
+            return
+        keyframes = sorted(self._session.keyframes, key=lambda k: k.timestamp)
+        start_idx = next((i for i, kf in enumerate(keyframes) if kf.id == start_kf_id), -1)
+        if start_idx < 0:
+            return
+        out_idx = -1
+        for idx in range(start_idx + 1, len(keyframes)):
+            if keyframes[idx].zoom <= 1.01:
+                out_idx = idx
+                break
+        remove_until = out_idx if out_idx >= 0 else len(keyframes) - 1
+        remove_ids = {kf.id for kf in keyframes[start_idx:remove_until + 1]}
+        self._session.keyframes = [kf for kf in self._session.keyframes if kf.id not in remove_ids]
+        self._refresh_zoom_timeline(save=True)
+
+    def _on_timeline_drag_finished(self) -> None:
+        if self._session:
+            self._save_project()
 
     def _toggle_playback(self):
         if self._preview.is_playing:

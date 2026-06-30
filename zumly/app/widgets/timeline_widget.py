@@ -164,6 +164,7 @@ class _TimelineTrack(QWidget):
 
     clicked = Signal(float)  # absolute timestamp ms
     keyframe_moved = Signal(str, float)  # keyframe id, new timestamp (ms)
+    zoom_segment_moved = Signal(str, str, float, float)  # start id, end id, new start/end timestamps
     segment_clicked = Signal(str, float) # (start kf id, click timestamp ms)
     segment_deleted = Signal(str)        # start keyframe id of segment to delete
     click_event_deleted = Signal(int)    # index of click event to delete
@@ -225,6 +226,7 @@ class _TimelineTrack(QWidget):
         self._drag_body_ids: list = []          # [start_kf_id, end_kf_id] for body drag
         self._drag_body_offset: float = 0.0     # ms offset from click to segment start
         self._drag_body_seg_duration: float = 0  # original segment duration in ms
+        self._drag_body_visual_duration: float = 0.0  # visible duration including zoom-out ramp
         self._drag_pan_seg_id: str = ""         # segment start id for pan point drag
         self._segments: List[tuple] = []       # [(start_x, end_x, start_kf_id, end_kf_id)]
         self._seg_top: int = 0
@@ -1360,14 +1362,20 @@ class _TimelineTrack(QWidget):
                 if start_kf:
                     kf_start_ms = start_kf.timestamp
                     kf_end_ms = end_kf.timestamp if end_kf else kf_start_ms
+                    visual_end_ms = (end_kf.timestamp + end_kf.duration) if end_kf else self.duration
                 else:
                     kf_start_ms = self._x_to_ms(sx, self.width())
                     kf_end_ms = self._x_to_ms(ex, self.width())
+                    visual_end_ms = kf_end_ms
                 self._dragging = True
                 self._drag_mode = "body"
                 self._drag_body_ids = [start_id, end_id]
                 self._drag_body_offset = click_ms - kf_start_ms
                 self._drag_body_seg_duration = kf_end_ms - kf_start_ms
+                self._drag_body_visual_duration = max(
+                    visual_end_ms - kf_start_ms,
+                    self._drag_body_seg_duration,
+                )
                 self._selected_click_idx = -1
                 # Remember this segment for selection on release (if user
                 # just clicks without dragging).
@@ -1543,14 +1551,12 @@ class _TimelineTrack(QWidget):
                 new_start = click_ms - self._drag_body_offset
                 eff_start = self._eff_start
                 eff_end = self._eff_end
-                new_start = max(eff_start, min(new_start, eff_end - self._drag_body_seg_duration))
+                visual_duration = max(self._drag_body_visual_duration, self._drag_body_seg_duration)
+                new_start = max(eff_start, min(new_start, eff_end - visual_duration))
                 new_end = new_start + self._drag_body_seg_duration
-                # Move both keyframes
                 start_id, end_id = self._drag_body_ids
                 if start_id:
-                    self.keyframe_moved.emit(start_id, new_start)
-                if end_id:
-                    self.keyframe_moved.emit(end_id, new_end)
+                    self.zoom_segment_moved.emit(start_id, end_id or "", new_start, new_end)
                 return
             elif self._drag_mode == "pan_point" and self._drag_kf_id:
                 new_time = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
@@ -1629,6 +1635,7 @@ class _TimelineTrack(QWidget):
             self._drag_kf_id = None
             self._drag_mode = ""
             self._drag_body_ids = []
+            self._drag_body_visual_duration = 0.0
             self._trim_snapped = False
             # If user clicked a segment body without dragging, select it
             # so Delete key can remove it.
@@ -1715,6 +1722,7 @@ class TimelineWidget(QWidget):
 
     seek_requested = Signal(float)      # time in ms
     keyframe_moved = Signal(str, float) # kf id, new timestamp ms
+    zoom_segment_moved = Signal(str, str, float, float) # start id, end id, new start/end timestamps
     segment_clicked = Signal(str, float) # (start kf id, click timestamp ms)
     segment_deleted = Signal(str)       # start kf id of segment to delete
     play_pause_clicked = Signal()       # toggle playback
@@ -1788,6 +1796,7 @@ class TimelineWidget(QWidget):
         self._track = _TimelineTrack()
         self._track.clicked.connect(self._on_click)
         self._track.keyframe_moved.connect(self.keyframe_moved)
+        self._track.zoom_segment_moved.connect(self.zoom_segment_moved)
         self._track.segment_clicked.connect(self.segment_clicked)
         self._track.segment_deleted.connect(self.segment_deleted)
         self._track.click_event_deleted.connect(self.click_event_deleted)
