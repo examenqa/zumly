@@ -423,26 +423,6 @@ def _media_keyframes_for_segment(
 ) -> List[ZoomKeyframe]:
     """Filter keyframes into a segment-local media timeline for FFmpeg trim."""
     media_keyframes: List[ZoomKeyframe] = []
-    start_zoom, start_x, start_y = _zoom_state_at_time(keyframes, float(segment.start_ms))
-    has_keyframe_at_start = any(
-        abs(float(keyframe.timestamp) - float(segment.start_ms)) < 0.5
-        for keyframe in keyframes
-    )
-    if not has_keyframe_at_start and (
-        abs(start_zoom - 1.0) > 0.001
-        or abs(start_x - 0.5) > 0.001
-        or abs(start_y - 0.5) > 0.001
-    ):
-        media_keyframes.append(
-            ZoomKeyframe.create(
-                timestamp=0.0,
-                zoom=start_zoom,
-                x=start_x,
-                y=start_y,
-                duration=0.0,
-                reason="Segment start zoom state",
-            )
-        )
     for keyframe in keyframes:
         keyframe_time = float(keyframe.timestamp)
         if not (segment.start_ms <= keyframe_time < segment.end_ms):
@@ -521,7 +501,7 @@ def _media_highlights_for_segment(
 
 def _ease_in_out(progress: float) -> float:
     t = max(0.0, min(1.0, float(progress)))
-    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+    return 1.0 - pow(1.0 - t, 5.0)
 
 
 def _zoom_state_at_time(keyframes: List[ZoomKeyframe], time_ms: float) -> tuple[float, float, float]:
@@ -559,12 +539,17 @@ def _map_zoomed_relative_point(
 ) -> tuple[float, float]:
     zoom, pan_x, pan_y = _zoom_state_at_time(keyframes, local_time_ms)
     if zoom <= 1.001:
-        return rel_x, rel_y
+        return _clamp_relative_point(rel_x, rel_y)
     visible_w = 1.0 / zoom
     visible_h = 1.0 / zoom
     crop_x = max(0.0, min(1.0 - visible_w, pan_x - visible_w / 2.0))
     crop_y = max(0.0, min(1.0 - visible_h, pan_y - visible_h / 2.0))
-    return (rel_x - crop_x) * zoom, (rel_y - crop_y) * zoom
+    return _clamp_relative_point((rel_x - crop_x) * zoom, (rel_y - crop_y) * zoom)
+
+
+def _clamp_relative_point(rel_x: float, rel_y: float) -> tuple[float, float]:
+    """Keep overlay anchors inside the visible screen after zoom/crop mapping."""
+    return max(0.0, min(1.0, float(rel_x))), max(0.0, min(1.0, float(rel_y)))
 
 
 def _click_point_for_export(

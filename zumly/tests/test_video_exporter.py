@@ -273,7 +273,7 @@ def test_media_keyframes_use_media_local_time() -> None:
     assert mapped[0].duration == pytest.approx(125.0)
 
 
-def test_media_keyframes_carry_zoom_state_across_cut() -> None:
+def test_media_keyframes_do_not_carry_zoom_state_from_cut_gap() -> None:
     frame_timestamps = [0.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
     mapper = _SessionMediaMapper(frame_timestamps, media_duration_sec=3.0, fps=2.0)
     segment = VideoSegment.create(4000.0, 8000.0, 1.0)
@@ -285,11 +285,11 @@ def test_media_keyframes_carry_zoom_state_across_cut() -> None:
 
     mapped = _media_keyframes_for_segment(keyframes, segment, mapper, media_start)
 
-    assert mapped[0].timestamp == 0.0
-    assert mapped[0].zoom == pytest.approx(2.0)
-    assert mapped[0].x == pytest.approx(0.25)
-    assert mapped[0].y == pytest.approx(0.75)
-    assert mapped[1].timestamp == pytest.approx(750.0)
+    assert len(mapped) == 1
+    assert mapped[0].timestamp == pytest.approx(750.0)
+    assert mapped[0].zoom == pytest.approx(1.0)
+    assert mapped[0].x == pytest.approx(0.5)
+    assert mapped[0].y == pytest.approx(0.5)
 
 
 def test_media_time_for_segment_maps_click_to_source_frame_time() -> None:
@@ -343,6 +343,33 @@ class TestOverlayCoordinateMapping:
 
         assert rel_x == pytest.approx(0.5)
         assert rel_y == pytest.approx(0.5)
+
+    def test_click_coordinate_uses_export_zoom_easing(self):
+        keyframes = [
+            ZoomKeyframe.create(timestamp=0.0, zoom=2.0, x=0.25, y=0.25, duration=1000.0)
+        ]
+
+        rel_x, rel_y = _map_zoomed_relative_point(0.25, 0.25, 500.0, keyframes)
+
+        eased = 1.0 - pow(1.0 - 0.5, 5.0)
+        zoom = 1.0 + (2.0 - 1.0) * eased
+        pan = 0.5 + (0.25 - 0.5) * eased
+        visible = 1.0 / zoom
+        crop = max(0.0, min(1.0 - visible, pan - visible / 2.0))
+        expected = (0.25 - crop) * zoom
+
+        assert rel_x == pytest.approx(expected)
+        assert rel_y == pytest.approx(expected)
+
+    def test_click_coordinate_is_clamped_after_zoom_crop(self):
+        keyframes = [
+            ZoomKeyframe.create(timestamp=0.0, zoom=1.5, x=0.6, y=0.6, duration=0.0)
+        ]
+
+        rel_x, rel_y = _map_zoomed_relative_point(0.01, 0.01, 100.0, keyframes)
+
+        assert rel_x == 0.0
+        assert rel_y == 0.0
 
 
 class TestGeometryResult:
