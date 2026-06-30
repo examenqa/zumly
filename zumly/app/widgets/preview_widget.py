@@ -1365,8 +1365,15 @@ class PreviewWidget(QWidget):
         delta_s = now - self._last_playback_wall
         self._last_playback_wall = now
 
+        current_ms, jumped_to_segment = self._snap_to_video_segment(self._playback_pos_ms)
+        if jumped_to_segment:
+            self._seek_frame_for_playback(current_ms)
+            self._playback_pos_ms = current_ms
+            self._current_time_ms = current_ms
+
         speed = self._get_segment_speed(self._playback_pos_ms)
         target_ms = self._playback_pos_ms + delta_s * 1000.0 * speed
+        target_ms, jumped_gap = self._stitch_video_segment_target(self._playback_pos_ms, target_ms)
 
         if target_ms >= self._video_duration_ms:
             self.pause()
@@ -1387,19 +1394,22 @@ class PreviewWidget(QWidget):
         target_frame = self._time_to_frame(target_ms)
 
         # Only decode a new frame when we actually need one
-        if target_frame <= self._last_displayed_frame:
+        if target_frame <= self._last_displayed_frame and not jumped_gap:
             # No new frame needed yet — just update time
             self._playback_pos_ms = target_ms
             self._current_time_ms = target_ms
             self.playback_time_changed.emit(self._playback_pos_ms)
             return
 
+        if jumped_gap:
+            self._seek_frame_for_playback(target_ms)
+
         # Read the next frame sequentially.  Seeking via
         # CAP_PROP_POS_FRAMES is unreliable for lossless codecs
         # (huffyuv), so we avoid it during continuous playback and
         # instead read/discard frames to catch up when behind.
         frames_behind = target_frame - self._last_displayed_frame
-        if frames_behind > 1:
+        if not jumped_gap and frames_behind > 1:
             skip = min(frames_behind - 1, 8)
             for _ in range(skip):
                 if not self._video_cap.grab():
@@ -1420,6 +1430,41 @@ class PreviewWidget(QWidget):
         self._frame = self._numpy_to_qimage(frame)
         self.update()
         self.playback_time_changed.emit(self._playback_pos_ms)
+
+    def _seek_frame_for_playback(self, time_ms: float) -> None:
+        if not self._video_cap or not self._video_cap.isOpened():
+            return
+        import cv2
+        target_frame = self._time_to_frame(time_ms)
+        self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        self._last_displayed_frame = max(target_frame - 1, -1)
+
+    def _snap_to_video_segment(self, time_ms: float) -> tuple[float, bool]:
+        """Move a playback time out of deleted gaps and into the next segment."""
+        if not self._video_segments:
+            return time_ms, False
+        for seg in self._video_segments:
+            if seg.start_ms <= time_ms < seg.end_ms:
+                return time_ms, False
+            if time_ms < seg.start_ms:
+                return float(seg.start_ms), True
+        return self._video_duration_ms, True
+
+    def _stitch_video_segment_target(self, current_ms: float, target_ms: float) -> tuple[float, bool]:
+        """Jump over deleted source-time gaps during preview playback."""
+        if not self._video_segments:
+            return target_ms, False
+        for idx, seg in enumerate(self._video_segments):
+            if seg.start_ms <= current_ms < seg.end_ms:
+                if target_ms < seg.end_ms:
+                    return target_ms, False
+                if idx + 1 >= len(self._video_segments):
+                    return min(target_ms, self._video_duration_ms), False
+                overflow = max(0.0, target_ms - float(seg.end_ms))
+                next_seg = self._video_segments[idx + 1]
+                stitched = min(float(next_seg.end_ms), float(next_seg.start_ms) + overflow)
+                return stitched, True
+        return self._snap_to_video_segment(target_ms)
 
     def _get_segment_speed(self, time_ms: float) -> float:
         """Return the playback speed at *time_ms* from video segments."""

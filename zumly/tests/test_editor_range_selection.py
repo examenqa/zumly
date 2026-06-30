@@ -211,6 +211,25 @@ def test_delete_selected_range_removes_segment_without_merging_neighbors() -> No
     assert window._selected_video_segment_index == 1
 
 
+def test_range_selection_after_delete_does_not_recreate_deleted_gap() -> None:
+    window = _window_with_segments(
+        [
+            VideoSegment.create(0.0, 2000.0, 1.0),
+            VideoSegment.create(5000.0, 10000.0, 1.0),
+        ]
+    )
+
+    EditorWindow._on_range_selection_requested(window, 6000.0, 8000.0)
+
+    assert [(s.start_ms, s.end_ms) for s in window._session.video_segments] == [
+        (0.0, 2000.0),
+        (5000.0, 6000.0),
+        (6000.0, 8000.0),
+        (8000.0, 10000.0),
+    ]
+    assert window._selected_video_segment_index == 2
+
+
 def test_copy_paste_preserves_order_and_allows_duplicate_source_range() -> None:
     window = _window_with_segments(
         [

@@ -398,6 +398,54 @@ def _local_highlights_for_segment(
     return local
 
 
+def _ease_in_out(progress: float) -> float:
+    t = max(0.0, min(1.0, float(progress)))
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+
+def _zoom_state_at_time(keyframes: List[ZoomKeyframe], time_ms: float) -> tuple[float, float, float]:
+    """Compute local zoom/pan state for overlay coordinate mapping."""
+    sorted_kfs = sorted(keyframes, key=lambda k: float(k.timestamp))
+    active_idx = -1
+    for idx in range(len(sorted_kfs) - 1, -1, -1):
+        if time_ms >= float(sorted_kfs[idx].timestamp):
+            active_idx = idx
+            break
+    if active_idx < 0:
+        return 1.0, 0.5, 0.5
+
+    active = sorted_kfs[active_idx]
+    duration = max(float(active.duration), 0.0)
+    elapsed = max(0.0, float(time_ms) - float(active.timestamp))
+    progress = elapsed / duration if duration > 0 else 1.0
+    eased = _ease_in_out(progress)
+
+    prev_zoom = float(sorted_kfs[active_idx - 1].zoom) if active_idx > 0 else 1.0
+    prev_x = float(sorted_kfs[active_idx - 1].x) if active_idx > 0 else 0.5
+    prev_y = float(sorted_kfs[active_idx - 1].y) if active_idx > 0 else 0.5
+
+    zoom = prev_zoom + (float(active.zoom) - prev_zoom) * eased
+    pan_x = prev_x + (float(active.x) - prev_x) * eased
+    pan_y = prev_y + (float(active.y) - prev_y) * eased
+    return max(1.0, zoom), max(0.0, min(1.0, pan_x)), max(0.0, min(1.0, pan_y))
+
+
+def _map_zoomed_relative_point(
+    rel_x: float,
+    rel_y: float,
+    local_time_ms: float,
+    keyframes: List[ZoomKeyframe],
+) -> tuple[float, float]:
+    zoom, pan_x, pan_y = _zoom_state_at_time(keyframes, local_time_ms)
+    if zoom <= 1.001:
+        return rel_x, rel_y
+    visible_w = 1.0 / zoom
+    visible_h = 1.0 / zoom
+    crop_x = max(0.0, min(1.0 - visible_w, pan_x - visible_w / 2.0))
+    crop_y = max(0.0, min(1.0 - visible_h, pan_y - visible_h / 2.0))
+    return (rel_x - crop_x) * zoom, (rel_y - crop_y) * zoom
+
+
 def _build_zoompan_filter(keyframes: List[ZoomKeyframe], fps: float) -> str:
     """Build the FFmpeg zoompan filter for a local segment timeline."""
     expr_z = "1"
@@ -656,6 +704,12 @@ class VideoExporter:
                         t_e = min(t_s + dur_sec, segment_duration_sec)
                         rel_x = (local_click.x - m_left) / max(m_w, 1)
                         rel_y = (local_click.y - m_top) / max(m_h, 1)
+                        rel_x, rel_y = _map_zoomed_relative_point(
+                            rel_x,
+                            rel_y,
+                            float(local_click.timestamp),
+                            local_kfs,
+                        )
                         cx = int(scr_x + rel_x * scr_w - r)
                         cy = int(scr_y + rel_y * scr_h - r)
 
@@ -682,8 +736,14 @@ class VideoExporter:
                         t_e = min(t_s + cursor_hold_sec, segment_duration_sec)
                         rel_x = (local_click.x - m_left) / max(m_w, 1)
                         rel_y = (local_click.y - m_top) / max(m_h, 1)
-                        cx = int(scr_x + rel_x * scr_w)
-                        cy = int(scr_y + rel_y * scr_h)
+                        rel_x, rel_y = _map_zoomed_relative_point(
+                            rel_x,
+                            rel_y,
+                            float(local_click.timestamp),
+                            local_kfs,
+                        )
+                        cx = int(scr_x + rel_x * scr_w - 4)
+                        cy = int(scr_y + rel_y * scr_h - 4)
 
                         next_node = f"s{seg_index}cursor{cursor_node_index}"
                         filter_lines.append(

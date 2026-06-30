@@ -598,44 +598,64 @@ class EditorWindow(QWidget):
             return
         self._push_undo_snapshot()
 
-        old_segments = sorted(self._session.video_segments or [], key=lambda s: s.start_ms)
+        old_segments = list(self._session.video_segments or [])
         eps = 0.5
 
-        def _speed_at(time_ms: float) -> float:
+        parts: list[tuple[float, float, float, bool]] = []
+        for old_seg in old_segments:
+            seg_start = max(0.0, min(float(old_seg.start_ms), float(duration)))
+            seg_end = max(0.0, min(float(old_seg.end_ms), float(duration)))
+            if seg_end - seg_start < 1.0:
+                continue
+
+            boundaries = [seg_start, seg_end]
+            if seg_start + eps < start < seg_end - eps:
+                boundaries.append(start)
+            if seg_start + eps < end < seg_end - eps:
+                boundaries.append(end)
+            boundaries = sorted(boundaries)
+
+            for idx in range(len(boundaries) - 1):
+                part_start = boundaries[idx]
+                part_end = boundaries[idx + 1]
+                if part_end - part_start < 1.0:
+                    continue
+                try:
+                    speed = max(0.1, min(10.0, float(old_seg.speed)))
+                except (TypeError, ValueError):
+                    speed = 1.0
+                midpoint = (part_start + part_end) / 2.0
+                parts.append((part_start, part_end, speed, start - eps <= midpoint <= end + eps))
+
+        def _speed_at_source_time(time_ms: float) -> float:
             for seg in old_segments:
-                if seg.start_ms - eps <= time_ms <= seg.end_ms + eps:
+                if float(seg.start_ms) - eps <= time_ms <= float(seg.end_ms) + eps:
                     try:
                         return max(0.1, min(10.0, float(seg.speed)))
                     except (TypeError, ValueError):
                         return 1.0
             return 1.0
 
-        raw_boundaries = [0.0, float(duration), start, end]
-        for seg in old_segments:
-            for boundary in (float(seg.start_ms), float(seg.end_ms)):
-                boundary = max(0.0, min(boundary, float(duration)))
-                if boundary <= start + eps or boundary >= end - eps:
-                    raw_boundaries.append(boundary)
-
-        boundaries: list[float] = []
-        for boundary in sorted(raw_boundaries):
-            if boundaries and abs(boundary - boundaries[-1]) <= eps:
-                boundaries[-1] = boundary if abs(boundary - start) <= eps or abs(boundary - end) <= eps else boundaries[-1]
-                continue
-            boundaries.append(boundary)
-
         new_segments: list[VideoSegment] = []
         selected_index = -1
-        for idx in range(len(boundaries) - 1):
-            seg_start = boundaries[idx]
-            seg_end = boundaries[idx + 1]
-            if seg_end - seg_start < 1.0:
+        idx = 0
+        while idx < len(parts):
+            part_start, part_end, part_speed, is_selected = parts[idx]
+            if not is_selected:
+                new_segments.append(VideoSegment.create(part_start, part_end, part_speed))
+                idx += 1
                 continue
-            speed = _speed_at((seg_start + seg_end) / 2.0)
-            new_seg = VideoSegment.create(seg_start, seg_end, speed)
-            if abs(seg_start - start) <= eps and abs(seg_end - end) <= eps:
+
+            run_start = part_start
+            run_end = part_end
+            idx += 1
+            while idx < len(parts) and parts[idx][3] and abs(parts[idx][0] - run_end) <= eps:
+                run_end = parts[idx][1]
+                idx += 1
+            run_speed = _speed_at_source_time((run_start + run_end) / 2.0)
+            if selected_index < 0:
                 selected_index = len(new_segments)
-            new_segments.append(new_seg)
+            new_segments.append(VideoSegment.create(run_start, run_end, run_speed))
 
         if not new_segments:
             return

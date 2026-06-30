@@ -7,8 +7,14 @@ Qt or actual video files.
 import pytest
 import numpy as np
 
-from app.models import VideoSegment
-from app.video_exporter import GeometryComputer, VideoProbeResult, GeometryResult, _normalize_video_segments
+from app.models import VideoSegment, ZoomKeyframe
+from app.video_exporter import (
+    GeometryComputer,
+    VideoProbeResult,
+    GeometryResult,
+    _map_zoomed_relative_point,
+    _normalize_video_segments,
+)
 from app.frames import FramePreset, DEFAULT_FRAME, FRAME_PRESETS
 from app.backgrounds import PRESETS as BACKGROUND_PRESETS
 
@@ -245,6 +251,18 @@ class TestVideoSegments:
             (3000.0, 5000.0),
             (5000.0, 7000.0),
         ]
+
+
+class TestOverlayCoordinateMapping:
+    def test_click_coordinate_follows_zoom_crop(self):
+        keyframes = [
+            ZoomKeyframe.create(timestamp=0.0, zoom=2.0, x=0.25, y=0.25, duration=0.0)
+        ]
+
+        rel_x, rel_y = _map_zoomed_relative_point(0.25, 0.25, 100.0, keyframes)
+
+        assert rel_x == pytest.approx(0.5)
+        assert rel_y == pytest.approx(0.5)
 
 
 class TestGeometryResult:
