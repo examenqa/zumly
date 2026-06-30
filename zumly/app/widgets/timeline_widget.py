@@ -177,7 +177,7 @@ class _TimelineTrack(QWidget):
     chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)  # video segment id — delete
     segment_selected = Signal(int)        # selected video segment index
-    split_requested = Signal(float)       # timestamp ms — split recording here
+    split_requested = Signal(float)       # timestamp ms — add a range boundary here
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()                # reset both trim handles to full range
     drag_finished = Signal()             # emitted when any drag completes
@@ -518,27 +518,27 @@ class _TimelineTrack(QWidget):
             self.update()
             menu = QMenu(self)
             menu.setStyleSheet(self._menu_style())
-            header = menu.addAction("  Clip segment")
+            header = menu.addAction("  Selected range")
             header.setEnabled(False)
             menu.addSeparator()
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
-            split_act = menu.addAction("Split clip here")
+            split_act = menu.addAction("Select range here")
             split_act.setIcon(load_icon("cut", color=T.FG_PRIMARY))
             split_act.triggered.connect(
                 lambda checked=False, split_time=time_ms: self.split_requested.emit(split_time)
             )
             if len(self.video_segments) > 1:
-                del_act = menu.addAction("Delete clip…")
+                del_act = menu.addAction("Remove range selection")
                 del_act.setIcon(load_icon("delete", color=T.DANGER))
                 del_act.triggered.connect(lambda: self._delete_selected_video_segment())
             menu.exec(self.mapToGlobal(pos))
             return
-        # Empty space — offer to add a zoom section, voiceover, or split
+        # Empty space — offer to create a selectable range, zoom, or voiceover.
         if self._eff_dur > 0 and self.width() > 0:
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
             menu = QMenu(self)
             menu.setStyleSheet(self._menu_style())
-            act_split = menu.addAction("Split clip here")
+            act_split = menu.addAction("Select range here")
             act_split.setIcon(load_icon("cut", color=T.FG_PRIMARY))
             act_split.triggered.connect(
                 lambda checked=False, split_time=time_ms: self.split_requested.emit(split_time)
@@ -1072,7 +1072,7 @@ class _TimelineTrack(QWidget):
     # ── video segments ─────────────────────────────────────────────
 
     def _draw_video_segments(self, painter: QPainter, w: int, top: int, h: int) -> None:
-        """Draw video segment blocks with split dividers and speed labels."""
+        """Draw selectable range blocks with boundary dividers and speed labels."""
         self._video_seg_rects = []
         if self.duration <= 0 or not self.video_segments:
             return
@@ -1083,7 +1083,7 @@ class _TimelineTrack(QWidget):
         label_font.setPixelSize(10)
         painter.setFont(label_font)
         painter.setPen(QPen(QColor("#6c6890"), 1))
-        painter.drawText(4, top + h - 3, "Clips")
+        painter.drawText(4, top + h - 3, "Range")
 
         for seg in self.video_segments:
             sx = self._ms_to_x(seg.start_ms)
@@ -1668,7 +1668,7 @@ class TimelineWidget(QWidget):
     chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)   # video segment id — delete
     segment_selected = Signal(int)        # selected video segment index
-    split_requested = Signal(float)       # timestamp ms — split recording here
+    split_requested = Signal(float)       # timestamp ms — add a range boundary here
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()               # reset both trim handles to full range
     drag_finished = Signal()            # emitted when any drag completes
@@ -1760,7 +1760,7 @@ class TimelineWidget(QWidget):
         hint_text = (
             "Right-click zoom to edit · Double-click voiceover to review speech · "
             "Hover chapter flags to review names · Del removes the selected item · "
-            "Right-click empty space or press S to split a clip"
+            "Right-click the timeline or press S to select a range"
         )
         hint_kf = QPushButton("Timeline tips")
         hint_kf.setObjectName("TimelineHintBtn")
@@ -1842,7 +1842,7 @@ class TimelineWidget(QWidget):
         self._track.update()
 
     def set_video_segments(self, video_segments: List[VideoSegment], selected_index: int = -1) -> None:
-        """Update clip segments and optionally select one."""
+        """Update selectable ranges and optionally select one."""
         self._track.video_segments = video_segments
         if 0 <= selected_index < len(video_segments):
             self._track._selected_video_seg_id = video_segments[selected_index].id

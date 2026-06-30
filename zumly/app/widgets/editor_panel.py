@@ -654,7 +654,7 @@ class EditorPanel(QWidget):
         self._click_section = _CollapsibleSection("CLICK EFFECTS", click_body, collapsed=True)
         self._container.addWidget(self._click_section)
 
-        # ── Retiming (collapsible) ───────────────────────────────────
+        # ── Selected range actions (collapsible) ─────────────────────
         retime_body = QWidget()
         retime_lay = QVBoxLayout(retime_body)
         retime_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
@@ -667,15 +667,15 @@ class EditorPanel(QWidget):
             self._speed_combo.addItem(label, speed)
         self._speed_combo.setEnabled(False)
         self._speed_combo.currentIndexChanged.connect(self._on_segment_speed_changed)
-        self._speed_combo.setToolTip("Select a clip in the timeline, then choose its playback speed.")
+        self._speed_combo.setToolTip("Select a range in the timeline, then choose its playback speed.")
         retime_lay.addWidget(self._speed_combo)
 
-        self._retime_status = QLabel("Select a clip in the timeline")
+        self._retime_status = QLabel("Select a range in the timeline")
         self._retime_status.setObjectName("Secondary")
         self._retime_status.setWordWrap(True)
         retime_lay.addWidget(self._retime_status)
 
-        self._retiming_section = _CollapsibleSection("RETIMING", retime_body, collapsed=True)
+        self._retiming_section = _CollapsibleSection("SELECTED RANGE", retime_body, collapsed=True)
         self._container.addWidget(self._retiming_section)
 
         # ── Output dimensions (collapsible) ──────────────────────────
@@ -1356,7 +1356,7 @@ class EditorPanel(QWidget):
         self._speed_combo.blockSignals(True)
         self._speed_combo.setEnabled(speed is not None)
         if speed is None:
-            self._retime_status.setText("Select a clip in the timeline")
+            self._retime_status.setText("Select a range in the timeline")
             self._speed_combo.setCurrentIndex(0)
         else:
             best_index = 0
@@ -1370,9 +1370,9 @@ class EditorPanel(QWidget):
             self._speed_combo.setCurrentIndex(best_index)
             label = self._speed_combo.itemText(best_index)
             if index >= 0:
-                self._retime_status.setText(f"Clip {index + 1} speed: {label}")
+                self._retime_status.setText(f"Range {index + 1} speed: {label}")
             else:
-                self._retime_status.setText(f"Selected clip speed: {label}")
+                self._retime_status.setText(f"Selected range speed: {label}")
             self._retiming_section.expand()
         self._speed_combo.blockSignals(False)
 
