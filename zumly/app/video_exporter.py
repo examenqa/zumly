@@ -354,18 +354,6 @@ def _normalize_video_segments(
     return normalized
 
 
-def _local_keyframes_for_segment(
-    keyframes: List[ZoomKeyframe],
-    segment: VideoSegment,
-) -> List[ZoomKeyframe]:
-    """Filter absolute keyframes into a segment-local zero timeline."""
-    return [
-        replace(kf, timestamp=float(kf.timestamp) - segment.start_ms)
-        for kf in keyframes
-        if segment.start_ms <= float(kf.timestamp) < segment.end_ms
-    ]
-
-
 class _SessionMediaMapper:
     """Map recorder session timestamps onto the encoded MP4 media timeline."""
 
@@ -435,6 +423,26 @@ def _media_keyframes_for_segment(
 ) -> List[ZoomKeyframe]:
     """Filter keyframes into a segment-local media timeline for FFmpeg trim."""
     media_keyframes: List[ZoomKeyframe] = []
+    start_zoom, start_x, start_y = _zoom_state_at_time(keyframes, float(segment.start_ms))
+    has_keyframe_at_start = any(
+        abs(float(keyframe.timestamp) - float(segment.start_ms)) < 0.5
+        for keyframe in keyframes
+    )
+    if not has_keyframe_at_start and (
+        abs(start_zoom - 1.0) > 0.001
+        or abs(start_x - 0.5) > 0.001
+        or abs(start_y - 0.5) > 0.001
+    ):
+        media_keyframes.append(
+            ZoomKeyframe.create(
+                timestamp=0.0,
+                zoom=start_zoom,
+                x=start_x,
+                y=start_y,
+                duration=0.0,
+                reason="Segment start zoom state",
+            )
+        )
     for keyframe in keyframes:
         keyframe_time = float(keyframe.timestamp)
         if not (segment.start_ms <= keyframe_time < segment.end_ms):
@@ -449,6 +457,29 @@ def _media_keyframes_for_segment(
     return media_keyframes
 
 
+def _media_time_for_segment(
+    timestamp_ms: float,
+    segment: VideoSegment,
+    mapper: _SessionMediaMapper,
+    media_start_sec: float,
+    *,
+    for_end: bool = False,
+) -> float:
+    """Map an absolute session timestamp to media-local seconds."""
+    bounded = max(float(segment.start_ms), min(float(timestamp_ms), float(segment.end_ms)))
+    return max(0.0, mapper.to_media_sec(bounded, for_end=for_end) - media_start_sec)
+
+
+def _timed_overlay_stream(input_node: str, output_node: str, start_sec: float, end_sec: float) -> str:
+    """Create a short overlay stream shifted onto a segment-local timeline."""
+    start = max(float(start_sec), 0.0)
+    duration = max(float(end_sec) - start, 0.001)
+    return (
+        f"[{input_node}]format=rgba,trim=duration={duration:.6f},"
+        f"setpts=PTS+{start:.6f}/TB[{output_node}]"
+    )
+
+
 def _local_clicks_for_segment(
     click_events: Optional[List[ClickEvent]],
     segment: VideoSegment,
@@ -461,22 +492,28 @@ def _local_clicks_for_segment(
     ]
 
 
-def _local_highlights_for_segment(
+def _media_highlights_for_segment(
     highlights: Optional[List[HighlightBox]],
     segment: VideoSegment,
+    mapper: _SessionMediaMapper,
+    media_start_sec: float,
 ) -> List[HighlightBox]:
-    """Filter absolute highlights into a segment-local zero timeline."""
+    """Filter highlights into a segment-local media timeline."""
     local: List[HighlightBox] = []
     for highlight in highlights or []:
         start = max(float(highlight.start_ms), float(segment.start_ms))
         end = min(float(highlight.end_ms), float(segment.end_ms))
         if end <= start:
             continue
+        media_start_ms = _media_time_for_segment(start, segment, mapper, media_start_sec) * 1000.0
+        media_end_ms = _media_time_for_segment(end, segment, mapper, media_start_sec, for_end=True) * 1000.0
+        if media_end_ms <= media_start_ms:
+            continue
         local.append(
             replace(
                 highlight,
-                start_ms=start - float(segment.start_ms),
-                end_ms=end - float(segment.start_ms),
+                start_ms=media_start_ms,
+                end_ms=media_end_ms,
             )
         )
     return local
@@ -730,6 +767,10 @@ class VideoExporter:
                     source_duration_ms / 1000.0,
                     total_sec,
                 )
+            segment_media_bounds = [
+                media_mapper.segment_bounds(segment)
+                for segment in segments
+            ]
             output_total_sec = sum(
                 ((segment.end_ms - segment.start_ms) / 1000.0) / _segment_speed(segment)
                 for segment in segments
@@ -741,7 +782,10 @@ class VideoExporter:
                 or abs(segments[0].end_ms - source_duration_ms) > 0.5
             )
             local_click_sets = [_local_clicks_for_segment(click_events, segment) for segment in segments]
-            local_highlight_sets = [_local_highlights_for_segment(highlights, segment) for segment in segments]
+            local_highlight_sets = [
+                _media_highlights_for_segment(highlights, segment, media_mapper, segment_media_bounds[idx][0])
+                for idx, segment in enumerate(segments)
+            ]
             local_click_count = sum(len(items) for items in local_click_sets)
             export_mouse_track = sorted(mouse_track or [], key=lambda point: float(point.timestamp))
 
@@ -796,11 +840,11 @@ class VideoExporter:
             segment_outputs: List[str] = []
             cursor_node_index = 0
             for seg_index, segment in enumerate(segments):
-                media_start_sec, media_end_sec, media_duration_sec = media_mapper.segment_bounds(segment)
-                segment_duration_sec = max((segment.end_ms - segment.start_ms) / 1000.0, 0.001)
-                pts_scale = segment_duration_sec / max(media_duration_sec, 0.001)
+                media_start_sec, media_end_sec, media_duration_sec = segment_media_bounds[seg_index]
+                session_duration_sec = max((segment.end_ms - segment.start_ms) / 1000.0, 0.001)
+                output_duration_sec = session_duration_sec / _segment_speed(segment)
+                retime_scale = output_duration_sec / max(media_duration_sec, 0.001)
 
-                local_kfs = _local_keyframes_for_segment(keyframes, segment)
                 media_kfs = _media_keyframes_for_segment(keyframes, segment, media_mapper, media_start_sec)
                 local_clicks = local_click_sets[seg_index]
                 zoompan_filter = _build_zoompan_filter(media_kfs, src_fps)
@@ -809,14 +853,16 @@ class VideoExporter:
                     f"[0:v]trim=start={media_start_sec:.6f}:end={media_end_sec:.6f},setpts=PTS-STARTPTS[s{seg_index}trim]"
                 )
                 filter_lines.append(f"[s{seg_index}trim]{zoompan_filter}[s{seg_index}zoom]")
-                filter_lines.append(
-                    f"[s{seg_index}zoom]scale={scr_w}:{scr_h},setpts={pts_scale:.8f}*PTS[s{seg_index}vid]"
-                )
+                filter_lines.append(f"[s{seg_index}zoom]scale={scr_w}:{scr_h}[s{seg_index}vid]")
 
-                color_args = f"color=c=0x{bg_color}:s={out_w}x{out_h}:r={src_fps}:d={segment_duration_sec}"
+                color_args = f"color=c=0x{bg_color}:s={out_w}x{out_h}:r={src_fps}:d={media_duration_sec}"
                 filter_lines.append(f"{color_args}[s{seg_index}bg]")
                 filter_lines.append(
-                    f"[s{seg_index}bg][s{seg_index}vid]overlay=x={scr_x}:y={scr_y}[s{seg_index}comp0]"
+                    f"[s{seg_index}bg][s{seg_index}vid]overlay=x={scr_x}:y={scr_y}:"
+                    f"shortest=1:eof_action=pass[s{seg_index}base]"
+                )
+                filter_lines.append(
+                    f"[s{seg_index}base]setpts=PTS-STARTPTS[s{seg_index}comp0]"
                 )
 
                 current_comp_node = f"s{seg_index}comp0"
@@ -835,25 +881,29 @@ class VideoExporter:
                     m_h = monitor_rect.get("height", src_h) if monitor_rect else src_h
 
                     for local_click in local_clicks:
-                        t_s = max(local_click.timestamp / 1000.0, 0.0)
-                        t_e = min(t_s + dur_sec, segment_duration_sec)
                         abs_click_ms = float(segment.start_ms) + float(local_click.timestamp)
+                        t_s = _media_time_for_segment(abs_click_ms, segment, media_mapper, media_start_sec)
+                        t_e = min(t_s + dur_sec / max(retime_scale, 0.001), media_duration_sec)
                         click_x, click_y = _click_point_for_export(local_click, export_mouse_track, abs_click_ms)
                         rel_x = (click_x - m_left) / max(m_w, 1)
                         rel_y = (click_y - m_top) / max(m_h, 1)
                         rel_x, rel_y = _map_zoomed_relative_point(
                             rel_x,
                             rel_y,
-                            float(local_click.timestamp),
-                            local_kfs,
+                            t_s * 1000.0,
+                            media_kfs,
                         )
                         cx = int(scr_x + rel_x * scr_w - r)
                         cy = int(scr_y + rel_y * scr_h - r)
 
+                        timed_node = f"s{seg_index}clicksrc{click_node_index}"
                         next_node = f"s{seg_index}click{click_node_index}"
                         filter_lines.append(
-                            f"[{current_comp_node}][cl{click_node_index}]overlay=x={cx}:y={cy}:"
-                            f"enable='between(t,{t_s},{t_e})'[{next_node}]"
+                            _timed_overlay_stream(f"cl{click_node_index}", timed_node, t_s, t_e)
+                        )
+                        filter_lines.append(
+                            f"[{current_comp_node}][{timed_node}]overlay=x={cx}:y={cy}:"
+                            f"eof_action=pass:repeatlast=0[{next_node}]"
                         )
                         current_comp_node = next_node
                         click_node_index += 1
@@ -869,50 +919,57 @@ class VideoExporter:
                     m_h = monitor_rect.get("height", src_h) if monitor_rect else src_h
 
                     for local_click in local_clicks:
-                        t_s = max(local_click.timestamp / 1000.0, 0.0)
-                        t_e = min(t_s + cursor_hold_sec, segment_duration_sec)
                         abs_click_ms = float(segment.start_ms) + float(local_click.timestamp)
+                        t_s = _media_time_for_segment(abs_click_ms, segment, media_mapper, media_start_sec)
+                        t_e = min(t_s + cursor_hold_sec / max(retime_scale, 0.001), media_duration_sec)
                         click_x, click_y = _click_point_for_export(local_click, export_mouse_track, abs_click_ms)
                         rel_x = (click_x - m_left) / max(m_w, 1)
                         rel_y = (click_y - m_top) / max(m_h, 1)
                         rel_x, rel_y = _map_zoomed_relative_point(
                             rel_x,
                             rel_y,
-                            float(local_click.timestamp),
-                            local_kfs,
+                            t_s * 1000.0,
+                            media_kfs,
                         )
                         cx = int(scr_x + rel_x * scr_w - 4)
                         cy = int(scr_y + rel_y * scr_h - 4)
 
+                        timed_node = f"s{seg_index}cursorsrc{cursor_node_index}"
                         next_node = f"s{seg_index}cursor{cursor_node_index}"
                         filter_lines.append(
-                            f"[{current_comp_node}][cu{cursor_node_index}]overlay=x={cx}:y={cy}:"
-                            f"enable='between(t,{t_s},{t_e})'[{next_node}]"
+                            _timed_overlay_stream(f"cu{cursor_node_index}", timed_node, t_s, t_e)
+                        )
+                        filter_lines.append(
+                            f"[{current_comp_node}][{timed_node}]overlay=x={cx}:y={cy}:"
+                            f"eof_action=pass:repeatlast=0[{next_node}]"
                         )
                         current_comp_node = next_node
                         cursor_node_index += 1
 
                 for highlight, input_index in local_highlight_assets[seg_index]:
                     t_s = max(float(highlight.start_ms) / 1000.0, 0.0)
-                    t_e = min(float(highlight.end_ms) / 1000.0, segment_duration_sec)
+                    t_e = min(float(highlight.end_ms) / 1000.0, media_duration_sec)
                     if t_e <= t_s:
                         continue
+                    timed_node = f"s{seg_index}highlightsrc{input_index}"
                     next_node = f"s{seg_index}highlight{input_index}"
                     filter_lines.append(
-                        f"[{current_comp_node}][{input_index}:v]overlay=x=0:y=0:"
-                        f"enable='between(t,{t_s},{t_e})'[{next_node}]"
+                        _timed_overlay_stream(f"{input_index}:v", timed_node, t_s, t_e)
+                    )
+                    filter_lines.append(
+                        f"[{current_comp_node}][{timed_node}]overlay=x=0:y=0:"
+                        f"eof_action=pass:repeatlast=0[{next_node}]"
                     )
                     current_comp_node = next_node
 
                 framed_node = f"s{seg_index}framed"
-                filter_lines.append(f"[{current_comp_node}][fr{seg_index}]overlay=x=0:y=0[{framed_node}]")
+                filter_lines.append(
+                    f"[{current_comp_node}][fr{seg_index}]overlay=x=0:y=0:"
+                    f"shortest=1:eof_action=pass[{framed_node}]"
+                )
 
-                speed = _segment_speed(segment)
                 out_node = f"s{seg_index}out"
-                if abs(speed - 1.0) > 0.01:
-                    filter_lines.append(f"[{framed_node}]setpts={1.0 / speed:.8f}*PTS[{out_node}]")
-                else:
-                    filter_lines.append(f"[{framed_node}]setpts=PTS[{out_node}]")
+                filter_lines.append(f"[{framed_node}]setpts={retime_scale:.8f}*PTS[{out_node}]")
                 segment_outputs.append(out_node)
 
             if len(segment_outputs) > 1:
@@ -936,6 +993,7 @@ class VideoExporter:
             cmd = [
                 ffmpeg, "-y",
                 "-i", input_path,
+                "-loop", "1",
                 "-i", frame_img_path,
             ]
             if click_img_path:

@@ -15,8 +15,10 @@ from app.video_exporter import (
     _SessionMediaMapper,
     _click_point_for_export,
     _map_zoomed_relative_point,
+    _media_time_for_segment,
     _media_keyframes_for_segment,
     _normalize_video_segments,
+    _timed_overlay_stream,
 )
 from app.frames import FramePreset, DEFAULT_FRAME, FRAME_PRESETS
 from app.backgrounds import PRESETS as BACKGROUND_PRESETS
@@ -269,6 +271,40 @@ def test_media_keyframes_use_media_local_time() -> None:
     assert len(mapped) == 1
     assert mapped[0].timestamp == 500.0
     assert mapped[0].duration == pytest.approx(125.0)
+
+
+def test_media_keyframes_carry_zoom_state_across_cut() -> None:
+    frame_timestamps = [0.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
+    mapper = _SessionMediaMapper(frame_timestamps, media_duration_sec=3.0, fps=2.0)
+    segment = VideoSegment.create(4000.0, 8000.0, 1.0)
+    media_start, _, _ = mapper.segment_bounds(segment)
+    keyframes = [
+        ZoomKeyframe.create(timestamp=2000.0, zoom=2.0, x=0.25, y=0.75, duration=0.0),
+        ZoomKeyframe.create(timestamp=7000.0, zoom=1.0, x=0.5, y=0.5, duration=1000.0),
+    ]
+
+    mapped = _media_keyframes_for_segment(keyframes, segment, mapper, media_start)
+
+    assert mapped[0].timestamp == 0.0
+    assert mapped[0].zoom == pytest.approx(2.0)
+    assert mapped[0].x == pytest.approx(0.25)
+    assert mapped[0].y == pytest.approx(0.75)
+    assert mapped[1].timestamp == pytest.approx(750.0)
+
+
+def test_media_time_for_segment_maps_click_to_source_frame_time() -> None:
+    frame_timestamps = [0.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
+    mapper = _SessionMediaMapper(frame_timestamps, media_duration_sec=3.0, fps=2.0)
+    segment = VideoSegment.create(4000.0, 8000.0, 1.0)
+    media_start, _, _ = mapper.segment_bounds(segment)
+
+    assert _media_time_for_segment(6000.0, segment, mapper, media_start) == pytest.approx(0.5)
+
+
+def test_timed_overlay_stream_shifts_short_asset_to_local_time() -> None:
+    assert _timed_overlay_stream("cl0", "click0", 1.25, 1.65) == (
+        "[cl0]format=rgba,trim=duration=0.400000,setpts=PTS+1.250000/TB[click0]"
+    )
 
 
 class TestVideoSegments:
