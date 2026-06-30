@@ -12,8 +12,10 @@ from app.video_exporter import (
     GeometryComputer,
     VideoProbeResult,
     GeometryResult,
+    _SessionMediaMapper,
     _click_point_for_export,
     _map_zoomed_relative_point,
+    _media_keyframes_for_segment,
     _normalize_video_segments,
 )
 from app.frames import FramePreset, DEFAULT_FRAME, FRAME_PRESETS
@@ -243,6 +245,30 @@ def test_click_point_for_export_prefers_interpolated_mouse_track() -> None:
         MousePosition(x=200.0, y=260.0, timestamp=1600.0),
     ]
     assert _click_point_for_export(click, close_track, 1500.0) == (150.0, 230.0)
+
+
+def test_session_media_mapper_maps_cut_segments_to_encoded_timeline() -> None:
+    frame_timestamps = [0.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
+    mapper = _SessionMediaMapper(frame_timestamps, media_duration_sec=3.0, fps=2.0)
+    first = VideoSegment.create(0.0, 2000.0, 1.0)
+    second = VideoSegment.create(4000.0, 8000.0, 1.0)
+
+    assert mapper.segment_bounds(first) == (0.0, 1.0, 1.0)
+    assert mapper.segment_bounds(second) == (1.5, 3.0, 1.5)
+
+
+def test_media_keyframes_use_media_local_time() -> None:
+    frame_timestamps = [0.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
+    mapper = _SessionMediaMapper(frame_timestamps, media_duration_sec=3.0, fps=2.0)
+    segment = VideoSegment.create(4000.0, 8000.0, 1.0)
+    media_start, _, _ = mapper.segment_bounds(segment)
+    keyframe = ZoomKeyframe.create(timestamp=6000.0, zoom=1.5, duration=500.0)
+
+    mapped = _media_keyframes_for_segment([keyframe], segment, mapper, media_start)
+
+    assert len(mapped) == 1
+    assert mapped[0].timestamp == 500.0
+    assert mapped[0].duration == pytest.approx(125.0)
 
 
 class TestVideoSegments:

@@ -5,6 +5,7 @@ import threading
 import time
 import tempfile
 import re
+import bisect
 from dataclasses import dataclass, replace
 from typing import Any, List, Optional, Callable
 
@@ -365,6 +366,89 @@ def _local_keyframes_for_segment(
     ]
 
 
+class _SessionMediaMapper:
+    """Map recorder session timestamps onto the encoded MP4 media timeline."""
+
+    def __init__(
+        self,
+        frame_timestamps: Optional[List[float]],
+        media_duration_sec: float,
+        fps: float,
+    ) -> None:
+        self._timestamps = sorted(float(ts) for ts in (frame_timestamps or []) if ts is not None)
+        self._media_duration_sec = max(float(media_duration_sec or 0.0), 0.0)
+        self._fps = max(float(fps or 0.0), 0.0)
+        if self._timestamps and self._media_duration_sec > 0:
+            self._frame_duration_sec = self._media_duration_sec / len(self._timestamps)
+        elif self._fps > 0:
+            self._frame_duration_sec = 1.0 / self._fps
+        else:
+            self._frame_duration_sec = 1.0 / 30.0
+
+    @property
+    def has_timestamps(self) -> bool:
+        return bool(self._timestamps)
+
+    def to_media_sec(self, session_time_ms: float, *, for_end: bool = False) -> float:
+        if not self._timestamps:
+            return max(float(session_time_ms), 0.0) / 1000.0
+
+        target = float(session_time_ms)
+        last_media_start = max(0.0, self._media_duration_sec - self._frame_duration_sec)
+        if target <= self._timestamps[0]:
+            return min(self._frame_duration_sec, self._media_duration_sec) if for_end else 0.0
+        if target >= self._timestamps[-1]:
+            return self._media_duration_sec if for_end else last_media_start
+
+        idx = bisect.bisect_left(self._timestamps, target)
+        if idx <= 0:
+            frame_pos = 0.0
+        elif idx >= len(self._timestamps):
+            frame_pos = float(len(self._timestamps) if for_end else len(self._timestamps) - 1)
+        else:
+            prev_ts = self._timestamps[idx - 1]
+            next_ts = self._timestamps[idx]
+            if next_ts <= prev_ts:
+                frame_pos = float(idx)
+            else:
+                ratio = (target - prev_ts) / (next_ts - prev_ts)
+                frame_pos = float(idx - 1) + max(0.0, min(1.0, ratio))
+
+        media_sec = frame_pos * self._frame_duration_sec
+        return max(0.0, min(self._media_duration_sec, media_sec))
+
+    def segment_bounds(self, segment: VideoSegment) -> tuple[float, float, float]:
+        start_sec = self.to_media_sec(segment.start_ms, for_end=False)
+        end_sec = self.to_media_sec(segment.end_ms, for_end=True)
+        min_duration = max(self._frame_duration_sec, 0.001)
+        if end_sec <= start_sec:
+            end_sec = min(self._media_duration_sec or start_sec + min_duration, start_sec + min_duration)
+        media_duration = max(end_sec - start_sec, min_duration)
+        return start_sec, end_sec, media_duration
+
+
+def _media_keyframes_for_segment(
+    keyframes: List[ZoomKeyframe],
+    segment: VideoSegment,
+    mapper: _SessionMediaMapper,
+    media_start_sec: float,
+) -> List[ZoomKeyframe]:
+    """Filter keyframes into a segment-local media timeline for FFmpeg trim."""
+    media_keyframes: List[ZoomKeyframe] = []
+    for keyframe in keyframes:
+        keyframe_time = float(keyframe.timestamp)
+        if not (segment.start_ms <= keyframe_time < segment.end_ms):
+            continue
+        media_time_ms = max(0.0, (mapper.to_media_sec(keyframe_time) - media_start_sec) * 1000.0)
+        duration = max(float(keyframe.duration), 0.0)
+        if duration > 0:
+            keyframe_end = min(float(segment.end_ms), keyframe_time + duration)
+            media_end_ms = max(0.0, (mapper.to_media_sec(keyframe_end, for_end=True) - media_start_sec) * 1000.0)
+            duration = max(0.0, media_end_ms - media_time_ms)
+        media_keyframes.append(replace(keyframe, timestamp=media_time_ms, duration=duration))
+    return media_keyframes
+
+
 def _local_clicks_for_segment(
     click_events: Optional[List[ClickEvent]],
     segment: VideoSegment,
@@ -557,12 +641,12 @@ class VideoExporter:
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments, highlights),
+            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, frame_timestamps, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments, highlights),
             daemon=True,
         )
         self._thread.start()
 
-    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]], highlights: Optional[List[HighlightBox]]):
+    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, frame_timestamps: Optional[List[float]], keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]], highlights: Optional[List[HighlightBox]]):
         temp_files = []
         try:
             if self._status_cb: self._status_cb("Starting export...")
@@ -601,10 +685,11 @@ class VideoExporter:
             out_h = out_h + (out_h % 2)
 
             frame_preset = frame_preset or DEFAULT_FRAME
-            if total_sec > 0:
-                keyframes = [kf for kf in keyframes if (kf.timestamp / 1000.0) <= total_sec]
+            source_duration_ms = duration_ms or ((frame_timestamps[-1] if frame_timestamps else 0.0) or (total_sec * 1000.0))
+            if source_duration_ms > 0:
+                keyframes = [kf for kf in keyframes if float(kf.timestamp) <= source_duration_ms]
                 if click_events:
-                    click_events = [ce for ce in click_events if (ce.timestamp / 1000.0) <= total_sec]
+                    click_events = [ce for ce in click_events if float(ce.timestamp) <= source_duration_ms]
 
             geom = GeometryComputer(
                 canvas_w=out_w,
@@ -627,7 +712,6 @@ class VideoExporter:
             frame_img_path = generate_device_frame_png(frame_preset, out_w, out_h, geom)
             temp_files.append(frame_img_path)
 
-            source_duration_ms = duration_ms or (total_sec * 1000.0)
             explicit_segments = video_segments is not None
             segments = _normalize_video_segments(
                 video_segments,
@@ -638,6 +722,14 @@ class VideoExporter:
                 if self._error_cb:
                     self._error_cb("Export failed: unknown source duration")
                 return
+            media_mapper = _SessionMediaMapper(frame_timestamps, total_sec, src_fps)
+            if media_mapper.has_timestamps and total_sec > 0:
+                logger.info(
+                    "Using %d frame timestamps to map %.3fs session timeline onto %.3fs media timeline",
+                    len(frame_timestamps or []),
+                    source_duration_ms / 1000.0,
+                    total_sec,
+                )
             output_total_sec = sum(
                 ((segment.end_ms - segment.start_ms) / 1000.0) / _segment_speed(segment)
                 for segment in segments
@@ -704,19 +796,22 @@ class VideoExporter:
             segment_outputs: List[str] = []
             cursor_node_index = 0
             for seg_index, segment in enumerate(segments):
-                start_sec = segment.start_ms / 1000.0
-                end_sec = segment.end_ms / 1000.0
-                segment_duration_sec = max(end_sec - start_sec, 0.001)
+                media_start_sec, media_end_sec, media_duration_sec = media_mapper.segment_bounds(segment)
+                segment_duration_sec = max((segment.end_ms - segment.start_ms) / 1000.0, 0.001)
+                pts_scale = segment_duration_sec / max(media_duration_sec, 0.001)
 
                 local_kfs = _local_keyframes_for_segment(keyframes, segment)
+                media_kfs = _media_keyframes_for_segment(keyframes, segment, media_mapper, media_start_sec)
                 local_clicks = local_click_sets[seg_index]
-                zoompan_filter = _build_zoompan_filter(local_kfs, src_fps)
+                zoompan_filter = _build_zoompan_filter(media_kfs, src_fps)
 
                 filter_lines.append(
-                    f"[0:v]trim=start={start_sec}:end={end_sec},setpts=PTS-STARTPTS[s{seg_index}trim]"
+                    f"[0:v]trim=start={media_start_sec:.6f}:end={media_end_sec:.6f},setpts=PTS-STARTPTS[s{seg_index}trim]"
                 )
                 filter_lines.append(f"[s{seg_index}trim]{zoompan_filter}[s{seg_index}zoom]")
-                filter_lines.append(f"[s{seg_index}zoom]scale={scr_w}:{scr_h}[s{seg_index}vid]")
+                filter_lines.append(
+                    f"[s{seg_index}zoom]scale={scr_w}:{scr_h},setpts={pts_scale:.8f}*PTS[s{seg_index}vid]"
+                )
 
                 color_args = f"color=c=0x{bg_color}:s={out_w}x{out_h}:r={src_fps}:d={segment_duration_sec}"
                 filter_lines.append(f"{color_args}[s{seg_index}bg]")
