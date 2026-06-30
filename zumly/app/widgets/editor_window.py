@@ -111,6 +111,7 @@ class EditorWindow(QWidget):
         self._editor.click_effect_changed.connect(self._on_click_effect_changed)
         self._editor.output_dimensions_changed.connect(self._on_output_dimensions_changed)
         self._editor.segment_speed_changed.connect(self._on_segment_speed_changed)
+        self._preview.play_pause_requested.connect(self._toggle_playback)
         self._timeline.segment_selected.connect(self._on_segment_selected)
         self._timeline.split_requested.connect(self._on_split_requested)
         self._timeline.range_selection_requested.connect(self._on_range_selection_requested)

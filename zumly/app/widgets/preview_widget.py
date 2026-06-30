@@ -57,6 +57,7 @@ class PreviewWidget(QWidget):
     # Playback signals
     playback_time_changed = Signal(float)
     playback_state_changed = Signal(bool)
+    play_pause_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -127,6 +128,10 @@ class PreviewWidget(QWidget):
         self._frame_timestamps: Optional[List[float]] = None  # per-frame ms offsets
         # Trim-aware playback boundary (0 = use full video duration)
         self._playback_end_ms: float = 0.0
+
+        # Simple click on the preview toggles playback.  Drag interactions
+        # below clear this candidate so annotations/centroid editing stay intact.
+        self._play_toggle_press_pos: QPointF | None = None
 
     # ── public API ──────────────────────────────────────────────────
 
@@ -241,6 +246,7 @@ class PreviewWidget(QWidget):
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
+            self._play_toggle_press_pos = None
             # Centroid-pick mode takes priority
             if self._centroid_pick_mode:
                 pan_x, pan_y = self._click_to_pan(
@@ -272,6 +278,7 @@ class PreviewWidget(QWidget):
                 self._annot_drag_offset_y = hit[3]
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 return
+            self._play_toggle_press_pos = event.position()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
@@ -286,6 +293,7 @@ class PreviewWidget(QWidget):
             return
         # Annotation drag in progress
         if self._annot_drag_id:
+            self._play_toggle_press_pos = None
             pan_x, pan_y = self._click_to_pan(
                 event.position().x(), event.position().y()
             )
@@ -321,6 +329,7 @@ class PreviewWidget(QWidget):
             event.button() == Qt.MouseButton.LeftButton
             and self._centroid_drag_kf_id
         ):
+            self._play_toggle_press_pos = None
             self._centroid_drag_kf_id = ""
             self._centroid_drag_undo_pushed = False
             self.unsetCursor()
@@ -329,12 +338,20 @@ class PreviewWidget(QWidget):
             event.button() == Qt.MouseButton.LeftButton
             and self._annot_drag_id
         ):
+            self._play_toggle_press_pos = None
             self._annot_drag_type = ""
             self._annot_drag_id = ""
             self._annot_drag_offset_x = 0.0
             self._annot_drag_offset_y = 0.0
             self.unsetCursor()
             return
+        if event.button() == Qt.MouseButton.LeftButton and self._play_toggle_press_pos is not None:
+            moved = (event.position() - self._play_toggle_press_pos).manhattanLength()
+            self._play_toggle_press_pos = None
+            if moved <= 4 and self._video_cap is not None:
+                self.play_pause_requested.emit()
+                event.accept()
+                return
         super().mouseReleaseEvent(event)
 
     def load_video(
