@@ -13,7 +13,7 @@ deletions, voiceover removals, and keyframe edits.
 import copy
 from dataclasses import dataclass, field
 from typing import List, Tuple
-from .models import ClickEvent, VideoSegment, VoiceoverSegment, ZoomKeyframe
+from .models import ClickEvent, HighlightBox, VideoSegment, VoiceoverSegment, ZoomKeyframe
 
 
 @dataclass
@@ -23,6 +23,7 @@ class _Snapshot:
     click_events: List[ClickEvent] = field(default_factory=list)
     video_segments: List[VideoSegment] = field(default_factory=list)
     voiceover_segments: List[VoiceoverSegment] = field(default_factory=list)
+    highlights: List[HighlightBox] = field(default_factory=list)
 
 
 def ease_out(t: float) -> float:
@@ -104,6 +105,7 @@ class ZoomEngine:
         self.click_events: List[ClickEvent] = []
         self.video_segments: List[VideoSegment] = []
         self.voiceover_segments: List[VoiceoverSegment] = []
+        self.highlights: List[HighlightBox] = []
         self.current_zoom: float = 1.0
         self.current_pan_x: float = 0.5
         self.current_pan_y: float = 0.5
@@ -125,6 +127,7 @@ class ZoomEngine:
             click_events=copy.deepcopy(self.click_events),
             video_segments=copy.deepcopy(self.video_segments),
             voiceover_segments=copy.deepcopy(self.voiceover_segments),
+            highlights=copy.deepcopy(self.highlights),
         )
 
     def push_undo(self) -> None:
@@ -148,6 +151,7 @@ class ZoomEngine:
         self.click_events = snap.click_events
         self.video_segments = snap.video_segments
         self.voiceover_segments = snap.voiceover_segments
+        self.highlights = snap.highlights
         return True
 
     def redo(self) -> bool:
@@ -160,6 +164,7 @@ class ZoomEngine:
         self.click_events = snap.click_events
         self.video_segments = snap.video_segments
         self.voiceover_segments = snap.voiceover_segments
+        self.highlights = snap.highlights
         return True
 
     @property

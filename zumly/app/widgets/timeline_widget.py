@@ -558,7 +558,7 @@ class _TimelineTrack(QWidget):
                 lambda checked=False, range_time=time_ms: self._handle_range_point(range_time)
             )
             if len(self.video_segments) > 1:
-                del_act = menu.addAction("Remove range selection")
+                del_act = menu.addAction("Delete selected range")
                 del_act.setIcon(load_icon("delete", color=T.DANGER))
                 del_act.triggered.connect(lambda: self._delete_selected_video_segment())
             menu.exec(self.mapToGlobal(pos))

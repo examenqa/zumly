@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, Signal, QPointF, QRectF
-from PySide6.QtGui import QImage, QPainter, QColor, QFont, QPen
+from PySide6.QtGui import QImage, QPainter, QPainterPath, QColor, QFont, QPen
 from PySide6.QtWidgets import QWidget, QMenu
 
 from ..models import (
@@ -53,6 +53,8 @@ class PreviewWidget(QWidget):
     centroid_dragged = Signal(str, float, float)
     # Signal: (annotation_type, annotation_id, new_x, new_y) — emitted when annotation dragged
     annotation_dragged = Signal(str, str, float, float)
+    # Signal: (pan_x, pan_y, shape) — emitted when highlight placement mode picks a region center
+    highlight_picked = Signal(float, float, str)
     
     # Playback signals
     playback_time_changed = Signal(float)
@@ -88,6 +90,7 @@ class PreviewWidget(QWidget):
         self._frame_preset = None  # None → use default frame
         self._click_preset = None  # None → use default click effect
         self._annotations = None  # None → no annotations
+        self._highlights: List[HighlightBox] = []
         self._key_events: list = []  # KeyEvent list for keystroke overlay
         self._keystroke_config = None  # KeystrokeOverlayConfig or None
 
@@ -100,6 +103,7 @@ class PreviewWidget(QWidget):
 
         # centroid-pick mode: when True, next left-click picks centroid
         self._centroid_pick_mode: bool = False
+        self._highlight_pick_shape: str = ""
 
         # centroid drag state (overlay markers)
         self._centroid_drag_kf_id: str = ""  # keyframe being dragged
@@ -182,6 +186,11 @@ class PreviewWidget(QWidget):
         self._annotations = annotations
         self.update()
 
+    def set_highlights(self, highlights: List[HighlightBox] | None) -> None:
+        """Set active spotlight highlights for preview rendering."""
+        self._highlights = list(highlights or [])
+        self.update()
+
     def set_keystroke_data(self, key_events: list, config) -> None:
         """Set keystroke overlay data for the compositor."""
         self._key_events = key_events or []
@@ -233,8 +242,21 @@ class PreviewWidget(QWidget):
         self.unsetCursor()
         self.update()  # remove banner
 
+    def enter_highlight_pick_mode(self, shape: str = "rect") -> None:
+        """Enter highlight placement mode: next left-click picks a region center."""
+        self._highlight_pick_shape = shape if shape in ("rect", "circle") else "rect"
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocus()
+        self.update()
+
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         """Handle Escape to cancel centroid-pick mode."""
+        if event.key() == Qt.Key.Key_Escape and self._highlight_pick_shape:
+            self._highlight_pick_shape = ""
+            self.unsetCursor()
+            self.update()
+            self.highlight_picked.emit(-1.0, -1.0, "")
+            return
         if event.key() == Qt.Key.Key_Escape and self._centroid_pick_mode:
             self._centroid_pick_mode = False
             self.unsetCursor()
@@ -247,6 +269,16 @@ class PreviewWidget(QWidget):
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
             self._play_toggle_press_pos = None
+            if self._highlight_pick_shape:
+                pan_x, pan_y = self._click_to_pan(
+                    event.position().x(), event.position().y()
+                )
+                shape = self._highlight_pick_shape
+                self._highlight_pick_shape = ""
+                self.unsetCursor()
+                if pan_x >= 0:
+                    self.highlight_picked.emit(pan_x, pan_y, shape)
+                return
             # Centroid-pick mode takes priority
             if self._centroid_pick_mode:
                 pan_x, pan_y = self._click_to_pan(
@@ -314,6 +346,8 @@ class PreviewWidget(QWidget):
             elif not self._centroid_pick_mode:
                 self.unsetCursor()
         # Hover cursor: show open hand when over a draggable annotation
+        elif self._highlight_pick_shape:
+            self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._annotations is not None:
             hit = self._annotation_hit_test(
                 event.position().x(), event.position().y()
@@ -937,11 +971,85 @@ class PreviewWidget(QWidget):
         if self._debug_overlay and self._debug_keyframes:
             self._draw_debug_overlay(painter)
 
+        if self._highlights:
+            self._draw_highlights(painter)
+
         # Centroid-pick banner
         if self._centroid_pick_mode:
             self._draw_centroid_pick_banner(painter)
 
+        if self._highlight_pick_shape:
+            self._draw_highlight_pick_banner(painter)
+
         painter.end()
+
+    def _source_point_to_widget(self, nx: float, ny: float) -> tuple[float, float]:
+        cx, cy, W, H, scr_x, scr_y, scr_w, scr_h = self._screen_geometry()
+        scene_x = scr_x + nx * scr_w
+        scene_y = scr_y + ny * scr_h
+        if self._zoom > 1.001:
+            focus_x = scr_x + self._pan_x * scr_w
+            focus_y = scr_y + self._pan_y * scr_h
+            scene_x = (scene_x - focus_x) * self._zoom + W / 2
+            scene_y = (scene_y - focus_y) * self._zoom + H / 2
+        return cx + scene_x, cy + scene_y
+
+    def _draw_highlights(self, painter: QPainter) -> None:
+        cx, cy, W, H, scr_x, scr_y, scr_w, scr_h = self._screen_geometry()
+        if W <= 0 or scr_w <= 0:
+            return
+        active = [
+            hl for hl in self._highlights
+            if float(hl.start_ms) <= self._current_time_ms <= float(hl.end_ms)
+        ]
+        if not active:
+            return
+
+        screen_rect = QRectF(cx + scr_x, cy + scr_y, scr_w, scr_h)
+        for hl in active:
+            x1, y1 = self._source_point_to_widget(float(hl.x), float(hl.y))
+            x2, y2 = self._source_point_to_widget(
+                float(hl.x) + float(hl.width),
+                float(hl.y) + float(hl.height),
+            )
+            rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)).intersected(screen_rect)
+            if rect.width() <= 1 or rect.height() <= 1:
+                continue
+
+            hole = QPainterPath()
+            if getattr(hl, "shape", "rect") == "circle":
+                hole.addEllipse(rect)
+            else:
+                hole.addRoundedRect(rect, 8, 8)
+
+            shade = QPainterPath()
+            shade.addRect(screen_rect)
+            shade = shade.subtracted(hole)
+            painter.fillPath(shade, QColor(0, 0, 0, int(max(0.0, min(0.9, hl.dim_opacity)) * 255)))
+
+            color = QColor(*hl.color)
+            color.setAlpha(max(80, min(255, int(255 * max(0.1, min(1.0, hl.opacity))))))
+            painter.setPen(QPen(color, max(2, int(hl.border_width))))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if getattr(hl, "shape", "rect") == "circle":
+                painter.drawEllipse(rect)
+            else:
+                painter.drawRoundedRect(rect, 8, 8)
+
+    def _draw_highlight_pick_banner(self, painter: QPainter) -> None:
+        text = "Click the preview to place the highlight"
+        font = QFont()
+        font.setPixelSize(13)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        width = metrics.horizontalAdvance(text) + 28
+        rect = QRectF((self.width() - width) / 2, 14, width, 32)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(20, 20, 24, 220))
+        painter.drawRoundedRect(rect, 8, 8)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     @staticmethod
     def _interactive_render_scale(canvas_w: float, canvas_h: float) -> float:

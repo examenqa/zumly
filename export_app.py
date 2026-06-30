@@ -92,6 +92,7 @@ def main() -> None:
         frame_timestamps=session.frame_timestamps,
         encoder_id="libx264",
         video_segments=session.video_segments,
+        highlights=session.highlights,
     )
 
     while not export_done[0]:

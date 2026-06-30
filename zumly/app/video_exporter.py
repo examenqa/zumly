@@ -10,7 +10,7 @@ from typing import Any, List, Optional, Callable
 
 from PIL import Image, ImageDraw
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, Chapter
+from .models import ZoomKeyframe, MousePosition, ClickEvent, HighlightBox, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, Chapter
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET
 from .frames import FramePreset, DEFAULT_FRAME
 from .utils import ffmpeg_exe as _ffmpeg_exe, subprocess_kwargs as _subprocess_kwargs
@@ -237,6 +237,53 @@ def generate_cursor_png() -> str:
     return path
 
 
+def generate_highlight_png(highlight: HighlightBox, w: int, h: int, geom: dict) -> str:
+    """Generate a timed spotlight overlay PNG for one highlight."""
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    scr_x = int(geom["scr_x"])
+    scr_y = int(geom["scr_y"])
+    scr_w = int(geom["scr_w"])
+    scr_h = int(geom["scr_h"])
+    dim_alpha = int(max(0.0, min(0.9, float(highlight.dim_opacity))) * 255)
+    draw.rectangle(
+        [scr_x, scr_y, scr_x + scr_w, scr_y + scr_h],
+        fill=(0, 0, 0, dim_alpha),
+    )
+
+    hx = int(scr_x + max(0.0, min(1.0, float(highlight.x))) * scr_w)
+    hy = int(scr_y + max(0.0, min(1.0, float(highlight.y))) * scr_h)
+    hx = max(scr_x, min(scr_x + scr_w - 1, hx))
+    hy = max(scr_y, min(scr_y + scr_h - 1, hy))
+    hw = max(1, int(max(0.0, min(1.0, float(highlight.width))) * scr_w))
+    hh = max(1, int(max(0.0, min(1.0, float(highlight.height))) * scr_h))
+    box = [hx, hy, max(hx + 1, min(scr_x + scr_w, hx + hw)), max(hy + 1, min(scr_y + scr_h, hy + hh))]
+
+    if getattr(highlight, "shape", "rect") == "circle":
+        draw.ellipse(box, fill=(0, 0, 0, 0))
+        draw.ellipse(
+            box,
+            outline=tuple(highlight.color[:3]) + (230,),
+            width=max(2, int(highlight.border_width)),
+        )
+    else:
+        radius = max(6, min(hw, hh) // 12)
+        draw.rounded_rectangle(box, radius=radius, fill=(0, 0, 0, 0))
+        draw.rounded_rectangle(
+            box,
+            radius=radius,
+            outline=tuple(highlight.color[:3]) + (230,),
+            width=max(2, int(highlight.border_width)),
+        )
+
+    f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    path = f.name
+    f.close()
+    img.save(path)
+    return path
+
+
 def _segment_speed(segment: VideoSegment) -> float:
     """Return a bounded playback speed for export retiming."""
     try:
@@ -251,19 +298,22 @@ def _segment_speed(segment: VideoSegment) -> float:
 def _normalize_video_segments(
     video_segments: Optional[List[VideoSegment]],
     duration_ms: float,
+    fill_gaps: bool = True,
 ) -> List[VideoSegment]:
-    """Return sorted, gap-filled source-time segments for export.
+    """Return source-time segments for export.
 
-    The editor is expected to keep segments contiguous, but the exporter treats
-    JSON as an IPC boundary and defensively fills gaps at 1x so source material
-    is not silently dropped.
+    With editor-authored segments, list order is the output order and gaps are
+    real cuts. Legacy/no-segment payloads still get one full-duration segment.
     """
     duration_ms = max(float(duration_ms or 0.0), 0.0)
     if duration_ms <= 0:
         return []
 
     valid: List[VideoSegment] = []
-    for segment in sorted(video_segments or [], key=lambda s: float(s.start_ms)):
+    source_segments = list(video_segments or [])
+    if fill_gaps:
+        source_segments.sort(key=lambda s: float(s.start_ms))
+    for segment in source_segments:
         start = max(0.0, min(float(segment.start_ms), duration_ms))
         end = max(0.0, min(float(segment.end_ms), duration_ms))
         if end <= start:
@@ -277,7 +327,9 @@ def _normalize_video_segments(
             )
         )
 
-    if not valid:
+    if not valid or not fill_gaps:
+        if valid:
+            return valid
         return [VideoSegment.create(0.0, duration_ms, 1.0)]
 
     normalized: List[VideoSegment] = []
@@ -323,6 +375,27 @@ def _local_clicks_for_segment(
         for click in (click_events or [])
         if segment.start_ms <= float(click.timestamp) < segment.end_ms
     ]
+
+
+def _local_highlights_for_segment(
+    highlights: Optional[List[HighlightBox]],
+    segment: VideoSegment,
+) -> List[HighlightBox]:
+    """Filter absolute highlights into a segment-local zero timeline."""
+    local: List[HighlightBox] = []
+    for highlight in highlights or []:
+        start = max(float(highlight.start_ms), float(segment.start_ms))
+        end = min(float(highlight.end_ms), float(segment.end_ms))
+        if end <= start:
+            continue
+        local.append(
+            replace(
+                highlight,
+                start_ms=start - float(segment.start_ms),
+                end_ms=end - float(segment.start_ms),
+            )
+        )
+    return local
 
 
 def _build_zoompan_filter(keyframes: List[ZoomKeyframe], fps: float) -> str:
@@ -393,15 +466,16 @@ class VideoExporter:
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
         video_segments: Optional[List[VideoSegment]] = None,
         chapters: Optional[List[Chapter]] = None,
+        highlights: Optional[List[HighlightBox]] = None,
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments),
+            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments, highlights),
             daemon=True,
         )
         self._thread.start()
 
-    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]]):
+    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]], highlights: Optional[List[HighlightBox]]):
         temp_files = []
         try:
             if self._status_cb: self._status_cb("Starting export...")
@@ -467,7 +541,12 @@ class VideoExporter:
             temp_files.append(frame_img_path)
 
             source_duration_ms = duration_ms or (total_sec * 1000.0)
-            segments = _normalize_video_segments(video_segments, source_duration_ms)
+            explicit_segments = video_segments is not None
+            segments = _normalize_video_segments(
+                video_segments,
+                source_duration_ms,
+                fill_gaps=not explicit_segments,
+            )
             if not segments:
                 if self._error_cb:
                     self._error_cb("Export failed: unknown source duration")
@@ -477,7 +556,13 @@ class VideoExporter:
                 for segment in segments
             )
             has_speed_changes = any(abs(_segment_speed(segment) - 1.0) > 0.01 for segment in segments)
+            has_timeline_edits = explicit_segments and (
+                len(segments) != 1
+                or abs(segments[0].start_ms) > 0.5
+                or abs(segments[0].end_ms - source_duration_ms) > 0.5
+            )
             local_click_sets = [_local_clicks_for_segment(click_events, segment) for segment in segments]
+            local_highlight_sets = [_local_highlights_for_segment(highlights, segment) for segment in segments]
             local_click_count = sum(len(items) for items in local_click_sets)
 
             click_img_path = None
@@ -493,6 +578,18 @@ class VideoExporter:
             if local_click_count > 0:
                 cursor_img_path = generate_cursor_png()
                 temp_files.append(cursor_img_path)
+
+            highlight_base_input = 2 + (1 if click_img_path else 0) + (1 if cursor_img_path else 0)
+            highlight_img_paths: List[str] = []
+            local_highlight_assets: list[list[tuple[HighlightBox, int]]] = []
+            for local_highlights in local_highlight_sets:
+                asset_rows: list[tuple[HighlightBox, int]] = []
+                for highlight in local_highlights:
+                    highlight_path = generate_highlight_png(highlight, out_w, out_h, geom)
+                    temp_files.append(highlight_path)
+                    asset_rows.append((highlight, highlight_base_input + len(highlight_img_paths)))
+                    highlight_img_paths.append(highlight_path)
+                local_highlight_assets.append(asset_rows)
 
             filter_lines = []
 
@@ -596,6 +693,18 @@ class VideoExporter:
                         current_comp_node = next_node
                         cursor_node_index += 1
 
+                for highlight, input_index in local_highlight_assets[seg_index]:
+                    t_s = max(float(highlight.start_ms) / 1000.0, 0.0)
+                    t_e = min(float(highlight.end_ms) / 1000.0, segment_duration_sec)
+                    if t_e <= t_s:
+                        continue
+                    next_node = f"s{seg_index}highlight{input_index}"
+                    filter_lines.append(
+                        f"[{current_comp_node}][{input_index}:v]overlay=x=0:y=0:"
+                        f"enable='between(t,{t_s},{t_e})'[{next_node}]"
+                    )
+                    current_comp_node = next_node
+
                 framed_node = f"s{seg_index}framed"
                 filter_lines.append(f"[{current_comp_node}][fr{seg_index}]overlay=x=0:y=0[{framed_node}]")
 
@@ -634,6 +743,8 @@ class VideoExporter:
                 cmd.extend(["-loop", "1", "-i", click_img_path])
             if cursor_img_path:
                 cmd.extend(["-loop", "1", "-i", cursor_img_path])
+            for highlight_path in highlight_img_paths:
+                cmd.extend(["-loop", "1", "-i", highlight_path])
                 
             cmd.extend([
                 "-filter_complex_script", graph_path,
@@ -641,8 +752,8 @@ class VideoExporter:
                 "-c:v", "libx264",
                 "-preset", "fast",
             ])
-            if has_speed_changes:
-                logger.info("Speed-adjusted export: dropping source audio for MVP segment retiming")
+            if has_speed_changes or has_timeline_edits:
+                logger.info("Timeline-edited export: dropping source audio for MVP segment retiming/cuts")
             else:
                 cmd.extend([
                     "-map", "0:a?",  # Explicitly map audio from input 0, use ? in case it has no audio

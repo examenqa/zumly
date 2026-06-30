@@ -284,6 +284,7 @@ class RecordingSession:
     voiceover_segments: List["VoiceoverSegment"] | None = None
     video_segments: List["VideoSegment"] | None = None
     chapters: List["Chapter"] | None = None
+    highlights: List["HighlightBox"] | None = None
     
     # Aesthetic settings
     background_id: str | None = None
@@ -314,6 +315,8 @@ class RecordingSession:
             data["videoSegments"] = [s.to_dict() for s in self.video_segments]
         if self.chapters:
             data["chapters"] = [c.to_dict() for c in self.chapters]
+        if self.highlights:
+            data["highlights"] = [h.to_dict() for h in self.highlights]
             
         # Add aesthetic settings if they exist
         if self.background_id:
@@ -370,6 +373,10 @@ class RecordingSession:
         if "chapters" in d:
             chapters = [Chapter.from_dict(c) for c in d["chapters"]]
 
+        highlights = None
+        if "highlights" in d:
+            highlights = [HighlightBox.from_dict(h) for h in d["highlights"]]
+
         return RecordingSession(
             id=session_id,
             start_time=start_time,
@@ -384,6 +391,7 @@ class RecordingSession:
             voiceover_segments=voiceover_segments,
             video_segments=video_segments,
             chapters=chapters,
+            highlights=highlights,
             background_id=d.get("backgroundId"),
             frame_id=d.get("frameId"),
             click_effect_id=d.get("clickEffectId"),
@@ -789,10 +797,10 @@ class ArrowAnnotation:
 
 @dataclass
 class HighlightBox:
-    """A highlight box annotation to emphasize a rectangular area.
+    """A spotlight highlight annotation to emphasize a region.
     
-    Highlight boxes draw semi-transparent rectangles to draw attention to
-    specific UI elements or regions.
+    Highlights dim the surrounding screen and leave a rectangular or
+    circular region visually emphasized.
     """
     id: str
     start_ms: float
@@ -804,6 +812,8 @@ class HighlightBox:
     color: tuple[int, int, int, int] = (255, 204, 0, 100)  # RGBA (yellow, semi-transparent)
     opacity: float = 0.4  # 0.0 - 1.0
     border_width: int = 2
+    shape: str = "rect"  # "rect" or "circle"
+    dim_opacity: float = 0.58
     
     @staticmethod
     def create(
@@ -816,6 +826,8 @@ class HighlightBox:
         color: tuple[int, int, int, int] = (255, 204, 0, 100),
         opacity: float = 0.4,
         border_width: int = 2,
+        shape: str = "rect",
+        dim_opacity: float = 0.58,
     ) -> "HighlightBox":
         """Factory that auto-generates a UUID."""
         return HighlightBox(
@@ -829,6 +841,8 @@ class HighlightBox:
             color=color,
             opacity=opacity,
             border_width=border_width,
+            shape=shape if shape in ("rect", "circle") else "rect",
+            dim_opacity=max(0.0, min(0.9, float(dim_opacity))),
         )
     
     def to_dict(self) -> dict:
@@ -844,6 +858,8 @@ class HighlightBox:
             "color": list(self.color),
             "opacity": self.opacity,
             "borderWidth": self.border_width,
+            "shape": self.shape,
+            "dimOpacity": self.dim_opacity,
         }
     
     @staticmethod
@@ -861,6 +877,8 @@ class HighlightBox:
                 color=tuple(d.get("color", [255, 204, 0, 100])),
                 opacity=d.get("opacity", 0.4),
                 border_width=d.get("borderWidth", 2),
+                shape=d.get("shape", "rect") if d.get("shape", "rect") in ("rect", "circle") else "rect",
+                dim_opacity=d.get("dimOpacity", 0.58),
             )
         except KeyError as exc:
             raise ValueError(f"HighlightBox missing required field: {exc}") from exc

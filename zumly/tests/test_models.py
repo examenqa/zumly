@@ -339,6 +339,34 @@ class TestRecordingSession:
         d = json.loads(session.to_json())
         assert "voiceoverSegments" not in d
 
+    def test_json_roundtrip_highlights(self) -> None:
+        highlight = HighlightBox.create(
+            start_ms=1000,
+            end_ms=3500,
+            x=0.2,
+            y=0.3,
+            width=0.4,
+            height=0.25,
+            shape="circle",
+            dim_opacity=0.65,
+        )
+        session = RecordingSession(
+            id="hl",
+            start_time=0,
+            duration=5000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+            highlights=[highlight],
+        )
+
+        data = json.loads(session.to_json())
+        loaded = RecordingSession.from_json(session.to_json())
+
+        assert data["highlights"][0]["shape"] == "circle"
+        assert loaded.highlights is not None
+        assert loaded.highlights[0].shape == "circle"
+        assert loaded.highlights[0].dim_opacity == 0.65
+
 
 # ── VoiceoverSegment ────────────────────────────────────────────────
 

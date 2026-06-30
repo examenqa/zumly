@@ -7,7 +7,8 @@ Qt or actual video files.
 import pytest
 import numpy as np
 
-from app.video_exporter import GeometryComputer, VideoProbeResult, GeometryResult
+from app.models import VideoSegment
+from app.video_exporter import GeometryComputer, VideoProbeResult, GeometryResult, _normalize_video_segments
 from app.frames import FramePreset, DEFAULT_FRAME, FRAME_PRESETS
 from app.backgrounds import PRESETS as BACKGROUND_PRESETS
 
@@ -218,6 +219,32 @@ class TestVideoProbeResult:
         assert result.out_h == 1080
         assert result.fps == 30.0
         assert result.is_gif is False
+
+
+class TestVideoSegments:
+    def test_explicit_segments_preserve_order_and_gaps(self):
+        segments = [
+            VideoSegment.create(5000.0, 8000.0, 2.0),
+            VideoSegment.create(1000.0, 2000.0, 1.0),
+        ]
+
+        normalized = _normalize_video_segments(segments, 10000.0, fill_gaps=False)
+
+        assert [(s.start_ms, s.end_ms, s.speed) for s in normalized] == [
+            (5000.0, 8000.0, 2.0),
+            (1000.0, 2000.0, 1.0),
+        ]
+
+    def test_legacy_segments_fill_gaps(self):
+        segments = [VideoSegment.create(3000.0, 5000.0, 1.0)]
+
+        normalized = _normalize_video_segments(segments, 7000.0, fill_gaps=True)
+
+        assert [(s.start_ms, s.end_ms) for s in normalized] == [
+            (0.0, 3000.0),
+            (3000.0, 5000.0),
+            (5000.0, 7000.0),
+        ]
 
 
 class TestGeometryResult:

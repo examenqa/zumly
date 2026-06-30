@@ -16,6 +16,9 @@ class _StubPreview:
     def set_debug_keyframes(self, keyframes):
         self.keyframes = keyframes
 
+    def set_highlights(self, highlights):
+        self.highlights = highlights or []
+
     def set_zoom(self, zoom, pan_x, pan_y):
         self.zoom = (zoom, pan_x, pan_y)
 
@@ -36,6 +39,10 @@ class _StubEditor:
     def set_selected_segment_speed(self, speed, index=-1):
         self.speed = speed
         self.index = index
+
+    def set_range_actions_enabled(self, has_selection, can_paste=False):
+        self.has_selection = has_selection
+        self.can_paste = can_paste
 
     def refresh(self, **kwargs):
         self.info = kwargs
@@ -69,6 +76,8 @@ def _window_with_state(
     window._zoom_engine.keyframes = window._session.keyframes
     window._zoom_engine.video_segments = window._session.video_segments or []
     window._selected_video_segment_index = -1
+    window._video_segment_clipboard = None
+    window._pending_highlight_shape = "rect"
     window._timeline_drag_undo_pushed = False
     window._project_path = None
     window._project_data = {}
@@ -181,3 +190,64 @@ def test_undo_redo_restores_range_speed_state() -> None:
     EditorWindow._on_redo_requested(window)
 
     assert window._session.video_segments[0].speed == 4.0
+
+
+def test_delete_selected_range_removes_segment_without_merging_neighbors() -> None:
+    window = _window_with_segments(
+        [
+            VideoSegment.create(0.0, 2000.0, 1.0),
+            VideoSegment.create(2000.0, 5000.0, 1.0),
+            VideoSegment.create(5000.0, 10000.0, 1.0),
+        ]
+    )
+    window._selected_video_segment_index = 1
+
+    EditorWindow._on_segment_delete_requested(window)
+
+    assert [(s.start_ms, s.end_ms) for s in window._session.video_segments] == [
+        (0.0, 2000.0),
+        (5000.0, 10000.0),
+    ]
+    assert window._selected_video_segment_index == 1
+
+
+def test_copy_paste_preserves_order_and_allows_duplicate_source_range() -> None:
+    window = _window_with_segments(
+        [
+            VideoSegment.create(0.0, 2000.0, 1.0),
+            VideoSegment.create(2000.0, 5000.0, 4.0),
+            VideoSegment.create(5000.0, 10000.0, 1.0),
+        ]
+    )
+    window._selected_video_segment_index = 1
+
+    EditorWindow._on_segment_copy_requested(window)
+    EditorWindow._on_segment_paste_requested(window)
+
+    assert [(s.start_ms, s.end_ms, s.speed) for s in window._session.video_segments] == [
+        (0.0, 2000.0, 1.0),
+        (2000.0, 5000.0, 4.0),
+        (2000.0, 5000.0, 4.0),
+        (5000.0, 10000.0, 1.0),
+    ]
+    assert window._selected_video_segment_index == 2
+
+
+def test_cut_copies_then_removes_selected_range() -> None:
+    window = _window_with_segments(
+        [
+            VideoSegment.create(0.0, 3000.0, 1.0),
+            VideoSegment.create(3000.0, 7000.0, 2.0),
+            VideoSegment.create(7000.0, 10000.0, 1.0),
+        ]
+    )
+    window._selected_video_segment_index = 1
+
+    EditorWindow._on_segment_cut_requested(window)
+
+    assert window._video_segment_clipboard is not None
+    assert (window._video_segment_clipboard.start_ms, window._video_segment_clipboard.end_ms) == (3000.0, 7000.0)
+    assert [(s.start_ms, s.end_ms) for s in window._session.video_segments] == [
+        (0.0, 3000.0),
+        (7000.0, 10000.0),
+    ]

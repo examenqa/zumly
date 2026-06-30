@@ -271,6 +271,11 @@ class EditorPanel(QWidget):
     chapter_added = Signal(object)               # Chapter object
     chapter_removed = Signal(int)                # chapter timestamp_ms
     segment_speed_changed = Signal(float)        # selected video segment speed
+    segment_cut_requested = Signal()
+    segment_copy_requested = Signal()
+    segment_paste_requested = Signal()
+    segment_delete_requested = Signal()
+    highlight_add_requested = Signal(str)        # shape: "rect" or "circle"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -670,6 +675,41 @@ class EditorPanel(QWidget):
         self._speed_combo.setToolTip("Select a range in the timeline, then choose its playback speed.")
         retime_lay.addWidget(self._speed_combo)
 
+        range_action_row = QHBoxLayout()
+        range_action_row.setSpacing(T.SPACE_XS)
+        self._btn_range_cut = QPushButton("Cut")
+        self._btn_range_cut.setObjectName("CtrlBtn")
+        self._btn_range_cut.setFixedHeight(30)
+        self._btn_range_cut.clicked.connect(self.segment_cut_requested.emit)
+        range_action_row.addWidget(self._btn_range_cut, 1)
+
+        self._btn_range_copy = QPushButton("Copy")
+        self._btn_range_copy.setObjectName("CtrlBtn")
+        self._btn_range_copy.setFixedHeight(30)
+        self._btn_range_copy.clicked.connect(self.segment_copy_requested.emit)
+        range_action_row.addWidget(self._btn_range_copy, 1)
+
+        self._btn_range_paste = QPushButton("Paste")
+        self._btn_range_paste.setObjectName("CtrlBtn")
+        self._btn_range_paste.setFixedHeight(30)
+        self._btn_range_paste.clicked.connect(self.segment_paste_requested.emit)
+        range_action_row.addWidget(self._btn_range_paste, 1)
+        retime_lay.addLayout(range_action_row)
+
+        self._btn_range_delete = QPushButton("Delete selected range")
+        self._btn_range_delete.setObjectName("CtrlBtn")
+        self._btn_range_delete.setFixedHeight(32)
+        self._btn_range_delete.clicked.connect(self.segment_delete_requested.emit)
+        retime_lay.addWidget(self._btn_range_delete)
+
+        for button in (
+            self._btn_range_cut,
+            self._btn_range_copy,
+            self._btn_range_paste,
+            self._btn_range_delete,
+        ):
+            button.setEnabled(False)
+
         self._retime_status = QLabel("Select a range in the timeline")
         self._retime_status.setObjectName("Secondary")
         self._retime_status.setWordWrap(True)
@@ -677,6 +717,41 @@ class EditorPanel(QWidget):
 
         self._retiming_section = _CollapsibleSection("SELECTED RANGE", retime_body, collapsed=True)
         self._container.addWidget(self._retiming_section)
+
+        # ── Highlights (collapsible) ────────────────────────────────
+        highlight_body = QWidget()
+        highlight_lay = QVBoxLayout(highlight_body)
+        highlight_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
+        highlight_lay.setSpacing(T.SPACE_SM)
+
+        highlight_row = QHBoxLayout()
+        highlight_row.setSpacing(T.SPACE_SM)
+        highlight_label = QLabel("Shape")
+        highlight_label.setObjectName("Secondary")
+        highlight_label.setFixedWidth(48)
+        highlight_row.addWidget(highlight_label)
+
+        self._highlight_shape_combo = QComboBox()
+        self._highlight_shape_combo.setObjectName("DepthCombo")
+        self._highlight_shape_combo.setFixedHeight(30)
+        self._highlight_shape_combo.addItem("Rectangle", "rect")
+        self._highlight_shape_combo.addItem("Circle", "circle")
+        highlight_row.addWidget(self._highlight_shape_combo, 1)
+        highlight_lay.addLayout(highlight_row)
+
+        self._btn_add_highlight = QPushButton("Place highlight on preview")
+        self._btn_add_highlight.setObjectName("CtrlBtn")
+        self._btn_add_highlight.setFixedHeight(34)
+        self._btn_add_highlight.clicked.connect(self._on_add_highlight)
+        highlight_lay.addWidget(self._btn_add_highlight)
+
+        self._highlight_status = QLabel("Click the preview after choosing Place highlight.")
+        self._highlight_status.setObjectName("Secondary")
+        self._highlight_status.setWordWrap(True)
+        highlight_lay.addWidget(self._highlight_status)
+
+        self._highlight_section = _CollapsibleSection("HIGHLIGHTS", highlight_body, collapsed=True)
+        self._container.addWidget(self._highlight_section)
 
         # ── Output dimensions (collapsible) ──────────────────────────
         dim_body = QWidget()
@@ -1385,6 +1460,7 @@ class EditorPanel(QWidget):
         if speed is None:
             self._retime_status.setText("Select a range in the timeline")
             self._speed_combo.setCurrentIndex(0)
+            self.set_range_actions_enabled(False, self._btn_range_paste.isEnabled())
         else:
             best_index = 0
             best_delta = float("inf")
@@ -1401,5 +1477,19 @@ class EditorPanel(QWidget):
             else:
                 self._retime_status.setText(f"Selected range speed: {label}")
             self._retiming_section.expand()
+            self.set_range_actions_enabled(True, self._btn_range_paste.isEnabled())
         self._speed_combo.blockSignals(False)
+
+    def _on_add_highlight(self) -> None:
+        shape = self._highlight_shape_combo.currentData() or "rect"
+        self._highlight_section.expand()
+        self._highlight_status.setText("Click the preview where the highlight should appear.")
+        self.highlight_add_requested.emit(str(shape))
+
+    def set_range_actions_enabled(self, has_selection: bool, can_paste: bool = False) -> None:
+        """Enable selected-range editing buttons from the editor window."""
+        self._btn_range_cut.setEnabled(has_selection)
+        self._btn_range_copy.setEnabled(has_selection)
+        self._btn_range_delete.setEnabled(has_selection)
+        self._btn_range_paste.setEnabled(can_paste)
 

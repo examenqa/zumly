@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from .editor_panel import EditorPanel
 from .preview_widget import PreviewWidget
 from .timeline_widget import TimelineWidget
-from ..models import RecordingSession, VideoSegment
+from ..models import HighlightBox, RecordingSession, VideoSegment
 from ..theme import get_theme
 from .. import tokens as T
 
@@ -111,9 +111,15 @@ class EditorWindow(QWidget):
         self._editor.click_effect_changed.connect(self._on_click_effect_changed)
         self._editor.output_dimensions_changed.connect(self._on_output_dimensions_changed)
         self._editor.segment_speed_changed.connect(self._on_segment_speed_changed)
+        self._editor.segment_cut_requested.connect(self._on_segment_cut_requested)
+        self._editor.segment_copy_requested.connect(self._on_segment_copy_requested)
+        self._editor.segment_paste_requested.connect(self._on_segment_paste_requested)
+        self._editor.segment_delete_requested.connect(self._on_segment_delete_requested)
+        self._editor.highlight_add_requested.connect(self._on_highlight_add_requested)
         self._editor.undo_requested.connect(self._on_undo_requested)
         self._editor.redo_requested.connect(self._on_redo_requested)
         self._preview.play_pause_requested.connect(self._toggle_playback)
+        self._preview.highlight_picked.connect(self._on_highlight_picked)
         self._timeline.segment_selected.connect(self._on_segment_selected)
         self._timeline.split_requested.connect(self._on_split_requested)
         self._timeline.range_selection_requested.connect(self._on_range_selection_requested)
@@ -132,6 +138,8 @@ class EditorWindow(QWidget):
         self._session = None
         self._project_data = {}
         self._selected_video_segment_index = -1
+        self._video_segment_clipboard: VideoSegment | None = None
+        self._pending_highlight_shape = "rect"
         self._timeline_drag_undo_pushed = False
         
         self._load_project()
@@ -160,6 +168,7 @@ class EditorWindow(QWidget):
             # Load zoom engine data
             self._zoom_engine.keyframes = self._session.keyframes
             self._zoom_engine.click_events = self._session.click_events
+            self._zoom_engine.highlights = self._session.highlights or []
             if hasattr(self._session, 'voiceover_segments'):
                 self._zoom_engine.voiceover_segments = self._session.voiceover_segments
             if hasattr(self._session, 'video_segments'):
@@ -179,6 +188,7 @@ class EditorWindow(QWidget):
             self._zoom_engine.video_segments = self._session.video_segments
             self._preview.set_debug_keyframes(self._session.keyframes)
             self._preview.set_video_segments(self._session.video_segments)
+            self._preview.set_highlights(self._session.highlights)
             self._preview.set_cursor_data(
                 self._session.mouse_track,
                 self._project_data.get("monitorRect", {}),
@@ -241,6 +251,7 @@ class EditorWindow(QWidget):
         self._zoom_engine.click_events = self._session.click_events or []
         self._zoom_engine.video_segments = self._session.video_segments or []
         self._zoom_engine.voiceover_segments = self._session.voiceover_segments or []
+        self._zoom_engine.highlights = self._session.highlights or []
 
     def _push_undo_snapshot(self, once_per_drag: bool = False) -> None:
         if not self._session:
@@ -282,12 +293,14 @@ class EditorWindow(QWidget):
         self._session.click_events = self._zoom_engine.click_events
         self._session.video_segments = self._zoom_engine.video_segments
         self._session.voiceover_segments = self._zoom_engine.voiceover_segments
+        self._session.highlights = self._zoom_engine.highlights
         self._preview.set_cursor_data(
             self._session.mouse_track,
             self._project_data.get("monitorRect", {}),
             self._session.click_events,
         )
         self._refresh_zoom_timeline(save=False)
+        self._preview.set_highlights(self._session.highlights)
         self._sync_video_segments(self._selected_video_segment_index, save=False)
         self._refresh_editor_info()
         self._update_undo_redo_controls()
@@ -481,7 +494,6 @@ class EditorWindow(QWidget):
                 segments.append(seg)
         if not segments and duration > 0:
             segments = [VideoSegment.create(0.0, duration, 1.0)]
-        segments.sort(key=lambda s: s.start_ms)
         self._session.video_segments = segments
 
     def _find_video_segment_index(self, time_ms: float) -> int:
@@ -495,7 +507,7 @@ class EditorWindow(QWidget):
     def _sync_video_segments(self, selected_index: int | None = None, save: bool = True) -> None:
         if not self._session:
             return
-        self._session.video_segments = sorted(self._session.video_segments or [], key=lambda s: s.start_ms)
+        self._session.video_segments = list(self._session.video_segments or [])
         if selected_index is not None:
             self._selected_video_segment_index = selected_index
         if self._session.video_segments:
@@ -513,6 +525,11 @@ class EditorWindow(QWidget):
             self._editor.set_selected_segment_speed(seg.speed, self._selected_video_segment_index)
         else:
             self._editor.set_selected_segment_speed(None)
+        if hasattr(self._editor, "set_range_actions_enabled"):
+            self._editor.set_range_actions_enabled(
+                self._selected_video_segment_index >= 0,
+                self._video_segment_clipboard is not None,
+            )
         self._refresh_editor_info()
         self._update_undo_redo_controls()
         if save:
@@ -522,12 +539,14 @@ class EditorWindow(QWidget):
         if not self._session or not self._session.video_segments:
             self._selected_video_segment_index = -1
             self._editor.set_selected_segment_speed(None)
+            self._editor.set_range_actions_enabled(False, self._video_segment_clipboard is not None)
             return
         if index < 0 or index >= len(self._session.video_segments):
             return
         self._selected_video_segment_index = index
         seg = self._session.video_segments[index]
         self._editor.set_selected_segment_speed(seg.speed, index)
+        self._editor.set_range_actions_enabled(True, self._video_segment_clipboard is not None)
 
     def _on_segment_speed_changed(self, speed: float) -> None:
         if not self._session or not self._session.video_segments:
@@ -634,15 +653,91 @@ class EditorWindow(QWidget):
         if idx < 0 or len(segments) <= 1:
             return
         self._push_undo_snapshot()
-        if idx > 0:
-            segments[idx - 1].end_ms = segments[idx].end_ms
-            del segments[idx]
-            next_selected = idx - 1
-        else:
-            segments[1].start_ms = segments[0].start_ms
-            del segments[0]
-            next_selected = 0
+        del segments[idx]
+        next_selected = min(idx, len(segments) - 1)
         self._sync_video_segments(next_selected, save=True)
+
+    def _selected_video_segment(self) -> VideoSegment | None:
+        if not self._session or not self._session.video_segments:
+            return None
+        idx = self._selected_video_segment_index
+        if idx < 0 or idx >= len(self._session.video_segments):
+            return None
+        return self._session.video_segments[idx]
+
+    def _clone_video_segment(self, segment: VideoSegment) -> VideoSegment:
+        return VideoSegment.create(
+            float(segment.start_ms),
+            float(segment.end_ms),
+            max(0.1, min(10.0, float(segment.speed))),
+        )
+
+    def _on_segment_copy_requested(self) -> None:
+        segment = self._selected_video_segment()
+        if not segment:
+            return
+        self._video_segment_clipboard = self._clone_video_segment(segment)
+        self._editor.set_range_actions_enabled(True, True)
+
+    def _on_segment_cut_requested(self) -> None:
+        segment = self._selected_video_segment()
+        if not segment:
+            return
+        self._video_segment_clipboard = self._clone_video_segment(segment)
+        self._editor.set_range_actions_enabled(True, True)
+        self._on_segment_delete_requested()
+
+    def _on_segment_paste_requested(self) -> None:
+        if not self._session or not self._video_segment_clipboard:
+            return
+        self._ensure_video_segments(getattr(self._preview, "_video_duration_ms", self._session.duration))
+        insert_at = self._selected_video_segment_index + 1
+        if insert_at <= 0:
+            insert_at = len(self._session.video_segments or [])
+        self._push_undo_snapshot()
+        cloned = self._clone_video_segment(self._video_segment_clipboard)
+        self._session.video_segments.insert(insert_at, cloned)
+        self._sync_video_segments(insert_at, save=True)
+
+    def _on_segment_delete_requested(self) -> None:
+        segment = self._selected_video_segment()
+        if not segment:
+            return
+        self._on_video_segment_deleted(segment.id)
+
+    def _on_highlight_add_requested(self, shape: str) -> None:
+        self._pending_highlight_shape = shape if shape in ("rect", "circle") else "rect"
+        self._preview.enter_highlight_pick_mode(self._pending_highlight_shape)
+
+    def _on_highlight_picked(self, pan_x: float, pan_y: float, shape: str) -> None:
+        if not self._session or pan_x < 0.0 or pan_y < 0.0:
+            return
+        duration = float(getattr(self._preview, "_video_duration_ms", self._session.duration) or self._session.duration)
+        start_ms = max(0.0, min(float(getattr(self._preview, "_current_time_ms", 0.0)), max(duration - 250.0, 0.0)))
+        end_ms = min(duration if duration > 0 else start_ms + 2500.0, start_ms + 2500.0)
+        width = 0.26 if shape == "circle" else 0.30
+        height = 0.26 if shape == "circle" else 0.18
+        x = max(0.0, min(1.0 - width, float(pan_x) - width / 2.0))
+        y = max(0.0, min(1.0 - height, float(pan_y) - height / 2.0))
+
+        self._push_undo_snapshot()
+        highlights = list(self._session.highlights or [])
+        highlights.append(
+            HighlightBox.create(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                shape=shape if shape in ("rect", "circle") else "rect",
+            )
+        )
+        self._session.highlights = highlights
+        self._zoom_engine.highlights = highlights
+        self._preview.set_highlights(highlights)
+        self._update_undo_redo_controls()
+        self._save_project()
 
     def _save_project(self):
         if not self._project_path or not self._session:
