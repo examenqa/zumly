@@ -154,6 +154,172 @@ def draw_cursor_cv(
     np.copyto(roi, blended.astype(np.uint8))
 
 
+# ── QPainter-based cursor/click effects (for editor preview) ────────
+
+
+def _screen_point(
+    x: float,
+    y: float,
+    mon_left: float,
+    mon_top: float,
+    mon_w: float,
+    mon_h: float,
+    screen_x: float,
+    screen_y: float,
+    screen_w: float,
+    screen_h: float,
+) -> Tuple[float, float]:
+    """Map an absolute monitor coordinate into the composed screen rect."""
+    px = screen_x + ((x - mon_left) / max(mon_w, 1.0)) * screen_w
+    py = screen_y + ((y - mon_top) / max(mon_h, 1.0)) * screen_h
+    return px, py
+
+
+def _monitor_bounds(monitor_rect: dict) -> Tuple[float, float, float, float]:
+    """Return monitor bounds from project JSON, accepting common key names."""
+    left = float(monitor_rect.get("left", monitor_rect.get("x", 0.0)))
+    top = float(monitor_rect.get("top", monitor_rect.get("y", 0.0)))
+    width = float(monitor_rect.get("width", monitor_rect.get("w", 1.0)))
+    height = float(monitor_rect.get("height", monitor_rect.get("h", 1.0)))
+    return left, top, max(width, 1.0), max(height, 1.0)
+
+
+def draw_cursor_qpainter(
+    painter,
+    track: List[MousePosition],
+    time_ms: float,
+    monitor_rect: dict,
+    screen_x: float,
+    screen_y: float,
+    screen_w: float,
+    screen_h: float,
+) -> None:
+    """Draw the recorded cursor in the editor preview using QPainter."""
+    pos = _interp_mouse(track, time_ms)
+    if pos is None:
+        return
+
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QColor, QPainterPath, QPen, QBrush
+
+    mon_left, mon_top, mon_w, mon_h = _monitor_bounds(monitor_rect)
+    px, py = _screen_point(
+        pos[0], pos[1], mon_left, mon_top, mon_w, mon_h,
+        screen_x, screen_y, screen_w, screen_h,
+    )
+
+    size = max(16.0, min(34.0, screen_h * 0.035))
+    scale = size / 20.0
+    points = [
+        QPointF(px, py),
+        QPointF(px, py + 17 * scale),
+        QPointF(px + 4 * scale, py + 13 * scale),
+        QPointF(px + 7 * scale, py + 20 * scale),
+        QPointF(px + 9 * scale, py + 19 * scale),
+        QPointF(px + 6 * scale, py + 12 * scale),
+        QPointF(px + 12 * scale, py + 12 * scale),
+    ]
+
+    path = QPainterPath(points[0])
+    for point in points[1:]:
+        path.lineTo(point)
+    path.closeSubpath()
+
+    painter.save()
+    painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(QColor(0, 0, 0, CURSOR_SHADOW_ALPHA)))
+    painter.translate(1.8 * scale, 2.2 * scale)
+    painter.drawPath(path)
+    painter.translate(-1.8 * scale, -2.2 * scale)
+    painter.setPen(QPen(QColor(*CURSOR_OUTLINE), max(CURSOR_OUTLINE_W * scale, 1.0)))
+    painter.setBrush(QBrush(QColor(*CURSOR_COLOR)))
+    painter.drawPath(path)
+    painter.restore()
+
+
+def draw_clicks_qpainter(
+    painter,
+    click_events: List[ClickEvent],
+    time_ms: float,
+    monitor_rect: dict,
+    screen_x: float,
+    screen_y: float,
+    screen_w: float,
+    screen_h: float,
+    preset: Optional[ClickEffectPreset] = None,
+) -> None:
+    """Draw click effects in the editor preview using QPainter."""
+    if not click_events:
+        return
+    if preset is None:
+        preset = DEFAULT_CLICK_EFFECT
+    if preset.color[3] == 0 or preset.duration_ms <= 0:
+        return
+
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QColor, QPen, QBrush
+
+    mon_left, mon_top, mon_w, mon_h = _monitor_bounds(monitor_rect)
+    base_color = QColor(*preset.color)
+    style = preset.style if preset.style in ("ripple", "burst", "highlight") else "ripple"
+    max_r = max(float(preset.radius), screen_h * 0.025)
+    window_start = time_ms - preset.duration_ms
+
+    painter.save()
+    painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+    for click in click_events:
+        if click.timestamp < window_start or click.timestamp > time_ms:
+            continue
+        age = time_ms - click.timestamp
+        if age < 0 or age > preset.duration_ms:
+            continue
+        t = age / preset.duration_ms
+        px, py = _screen_point(
+            click.x, click.y, mon_left, mon_top, mon_w, mon_h,
+            screen_x, screen_y, screen_w, screen_h,
+        )
+        point = QPointF(px, py)
+
+        if style == "burst":
+            alpha = int(base_color.alpha() * (1.0 - t))
+            if alpha <= 8:
+                continue
+            color = QColor(base_color)
+            color.setAlpha(alpha)
+            painter.setPen(QPen(color, max(1.5, 3.0 * (1.0 - t)), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            inner_r = max_r * 0.22 * (1.0 + t)
+            outer_r = max_r * (0.45 + 0.85 * t)
+            for i in range(8):
+                angle = 2.0 * math.pi * i / 8
+                painter.drawLine(
+                    QPointF(px + math.cos(angle) * inner_r, py + math.sin(angle) * inner_r),
+                    QPointF(px + math.cos(angle) * outer_r, py + math.sin(angle) * outer_r),
+                )
+        elif style == "highlight":
+            color = QColor(base_color)
+            color.setAlpha(int(base_color.alpha() * 0.45 * (1.0 - t)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            painter.drawEllipse(point, max_r * 0.8, max_r * 0.8)
+        else:
+            ring = QColor(base_color)
+            ring.setAlpha(int(base_color.alpha() * (1.0 - t)))
+            radius = max_r * (0.3 + 0.7 * t)
+            if ring.alpha() > 8:
+                painter.setPen(QPen(ring, max(1.5, 3.0 * (1.0 - t))))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(point, radius, radius)
+
+            dot = QColor(base_color)
+            dot.setAlpha(int(base_color.alpha() * max(0.0, 1.0 - t * 1.8)))
+            if dot.alpha() > 8:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(dot))
+                painter.drawEllipse(point, max(2.5, 5.0 * (1.0 - t * 0.5)), max(2.5, 5.0 * (1.0 - t * 0.5)))
+    painter.restore()
+
+
 
 
 
