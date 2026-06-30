@@ -219,6 +219,10 @@ class PreviewWidget(QWidget):
     def set_video_segments(self, segments: List[VideoSegment] | None) -> None:
         """Provide retiming segments for playback simulation."""
         self._video_segments = list(segments or [])
+        if self._video_cap and self._video_cap.isOpened():
+            snapped_ms, jumped = self._snap_to_video_segment(self._playback_pos_ms)
+            if jumped:
+                self.seek_to(snapped_ms)
 
     def set_recording_mode(self, enabled: bool) -> None:
         """Enable/disable recording overlay (blurred snapshot + indicator)."""
@@ -473,6 +477,7 @@ class PreviewWidget(QWidget):
         """Jump video playback to the given timestamp."""
         import cv2
         if self._video_cap and self._video_cap.isOpened():
+            time_ms, _ = self._snap_to_video_segment(time_ms)
             self._playback_pos_ms = time_ms
             target_frame = self._time_to_frame(time_ms)
             self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
@@ -491,8 +496,10 @@ class PreviewWidget(QWidget):
         import cv2
         if self._video_cap and not self._playing:
             # If at/near the end of the video, wrap back to the start
-            if self._playback_pos_ms >= self._video_duration_ms - 100:
-                self._playback_pos_ms = 0.0
+            effective_end = self._effective_video_segment_end()
+            if self._playback_pos_ms >= effective_end - 100:
+                self._playback_pos_ms = self._first_video_segment_start()
+            self._playback_pos_ms, _ = self._snap_to_video_segment(self._playback_pos_ms)
             # Seek to the correct frame
             target_frame = self._time_to_frame(self._playback_pos_ms)
             self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
@@ -1375,10 +1382,11 @@ class PreviewWidget(QWidget):
         target_ms = self._playback_pos_ms + delta_s * 1000.0 * speed
         target_ms, jumped_gap = self._stitch_video_segment_target(self._playback_pos_ms, target_ms)
 
-        if target_ms >= self._video_duration_ms:
+        effective_segment_end = self._effective_video_segment_end()
+        if target_ms >= effective_segment_end:
             self.pause()
-            self._playback_pos_ms = self._video_duration_ms
-            self._current_time_ms = self._video_duration_ms
+            self._playback_pos_ms = effective_segment_end
+            self._current_time_ms = effective_segment_end
             self.playback_time_changed.emit(self._playback_pos_ms)
             return
 
@@ -1441,40 +1449,53 @@ class PreviewWidget(QWidget):
 
     def _snap_to_video_segment(self, time_ms: float) -> tuple[float, bool]:
         """Move a playback time out of deleted gaps and into the next segment."""
-        if not self._video_segments:
+        segments = self._ordered_video_segments()
+        if not segments:
             return time_ms, False
-        for seg in self._video_segments:
+        for seg in segments:
             if seg.start_ms <= time_ms < seg.end_ms:
                 return time_ms, False
             if time_ms < seg.start_ms:
                 return float(seg.start_ms), True
-        return self._video_duration_ms, True
+        return self._effective_video_segment_end(), True
 
     def _stitch_video_segment_target(self, current_ms: float, target_ms: float) -> tuple[float, bool]:
         """Jump over deleted source-time gaps during preview playback."""
-        if not self._video_segments:
+        segments = self._ordered_video_segments()
+        if not segments:
             return target_ms, False
-        for idx, seg in enumerate(self._video_segments):
+        for idx, seg in enumerate(segments):
             if seg.start_ms <= current_ms < seg.end_ms:
                 if target_ms < seg.end_ms:
                     return target_ms, False
-                if idx + 1 >= len(self._video_segments):
-                    return min(target_ms, self._video_duration_ms), False
+                if idx + 1 >= len(segments):
+                    return min(target_ms, float(seg.end_ms)), False
                 overflow = max(0.0, target_ms - float(seg.end_ms))
-                next_seg = self._video_segments[idx + 1]
+                next_seg = segments[idx + 1]
                 stitched = min(float(next_seg.end_ms), float(next_seg.start_ms) + overflow)
                 return stitched, True
         return self._snap_to_video_segment(target_ms)
 
     def _get_segment_speed(self, time_ms: float) -> float:
         """Return the playback speed at *time_ms* from video segments."""
-        for seg in self._video_segments:
+        for seg in self._ordered_video_segments():
             if seg.start_ms <= time_ms < seg.end_ms:
                 try:
                     return max(0.1, min(10.0, float(seg.speed)))
                 except (TypeError, ValueError):
                     return 1.0
         return speed_at_time(self._debug_keyframes, time_ms, self._video_duration_ms)
+
+    def _ordered_video_segments(self) -> List[VideoSegment]:
+        return sorted(self._video_segments, key=lambda seg: (float(seg.start_ms), float(seg.end_ms)))
+
+    def _first_video_segment_start(self) -> float:
+        segments = self._ordered_video_segments()
+        return float(segments[0].start_ms) if segments else 0.0
+
+    def _effective_video_segment_end(self) -> float:
+        segments = self._ordered_video_segments()
+        return float(segments[-1].end_ms) if segments else self._video_duration_ms
 
     @staticmethod
     def _numpy_to_qimage(frame: np.ndarray) -> QImage:

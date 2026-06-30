@@ -7,11 +7,12 @@ Qt or actual video files.
 import pytest
 import numpy as np
 
-from app.models import VideoSegment, ZoomKeyframe
+from app.models import ClickEvent, MousePosition, VideoSegment, ZoomKeyframe
 from app.video_exporter import (
     GeometryComputer,
     VideoProbeResult,
     GeometryResult,
+    _click_point_for_export,
     _map_zoomed_relative_point,
     _normalize_video_segments,
 )
@@ -225,6 +226,23 @@ class TestVideoProbeResult:
         assert result.out_h == 1080
         assert result.fps == 30.0
         assert result.is_gif is False
+
+
+def test_click_point_for_export_prefers_interpolated_mouse_track() -> None:
+    click = ClickEvent(x=300.0, y=300.0, timestamp=1500.0)
+    mouse_track = [
+        MousePosition(x=100.0, y=200.0, timestamp=1000.0),
+        MousePosition(x=200.0, y=260.0, timestamp=2000.0),
+        MousePosition(x=400.0, y=500.0, timestamp=3000.0),
+    ]
+
+    assert _click_point_for_export(click, mouse_track, 1500.0) == (300.0, 300.0)
+
+    close_track = [
+        MousePosition(x=100.0, y=200.0, timestamp=1400.0),
+        MousePosition(x=200.0, y=260.0, timestamp=1600.0),
+    ]
+    assert _click_point_for_export(click, close_track, 1500.0) == (150.0, 230.0)
 
 
 class TestVideoSegments:

@@ -1,5 +1,6 @@
 from app.models import RecordingSession, VideoSegment, ZoomKeyframe
 from app.widgets.editor_window import EditorWindow
+from app.widgets.preview_widget import PreviewWidget
 from app.zoom_engine import ZoomEngine
 
 
@@ -270,3 +271,16 @@ def test_cut_copies_then_removes_selected_range() -> None:
         (0.0, 3000.0),
         (7000.0, 10000.0),
     ]
+
+
+def test_preview_stitches_playback_across_deleted_gap() -> None:
+    preview = PreviewWidget.__new__(PreviewWidget)
+    preview._video_duration_ms = 10000.0
+    preview._video_segments = [
+        VideoSegment.create(0.0, 2000.0, 1.0),
+        VideoSegment.create(5000.0, 10000.0, 1.0),
+    ]
+
+    assert PreviewWidget._snap_to_video_segment(preview, 2500.0) == (5000.0, True)
+    assert PreviewWidget._stitch_video_segment_target(preview, 1990.0, 2050.0) == (5050.0, True)
+    assert PreviewWidget._effective_video_segment_end(preview) == 10000.0

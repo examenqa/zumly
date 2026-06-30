@@ -446,6 +446,45 @@ def _map_zoomed_relative_point(
     return (rel_x - crop_x) * zoom, (rel_y - crop_y) * zoom
 
 
+def _click_point_for_export(
+    click: ClickEvent,
+    mouse_track: Optional[List[MousePosition]],
+    timestamp_ms: float,
+) -> tuple[float, float]:
+    """Prefer the sampled cursor track for click placement when available."""
+    if not mouse_track:
+        return float(click.x), float(click.y)
+
+    before: Optional[MousePosition] = None
+    after: Optional[MousePosition] = None
+    target = float(timestamp_ms)
+    for point in mouse_track:
+        point_ts = float(point.timestamp)
+        if point_ts <= target:
+            before = point
+            continue
+        after = point
+        break
+
+    max_gap_ms = 250.0
+    if before and after:
+        gap = float(after.timestamp) - float(before.timestamp)
+        if 0 < gap <= max_gap_ms:
+            ratio = (target - float(before.timestamp)) / gap
+            x = float(before.x) + (float(after.x) - float(before.x)) * ratio
+            y = float(before.y) + (float(after.y) - float(before.y)) * ratio
+            return x, y
+        nearest = before if abs(target - float(before.timestamp)) <= abs(float(after.timestamp) - target) else after
+        if abs(target - float(nearest.timestamp)) <= max_gap_ms:
+            return float(nearest.x), float(nearest.y)
+    elif before and abs(target - float(before.timestamp)) <= max_gap_ms:
+        return float(before.x), float(before.y)
+    elif after and abs(float(after.timestamp) - target) <= max_gap_ms:
+        return float(after.x), float(after.y)
+
+    return float(click.x), float(click.y)
+
+
 def _build_zoompan_filter(keyframes: List[ZoomKeyframe], fps: float) -> str:
     """Build the FFmpeg zoompan filter for a local segment timeline."""
     expr_z = "1"
@@ -612,6 +651,7 @@ class VideoExporter:
             local_click_sets = [_local_clicks_for_segment(click_events, segment) for segment in segments]
             local_highlight_sets = [_local_highlights_for_segment(highlights, segment) for segment in segments]
             local_click_count = sum(len(items) for items in local_click_sets)
+            export_mouse_track = sorted(mouse_track or [], key=lambda point: float(point.timestamp))
 
             click_img_path = None
             if (
@@ -702,8 +742,10 @@ class VideoExporter:
                     for local_click in local_clicks:
                         t_s = max(local_click.timestamp / 1000.0, 0.0)
                         t_e = min(t_s + dur_sec, segment_duration_sec)
-                        rel_x = (local_click.x - m_left) / max(m_w, 1)
-                        rel_y = (local_click.y - m_top) / max(m_h, 1)
+                        abs_click_ms = float(segment.start_ms) + float(local_click.timestamp)
+                        click_x, click_y = _click_point_for_export(local_click, export_mouse_track, abs_click_ms)
+                        rel_x = (click_x - m_left) / max(m_w, 1)
+                        rel_y = (click_y - m_top) / max(m_h, 1)
                         rel_x, rel_y = _map_zoomed_relative_point(
                             rel_x,
                             rel_y,
@@ -734,8 +776,10 @@ class VideoExporter:
                     for local_click in local_clicks:
                         t_s = max(local_click.timestamp / 1000.0, 0.0)
                         t_e = min(t_s + cursor_hold_sec, segment_duration_sec)
-                        rel_x = (local_click.x - m_left) / max(m_w, 1)
-                        rel_y = (local_click.y - m_top) / max(m_h, 1)
+                        abs_click_ms = float(segment.start_ms) + float(local_click.timestamp)
+                        click_x, click_y = _click_point_for_export(local_click, export_mouse_track, abs_click_ms)
+                        rel_x = (click_x - m_left) / max(m_w, 1)
+                        rel_y = (click_y - m_top) / max(m_h, 1)
                         rel_x, rel_y = _map_zoomed_relative_point(
                             rel_x,
                             rel_y,
