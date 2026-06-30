@@ -178,6 +178,7 @@ class _TimelineTrack(QWidget):
     video_segment_deleted = Signal(str)  # video segment id — delete
     segment_selected = Signal(int)        # selected video segment index
     split_requested = Signal(float)       # timestamp ms — add a range boundary here
+    range_selection_requested = Signal(float, float)  # start/end ms — create a selected range
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()                # reset both trim handles to full range
     drag_finished = Signal()             # emitted when any drag completes
@@ -245,6 +246,8 @@ class _TimelineTrack(QWidget):
         self._selected_segment_id: str = ""     # start kf id of selected segment
         # Video segment selection
         self._selected_video_seg_id: str = ""   # video segment id of selected segment
+        self._range_anchor_ms: float | None = None
+        self._range_preview_ms: float | None = None
         # Video segment rendering cache — populated during paintEvent for hit-testing
         # Each entry: (x, width, segment_id)
         self._video_seg_rects: List[tuple] = []
@@ -322,6 +325,31 @@ class _TimelineTrack(QWidget):
     def _x_to_ms(self, x: float, _w: int | None = None) -> float:
         """Map a widget x-coordinate to a time in milliseconds, accounting for view zoom/pan."""
         return view_x_to_ms(x, self.duration, self._view_scale, self._view_offset, self.width())
+
+    def _clamp_range_time(self, time_ms: float) -> float:
+        """Clamp a range endpoint to the recorded timeline."""
+        return max(0.0, min(float(time_ms), float(self.duration)))
+
+    def _range_menu_label(self) -> str:
+        return "Finish selected range here" if self._range_anchor_ms is not None else "Start selected range here"
+
+    def _handle_range_point(self, time_ms: float) -> None:
+        """Collect two endpoints before asking the editor to create a selected range."""
+        if self.duration <= 0:
+            return
+        point_ms = self._clamp_range_time(time_ms)
+        if self._range_anchor_ms is None:
+            self._range_anchor_ms = point_ms
+            self._range_preview_ms = point_ms
+            self.update()
+            return
+
+        start_ms, end_ms = sorted((self._range_anchor_ms, point_ms))
+        self._range_anchor_ms = None
+        self._range_preview_ms = None
+        if end_ms - start_ms >= 250.0:
+            self.range_selection_requested.emit(start_ms, end_ms)
+        self.update()
 
     def _max_view_scale(self) -> float:
         """Maximum view scale: 1 pixel = 10 ms."""
@@ -522,10 +550,10 @@ class _TimelineTrack(QWidget):
             header.setEnabled(False)
             menu.addSeparator()
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
-            split_act = menu.addAction("Select range here")
-            split_act.setIcon(load_icon("cut", color=T.FG_PRIMARY))
+            split_act = menu.addAction(self._range_menu_label())
+            split_act.setIcon(load_icon("location", color=T.FG_PRIMARY))
             split_act.triggered.connect(
-                lambda checked=False, split_time=time_ms: self.split_requested.emit(split_time)
+                lambda checked=False, range_time=time_ms: self._handle_range_point(range_time)
             )
             if len(self.video_segments) > 1:
                 del_act = menu.addAction("Remove range selection")
@@ -538,10 +566,10 @@ class _TimelineTrack(QWidget):
             time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
             menu = QMenu(self)
             menu.setStyleSheet(self._menu_style())
-            act_split = menu.addAction("Select range here")
-            act_split.setIcon(load_icon("cut", color=T.FG_PRIMARY))
+            act_split = menu.addAction(self._range_menu_label())
+            act_split.setIcon(load_icon("location", color=T.FG_PRIMARY))
             act_split.triggered.connect(
-                lambda checked=False, split_time=time_ms: self.split_requested.emit(split_time)
+                lambda checked=False, range_time=time_ms: self._handle_range_point(range_time)
             )
             menu.addSeparator()
             act_zoom = menu.addAction("  Add Zoom here")
@@ -1118,6 +1146,27 @@ class _TimelineTrack(QWidget):
             painter.setPen(QPen(QColor("#0f766e"), 1.2))
             painter.drawLine(int(ex), top + 2, int(ex), top + h - 2)
 
+        if self._range_anchor_ms is not None:
+            anchor_x = self._ms_to_x(self._range_anchor_ms)
+            preview_ms = self._range_preview_ms if self._range_preview_ms is not None else self._range_anchor_ms
+            preview_x = self._ms_to_x(preview_ms)
+            left = min(anchor_x, preview_x)
+            width = abs(preview_x - anchor_x)
+            if width >= 2:
+                painter.setBrush(QBrush(QColor(139, 92, 246, 60)))
+                painter.setPen(QPen(QColor("#a78bfa"), 1.2))
+                painter.drawRoundedRect(QRectF(left, top, width, h), 3, 3)
+            painter.setPen(QPen(QColor(T.BRAND), 2.0))
+            painter.drawLine(int(anchor_x), top - 4, int(anchor_x), top + h + 4)
+            font = QFont()
+            font.setFamily("Segoe UI Variable")
+            font.setPixelSize(10)
+            font.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor("#f5f3ff"), 1))
+            label_rect = QRectF(min(anchor_x + 6, max(0, w - 82)), max(0, top - 17), 78, 14)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "range start")
+
     def _video_seg_hit_test(self, mx: float, my: float) -> str:
         """Return the video segment id at (mx, my), or empty string."""
         if not self._video_seg_rects:
@@ -1271,6 +1320,11 @@ class _TimelineTrack(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self.width() > 0:
             mx = event.position().x()
             my = event.position().y()
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                range_time_ms = self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
+                self._handle_range_point(range_time_ms)
+                event.accept()
+                return
             # Check pan point marker drag first (highest priority)
             for cx, cy, r, pp_kf_id, seg_start_id in self._pan_point_markers:
                 if (mx - cx) ** 2 + (my - cy) ** 2 <= (r + 3) ** 2:
@@ -1414,6 +1468,12 @@ class _TimelineTrack(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         mx = event.position().x()
         my = event.position().y()
+
+        if self._range_anchor_ms is not None and self.width() > 0 and self.duration > 0:
+            self._range_preview_ms = self._clamp_range_time(
+                self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
+            )
+            self.update()
 
         if self._dragging and self.duration > 0:
             # Snap-to-playhead helper (only for trim handle drags): check
@@ -1669,6 +1729,7 @@ class TimelineWidget(QWidget):
     video_segment_deleted = Signal(str)   # video segment id — delete
     segment_selected = Signal(int)        # selected video segment index
     split_requested = Signal(float)       # timestamp ms — add a range boundary here
+    range_selection_requested = Signal(float, float)  # start/end ms — create a selected range
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
     trim_reset = Signal()               # reset both trim handles to full range
     drag_finished = Signal()            # emitted when any drag completes
@@ -1741,6 +1802,7 @@ class TimelineWidget(QWidget):
         self._track.video_segment_deleted.connect(self.video_segment_deleted)
         self._track.segment_selected.connect(self.segment_selected)
         self._track.split_requested.connect(self.split_requested)
+        self._track.range_selection_requested.connect(self.range_selection_requested)
         self._track.trim_changed.connect(self.trim_changed)
         self._track.trim_reset.connect(self.trim_reset)
         self._track.drag_finished.connect(self.drag_finished)
@@ -1760,7 +1822,7 @@ class TimelineWidget(QWidget):
         hint_text = (
             "Right-click zoom to edit · Double-click voiceover to review speech · "
             "Hover chapter flags to review names · Del removes the selected item · "
-            "Right-click the timeline or press S to select a range"
+            "Right-click the timeline to start/finish a range · Shift-click also works · S adds a boundary"
         )
         hint_kf = QPushButton("Timeline tips")
         hint_kf.setObjectName("TimelineHintBtn")

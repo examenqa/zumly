@@ -113,6 +113,7 @@ class EditorWindow(QWidget):
         self._editor.segment_speed_changed.connect(self._on_segment_speed_changed)
         self._timeline.segment_selected.connect(self._on_segment_selected)
         self._timeline.split_requested.connect(self._on_split_requested)
+        self._timeline.range_selection_requested.connect(self._on_range_selection_requested)
         self._timeline.video_segment_deleted.connect(self._on_video_segment_deleted)
 
         self._title_bar.export_clicked.connect(self._on_export)
@@ -348,6 +349,70 @@ class EditorWindow(QWidget):
         right = VideoSegment.create(split_at, original_end, seg.speed)
         self._session.video_segments.insert(idx + 1, right)
         self._sync_video_segments(idx + 1, save=True)
+
+    def _on_range_selection_requested(self, start_ms: float, end_ms: float) -> None:
+        if not self._session:
+            return
+        duration = self._session.duration
+        if duration <= 0:
+            duration = getattr(self._preview, "_video_duration_ms", 0.0)
+        if duration <= 0:
+            return
+
+        self._ensure_video_segments(duration)
+        start = max(0.0, min(float(start_ms), float(duration)))
+        end = max(0.0, min(float(end_ms), float(duration)))
+        if end < start:
+            start, end = end, start
+        if end - start < 250.0:
+            return
+
+        old_segments = sorted(self._session.video_segments or [], key=lambda s: s.start_ms)
+        eps = 0.5
+
+        def _speed_at(time_ms: float) -> float:
+            for seg in old_segments:
+                if seg.start_ms - eps <= time_ms <= seg.end_ms + eps:
+                    try:
+                        return max(0.1, min(10.0, float(seg.speed)))
+                    except (TypeError, ValueError):
+                        return 1.0
+            return 1.0
+
+        raw_boundaries = [0.0, float(duration), start, end]
+        for seg in old_segments:
+            for boundary in (float(seg.start_ms), float(seg.end_ms)):
+                boundary = max(0.0, min(boundary, float(duration)))
+                if boundary <= start + eps or boundary >= end - eps:
+                    raw_boundaries.append(boundary)
+
+        boundaries: list[float] = []
+        for boundary in sorted(raw_boundaries):
+            if boundaries and abs(boundary - boundaries[-1]) <= eps:
+                boundaries[-1] = boundary if abs(boundary - start) <= eps or abs(boundary - end) <= eps else boundaries[-1]
+                continue
+            boundaries.append(boundary)
+
+        new_segments: list[VideoSegment] = []
+        selected_index = -1
+        for idx in range(len(boundaries) - 1):
+            seg_start = boundaries[idx]
+            seg_end = boundaries[idx + 1]
+            if seg_end - seg_start < 1.0:
+                continue
+            speed = _speed_at((seg_start + seg_end) / 2.0)
+            new_seg = VideoSegment.create(seg_start, seg_end, speed)
+            if abs(seg_start - start) <= eps and abs(seg_end - end) <= eps:
+                selected_index = len(new_segments)
+            new_segments.append(new_seg)
+
+        if not new_segments:
+            return
+        self._session.video_segments = new_segments
+        if selected_index < 0:
+            midpoint = (start + end) / 2.0
+            selected_index = self._find_video_segment_index(midpoint)
+        self._sync_video_segments(selected_index, save=True)
 
     def _on_video_segment_deleted(self, segment_id: str) -> None:
         if not self._session or not self._session.video_segments:
