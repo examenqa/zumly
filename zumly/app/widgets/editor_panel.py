@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -73,7 +73,16 @@ _cached_voices: list[str] = []
 class _CollapsibleSection(QWidget):
     """A section header that toggles visibility of its body widget."""
 
-    def __init__(self, title: str, body: QWidget, collapsed: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        body: QWidget,
+        collapsed: bool = False,
+        parent: QWidget | None = None,
+        *,
+        icon_name: str = "",
+        subtitle: str = "",
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("AccordionSection")
         layout = QVBoxLayout(self)
@@ -83,15 +92,21 @@ class _CollapsibleSection(QWidget):
         # Header button
         self._btn = QPushButton()
         self._btn.setObjectName("AccordionHeader")
-        self._btn.setFixedHeight(42)
+        self._btn.setFixedHeight(46)
         self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if icon_name:
+            self._btn.setIcon(load_icon(icon_name, color=T.FG_2))
+            self._btn.setIconSize(QSize(18, 18))
+        if subtitle:
+            self._btn.setToolTip(subtitle)
         self._btn.setStyleSheet(
             f"QPushButton#AccordionHeader {{ background: {T.BG_LAYER_2}; color: {T.FG_2};"
             f"  font-size: {T.FONT_SIZE_CAPTION}px;"
             f"  font-weight: 650; border: 1px solid {T.STROKE_2};"
+            f"  border-left: 3px solid {T.BRAND_TRANSLUCENT_STRONG};"
             f"  border-radius: {T.RADIUS_MEDIUM}px;"
             f"  text-align: left;"
-            f"  padding: 0 12px; }}"
+            f"  padding: 0 12px 0 10px; }}"
             f"QPushButton#AccordionHeader:hover {{ background: {T.BG_LAYER_3}; color: {T.FG_PRIMARY};"
             f"  border-color: {T.STROKE_1}; }}"
         )
@@ -115,6 +130,7 @@ class _CollapsibleSection(QWidget):
         layout.addWidget(self._body_shell)
 
         self._title = title
+        self._subtitle = subtitle
         self._collapsed = collapsed
         self._anim = QPropertyAnimation(self._body_shell, b"maximumHeight", self)
         self._anim.setDuration(T.DURATION_GENTLE)
@@ -241,6 +257,20 @@ class _AISettingsDialog(QDialog):
         )
 
 
+def _panel_group_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("PanelGroupLabel")
+    label.setStyleSheet(
+        f"QLabel#PanelGroupLabel {{ color: {T.FG_3};"
+        f"  font-size: {T.FONT_SIZE_CAPTION_2}px;"
+        f"  font-weight: {T.FONT_WEIGHT_SEMIBOLD};"
+        f"  letter-spacing: 0px;"
+        f"  padding: {T.SPACE_SM}px {T.SPACE_XS}px {T.SPACE_XXS}px {T.SPACE_XS}px;"
+        f"}}"
+    )
+    return label
+
+
 class EditorPanel(QWidget):
     """Right-hand sidebar with zoom controls, auto-zoom, background/frame pickers.
 
@@ -357,6 +387,8 @@ class EditorPanel(QWidget):
         self._trim_end_ms: float = 0.0
         self._duration: float = 0.0
 
+        self._container.addWidget(_panel_group_label("Automation"))
+
         # ── Smart Zoom (collapsible) ─────────────────────────────────
         zoom_body = QWidget()
         zoom_lay = QVBoxLayout(zoom_body)
@@ -433,7 +465,16 @@ class EditorPanel(QWidget):
         self._ai_zoom_status.setVisible(False)
         zoom_lay.addWidget(self._ai_zoom_status)
 
-        self._container.addWidget(_CollapsibleSection("SMART ZOOM", zoom_body))
+        self._container.addWidget(
+            _CollapsibleSection(
+                "Smart Zoom",
+                zoom_body,
+                icon_name="search",
+                subtitle="Generate and tune zoom keyframes from activity.",
+            )
+        )
+
+        self._container.addWidget(_panel_group_label("Story"))
 
         # ── Chapters (collapsible) ───────────────────────────────────
         chapters_body = QWidget()
@@ -480,7 +521,15 @@ class EditorPanel(QWidget):
         self._chapters_status.setVisible(False)
         chapters_lay.addWidget(self._chapters_status)
 
-        self._container.addWidget(_CollapsibleSection("CHAPTERS", chapters_body, collapsed=True))
+        self._container.addWidget(
+            _CollapsibleSection(
+                "Chapters",
+                chapters_body,
+                collapsed=True,
+                icon_name="video",
+                subtitle="Create chapter markers for long recordings.",
+            )
+        )
 
         # ── Voiceover (collapsible) ──────────────────────────────────
         vo_body = QWidget()
@@ -584,7 +633,17 @@ class EditorPanel(QWidget):
         self._vo_status.setVisible(False)
         vo_lay.addWidget(self._vo_status)
 
-        self._container.addWidget(_CollapsibleSection("NARRATION & VOICEOVER", vo_body))
+        self._container.addWidget(
+            _CollapsibleSection(
+                "Narration & Voiceover",
+                vo_body,
+                collapsed=True,
+                icon_name="mic",
+                subtitle="Generate or add spoken narration.",
+            )
+        )
+
+        self._container.addWidget(_panel_group_label("Presentation"))
 
         # ── Background picker (collapsible) ──────────────────────────
         bg_body = QWidget()
@@ -618,7 +677,13 @@ class EditorPanel(QWidget):
         bg_lay.addWidget(self._bg_stack)
         self._current_bg_preset = DEFAULT_PRESET
 
-        self._background_section = _CollapsibleSection("BACKGROUND", bg_body, collapsed=True)
+        self._background_section = _CollapsibleSection(
+            "Background",
+            bg_body,
+            collapsed=True,
+            icon_name="brightness_high",
+            subtitle="Choose the canvas treatment behind the recording.",
+        )
         self._container.addWidget(self._background_section)
 
         # ── Frame picker (collapsible) ───────────────────────────────
@@ -637,7 +702,13 @@ class EditorPanel(QWidget):
         fr_lay.addWidget(self._frame_combo)
         self._current_frame_preset = DEFAULT_FRAME
 
-        self._frame_section = _CollapsibleSection("DEVICE FRAME", fr_body, collapsed=True)
+        self._frame_section = _CollapsibleSection(
+            "Device Frame",
+            fr_body,
+            collapsed=True,
+            icon_name="desktop",
+            subtitle="Wrap the recording in a device/browser frame.",
+        )
         self._container.addWidget(self._frame_section)
 
         # ── Click effect picker (collapsible) ────────────────────────
@@ -656,14 +727,27 @@ class EditorPanel(QWidget):
         click_lay.addWidget(self._click_combo)
         self._current_click_preset = DEFAULT_CLICK_EFFECT
 
-        self._click_section = _CollapsibleSection("CLICK EFFECTS", click_body, collapsed=True)
+        self._click_section = _CollapsibleSection(
+            "Click Effects",
+            click_body,
+            collapsed=True,
+            icon_name="location",
+            subtitle="Style click rings and cursor emphasis in exports.",
+        )
         self._container.addWidget(self._click_section)
+
+        self._container.addWidget(_panel_group_label("Timeline"))
 
         # ── Selected range actions (collapsible) ─────────────────────
         retime_body = QWidget()
         retime_lay = QVBoxLayout(retime_body)
         retime_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
         retime_lay.setSpacing(T.SPACE_SM)
+
+        self._edited_preview_status = QLabel("Edited preview follows kept ranges during playback.")
+        self._edited_preview_status.setObjectName("Secondary")
+        self._edited_preview_status.setWordWrap(True)
+        retime_lay.addWidget(self._edited_preview_status)
 
         self._speed_combo = QComboBox()
         self._speed_combo.setObjectName("DepthCombo")
@@ -715,7 +799,13 @@ class EditorPanel(QWidget):
         self._retime_status.setWordWrap(True)
         retime_lay.addWidget(self._retime_status)
 
-        self._retiming_section = _CollapsibleSection("SELECTED RANGE", retime_body, collapsed=True)
+        self._retiming_section = _CollapsibleSection(
+            "Selected Range",
+            retime_body,
+            collapsed=True,
+            icon_name="cut",
+            subtitle="Cut, copy, delete, and retime selected ranges.",
+        )
         self._container.addWidget(self._retiming_section)
 
         # ── Highlights (collapsible) ────────────────────────────────
@@ -750,8 +840,16 @@ class EditorPanel(QWidget):
         self._highlight_status.setWordWrap(True)
         highlight_lay.addWidget(self._highlight_status)
 
-        self._highlight_section = _CollapsibleSection("HIGHLIGHTS", highlight_body, collapsed=True)
+        self._highlight_section = _CollapsibleSection(
+            "Highlights",
+            highlight_body,
+            collapsed=True,
+            icon_name="brightness_high",
+            subtitle="Dim the screen around a focused rectangular or circular area.",
+        )
         self._container.addWidget(self._highlight_section)
+
+        self._container.addWidget(_panel_group_label("Export"))
 
         # ── Output dimensions (collapsible) ──────────────────────────
         dim_body = QWidget()
@@ -773,7 +871,13 @@ class EditorPanel(QWidget):
         dim_lay.addWidget(self._dim_combo)
 
         self._current_output_dim = "auto"
-        self._output_section = _CollapsibleSection("OUTPUT SIZE", dim_body, collapsed=True)
+        self._output_section = _CollapsibleSection(
+            "Output Size",
+            dim_body,
+            collapsed=True,
+            icon_name="desktop",
+            subtitle="Choose the exported video dimensions.",
+        )
         self._container.addWidget(self._output_section)
 
         # End of scrollable content
@@ -1492,4 +1596,17 @@ class EditorPanel(QWidget):
         self._btn_range_copy.setEnabled(has_selection)
         self._btn_range_delete.setEnabled(has_selection)
         self._btn_range_paste.setEnabled(can_paste)
+
+    def set_edited_preview_summary(self, kept_ms: float, source_ms: float) -> None:
+        """Show whether timeline playback is previewing the edited output."""
+        if not hasattr(self, "_edited_preview_status"):
+            return
+        kept = max(0.0, float(kept_ms or 0.0))
+        source = max(0.0, float(source_ms or 0.0))
+        if source <= 0 or abs(kept - source) < 1.0:
+            self._edited_preview_status.setText("Preview uses the full recording.")
+            return
+        self._edited_preview_status.setText(
+            f"Edited preview: {_fmt(kept)} kept from {_fmt(source)}. Deleted gaps are skipped during playback."
+        )
 

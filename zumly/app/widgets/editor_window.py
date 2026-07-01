@@ -1,10 +1,14 @@
 import json
 import logging
+import os
+import re
+import sys
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QProcess
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QPushButton, QLabel, QSpacerItem, QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QPushButton, QLabel, QSpacerItem, QSizePolicy,
+    QDialog, QProgressBar, QPlainTextEdit,
 )
 
 from .editor_panel import EditorPanel
@@ -43,6 +47,83 @@ class TitleBar(QFrame):
         self.btn_export.setObjectName("ExportBtn")
         self.btn_export.clicked.connect(self.export_clicked.emit)
         layout.addWidget(self.btn_export)
+
+    def set_exporting(self, exporting: bool) -> None:
+        self.btn_export.setEnabled(not exporting)
+        self.btn_export.setText("Exporting..." if exporting else "Export")
+        self.btn_discard.setEnabled(not exporting)
+
+
+class ExportProgressDialog(QDialog):
+    cancel_requested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Exporting video")
+        self.setModal(False)
+        self.setMinimumWidth(460)
+        self.setStyleSheet(
+            f"QDialog {{ background: {T.BG_LAYER_2}; color: {T.FG_PRIMARY}; }}"
+            f"QLabel {{ color: {T.FG_PRIMARY}; font-size: {T.FONT_SIZE_BODY}px; }}"
+            f"QProgressBar {{ background: {T.BG_LAYER_1}; color: {T.FG_PRIMARY};"
+            f"  border: 1px solid {T.STROKE_2}; border-radius: {T.RADIUS_SMALL}px;"
+            f"  text-align: center; height: 18px; }}"
+            f"QProgressBar::chunk {{ background: {T.BRAND}; border-radius: {T.RADIUS_SMALL}px; }}"
+            f"QPlainTextEdit {{ background: {T.BG_LAYER_1}; color: {T.FG_2};"
+            f"  border: 1px solid {T.STROKE_2}; border-radius: {T.RADIUS_SMALL}px;"
+            f"  font-family: Consolas; font-size: {T.FONT_SIZE_CAPTION}px; }}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(T.SPACE_LG, T.SPACE_LG, T.SPACE_LG, T.SPACE_LG)
+        layout.setSpacing(T.SPACE_MD)
+
+        self._status = QLabel("Preparing export...")
+        layout.addWidget(self._status)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        layout.addWidget(self._progress)
+
+        self._log = QPlainTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setFixedHeight(112)
+        layout.addWidget(self._log)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        self._cancel = QPushButton("Cancel")
+        self._cancel.setFixedHeight(32)
+        self._cancel.clicked.connect(self.cancel_requested.emit)
+        row.addWidget(self._cancel)
+        self._close = QPushButton("Close")
+        self._close.setFixedHeight(32)
+        self._close.setVisible(False)
+        self._close.clicked.connect(self.accept)
+        row.addWidget(self._close)
+        layout.addLayout(row)
+
+    def append_output(self, text: str) -> None:
+        clean = text.replace("\r", "\n")
+        for line in clean.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            self._log.appendPlainText(line)
+            match = re.search(r"Export progress:\s*([0-9.]+)%", line)
+            if match:
+                self.set_progress(float(match.group(1)))
+
+    def set_progress(self, value: float) -> None:
+        pct = max(0, min(100, int(round(value))))
+        self._progress.setValue(pct)
+        self._status.setText(f"Exporting video... {pct}%")
+
+    def finish(self, success: bool, message: str) -> None:
+        self._progress.setValue(100 if success else self._progress.value())
+        self._status.setText(message)
+        self._cancel.setVisible(False)
+        self._close.setVisible(True)
 
 
 class EditorWindow(QWidget):
@@ -141,6 +222,8 @@ class EditorWindow(QWidget):
         self._video_segment_clipboard: VideoSegment | None = None
         self._pending_highlight_shape = "rect"
         self._timeline_drag_undo_pushed = False
+        self._export_process: QProcess | None = None
+        self._export_dialog: ExportProgressDialog | None = None
         
         self._load_project()
         
@@ -504,6 +587,18 @@ class EditorWindow(QWidget):
                 return idx
         return -1
 
+    def _edited_duration_ms(self) -> float:
+        if not self._session or not self._session.video_segments:
+            return 0.0
+        total = 0.0
+        for seg in self._session.video_segments:
+            try:
+                speed = max(0.1, min(10.0, float(seg.speed)))
+            except (TypeError, ValueError):
+                speed = 1.0
+            total += max(0.0, float(seg.end_ms) - float(seg.start_ms)) / speed
+        return total
+
     def _sync_video_segments(self, selected_index: int | None = None, save: bool = True) -> None:
         if not self._session:
             return
@@ -520,11 +615,18 @@ class EditorWindow(QWidget):
         self._zoom_engine.video_segments = self._session.video_segments
         self._preview.set_video_segments(self._session.video_segments)
         self._timeline.set_video_segments(self._session.video_segments, self._selected_video_segment_index)
+        if hasattr(self._preview, "seek_to"):
+            self._preview.seek_to(getattr(self._preview, "playback_pos_ms", 0.0))
         if self._selected_video_segment_index >= 0:
             seg = self._session.video_segments[self._selected_video_segment_index]
             self._editor.set_selected_segment_speed(seg.speed, self._selected_video_segment_index)
         else:
             self._editor.set_selected_segment_speed(None)
+        if hasattr(self._editor, "set_edited_preview_summary"):
+            self._editor.set_edited_preview_summary(
+                self._edited_duration_ms(),
+                getattr(self._preview, "_video_duration_ms", self._session.duration),
+            )
         if hasattr(self._editor, "set_range_actions_enabled"):
             self._editor.set_range_actions_enabled(
                 self._selected_video_segment_index >= 0,
@@ -772,23 +874,80 @@ class EditorWindow(QWidget):
 
     def _on_export(self):
         logger.info("Export clicked. Triggering export_app.py headless exporter...")
-        import subprocess
-        import sys
-        import os
         from pathlib import Path
+
+        if self._export_process and self._export_process.state() != QProcess.ProcessState.NotRunning:
+            if self._export_dialog:
+                self._export_dialog.raise_()
+                self._export_dialog.activateWindow()
+            return
+
+        self._save_project()
 
         if getattr(sys, "frozen", False):
             base_dir = os.path.dirname(sys.executable)
-            cmd = [os.path.join(base_dir, "export_app.exe"), "--project", self._project_path]
+            program = os.path.join(base_dir, "export_app.exe")
+            args = ["--project", self._project_path]
             cwd = base_dir
         else:
             script_dir = Path(__file__).resolve().parent.parent.parent.parent
-            cmd = [sys.executable, "export_app.py", "--project", self._project_path]
+            program = sys.executable
+            args = ["export_app.py", "--project", self._project_path]
             cwd = str(script_dir)
 
-        subprocess.Popen(
-            cmd,
-            cwd=cwd
-        )
-        self.close()
+        self._export_dialog = ExportProgressDialog(self)
+        self._export_dialog.cancel_requested.connect(self._cancel_export)
+        self._export_dialog.show()
+        self._title_bar.set_exporting(True)
+
+        process = QProcess(self)
+        process.setWorkingDirectory(cwd)
+        process.setProgram(program)
+        process.setArguments(args)
+        process.readyReadStandardOutput.connect(self._on_export_stdout)
+        process.readyReadStandardError.connect(self._on_export_stderr)
+        process.finished.connect(self._on_export_finished)
+        process.errorOccurred.connect(self._on_export_error)
+        self._export_process = process
+        process.start()
+        if not process.waitForStarted(1500):
+            self._on_export_error(process.error())
+
+    def _cancel_export(self) -> None:
+        if self._export_process and self._export_process.state() != QProcess.ProcessState.NotRunning:
+            self._export_process.kill()
+        if self._export_dialog:
+            self._export_dialog.finish(False, "Export cancelled.")
+        self._title_bar.set_exporting(False)
+
+    def _on_export_stdout(self) -> None:
+        if not self._export_process or not self._export_dialog:
+            return
+        text = bytes(self._export_process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        self._export_dialog.append_output(text)
+
+    def _on_export_stderr(self) -> None:
+        if not self._export_process or not self._export_dialog:
+            return
+        text = bytes(self._export_process.readAllStandardError()).decode("utf-8", errors="replace")
+        self._export_dialog.append_output(text)
+
+    def _on_export_error(self, error) -> None:
+        logger.error("Export process error: %s", error)
+        if self._export_dialog:
+            self._export_dialog.finish(False, f"Export failed to start: {error}")
+        self._title_bar.set_exporting(False)
+
+    def _on_export_finished(self, exit_code: int, exit_status) -> None:
+        if self._export_process:
+            self._on_export_stdout()
+            self._on_export_stderr()
+        success = exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit
+        if self._export_dialog:
+            if success:
+                self._export_dialog.finish(True, "Export complete.")
+            else:
+                self._export_dialog.finish(False, f"Export failed with exit code {exit_code}.")
+        self._title_bar.set_exporting(False)
+        self._export_process = None
 

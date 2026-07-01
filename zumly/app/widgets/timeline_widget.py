@@ -250,6 +250,8 @@ class _TimelineTrack(QWidget):
         self._selected_video_seg_id: str = ""   # video segment id of selected segment
         self._range_anchor_ms: float | None = None
         self._range_preview_ms: float | None = None
+        self._range_drag_start_ms: float | None = None
+        self._range_drag_pending_video_seg_id: str = ""
         # Video segment rendering cache — populated during paintEvent for hit-testing
         # Each entry: (x, width, segment_id)
         self._video_seg_rects: List[tuple] = []
@@ -331,6 +333,10 @@ class _TimelineTrack(QWidget):
     def _clamp_range_time(self, time_ms: float) -> float:
         """Clamp a range endpoint to the recorded timeline."""
         return max(0.0, min(float(time_ms), float(self.duration)))
+
+    def _is_video_track_hit(self, y: float) -> bool:
+        """Return True when y is inside the selectable clips row."""
+        return self._video_seg_top <= y <= self._video_seg_top + self._video_seg_h
 
     def _range_menu_label(self) -> str:
         return "Finish selected range here" if self._range_anchor_ms is not None else "Start selected range here"
@@ -1425,14 +1431,21 @@ class _TimelineTrack(QWidget):
                 self._drag_actually_moved = False
                 self.update()
                 return
-            # Check video segment selection (left-click)
+            # Clips row: click selects a kept range, drag creates a new selected range.
             vs_id = self._video_seg_hit_test(mx, my)
-            if vs_id:
-                self._selected_video_seg_id = vs_id
+            if self._is_video_track_hit(my):
+                range_time_ms = self._clamp_range_time(self._x_to_ms(mx, self.width()))
+                self._dragging = True
+                self._drag_mode = "range_select"
+                self._range_drag_start_ms = range_time_ms
+                self._range_drag_pending_video_seg_id = vs_id
+                self._range_anchor_ms = range_time_ms
+                self._range_preview_ms = range_time_ms
                 self._selected_click_idx = -1
                 self._selected_segment_id = ""
                 self._selected_vo_id = ""
-                self._emit_video_segment_selected(vs_id)
+                self._press_pos = event.position()
+                self._drag_actually_moved = False
                 self.update()
                 return
             # Check chapter marker seek
@@ -1484,6 +1497,17 @@ class _TimelineTrack(QWidget):
             self.update()
 
         if self._dragging and self.duration > 0:
+            if self._drag_mode == "range_select":
+                if self._press_pos is not None:
+                    self._drag_actually_moved = (
+                        (event.position() - self._press_pos).manhattanLength() > 4
+                    )
+                self._range_preview_ms = self._clamp_range_time(
+                    self._x_to_ms(max(0.0, min(float(mx), float(self.width()))), self.width())
+                )
+                self.update()
+                return
+
             # Snap-to-playhead helper (only for trim handle drags): check
             # whether mx is close enough to the playhead and Alt is not held.
             snap_active = False
@@ -1629,6 +1653,11 @@ class _TimelineTrack(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
             was_body_drag = self._drag_mode == "body"
+            was_range_drag = self._drag_mode == "range_select"
+            range_start_ms = self._range_drag_start_ms
+            range_end_ms = self._range_preview_ms
+            pending_video_seg_id = self._range_drag_pending_video_seg_id
+            range_moved = self._drag_actually_moved
             if self._dragging:
                 self.drag_finished.emit()
             self._dragging = False
@@ -1637,6 +1666,29 @@ class _TimelineTrack(QWidget):
             self._drag_body_ids = []
             self._drag_body_visual_duration = 0.0
             self._trim_snapped = False
+            self._range_drag_start_ms = None
+            self._range_drag_pending_video_seg_id = ""
+            if was_range_drag:
+                self._range_anchor_ms = None
+                self._range_preview_ms = None
+                if (
+                    range_moved
+                    and range_start_ms is not None
+                    and range_end_ms is not None
+                    and abs(range_end_ms - range_start_ms) >= 250.0
+                ):
+                    start_ms, end_ms = sorted((range_start_ms, range_end_ms))
+                    self.range_selection_requested.emit(start_ms, end_ms)
+                elif pending_video_seg_id:
+                    self._selected_video_seg_id = pending_video_seg_id
+                    self._selected_click_idx = -1
+                    self._selected_segment_id = ""
+                    self._selected_vo_id = ""
+                    self._emit_video_segment_selected(pending_video_seg_id)
+                self._pending_select_id = ""
+                self._press_pos = None
+                self.update()
+                return
             # If user clicked a segment body without dragging, select it
             # so Delete key can remove it.
             if was_body_drag and not self._drag_actually_moved and self._pending_select_id:
