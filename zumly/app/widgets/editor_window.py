@@ -203,6 +203,7 @@ class EditorWindow(QWidget):
         self._editor.image_frame_add_requested.connect(self._on_image_frame_add_requested)
         self._editor.timeline_frame_changed.connect(self._on_timeline_frame_changed)
         self._editor.timeline_frame_delete_requested.connect(self._on_timeline_frame_delete_requested)
+        self._editor.timeline_frame_select_requested.connect(self._on_timeline_frame_selected)
         self._editor.highlight_add_requested.connect(self._on_highlight_add_requested)
         self._editor.highlight_timing_changed.connect(self._on_highlight_timing_changed)
         self._editor.highlight_delete_requested.connect(self._on_highlight_delete_requested)
@@ -215,6 +216,8 @@ class EditorWindow(QWidget):
         self._preview.highlight_resized.connect(self._on_highlight_resized)
         self._timeline.segment_selected.connect(self._on_segment_selected)
         self._timeline.timeline_frame_selected.connect(self._on_timeline_frame_selected)
+        self._timeline.text_frame_requested_at.connect(self._on_text_frame_add_requested)
+        self._timeline.image_frame_requested_at.connect(self._on_image_frame_add_requested)
         self._timeline.split_requested.connect(self._on_split_requested)
         self._timeline.range_selection_requested.connect(self._on_range_selection_requested)
         self._timeline.video_segment_deleted.connect(self._on_video_segment_deleted)
@@ -290,7 +293,9 @@ class EditorWindow(QWidget):
             self._zoom_engine.video_segments = self._session.video_segments
             self._preview.set_debug_keyframes(self._session.keyframes)
             self._preview.set_video_segments(self._session.video_segments)
-            self._preview.set_timeline_frames(self._session.timeline_frames)
+            self._preview.set_timeline_frames(self._session.timeline_frames, self._selected_timeline_frame_id)
+            if hasattr(self._editor, "set_timeline_frames"):
+                self._editor.set_timeline_frames(self._session.timeline_frames or [], self._selected_timeline_frame_id)
             self._preview.set_highlights(self._session.highlights)
             self._preview.set_cursor_data(
                 self._session.mouse_track,
@@ -348,6 +353,9 @@ class EditorWindow(QWidget):
         self._timeline.set_current_time(time_ms)
         zoom, px, py = self._zoom_engine.compute_at(time_ms)
         self._preview.set_zoom(zoom, px, py)
+        if hasattr(self._editor, "set_frame_insert_timestamp"):
+            duration = getattr(self._preview, "_video_duration_ms", self._session.duration if self._session else 0.0)
+            self._editor.set_frame_insert_timestamp(time_ms, duration)
 
     def _sync_zoom_engine_from_session(self) -> None:
         if not self._session:
@@ -445,6 +453,8 @@ class EditorWindow(QWidget):
         )
         if hasattr(self._timeline, "set_timeline_frames"):
             self._timeline.set_timeline_frames(self._session.timeline_frames or [], getattr(self, "_selected_timeline_frame_id", ""))
+        if hasattr(self._editor, "set_timeline_frames"):
+            self._editor.set_timeline_frames(self._session.timeline_frames or [], getattr(self, "_selected_timeline_frame_id", ""))
         self._timeline.chapters = self._session.chapters or []
         self._on_playback_time_changed(getattr(self._preview, "_current_time_ms", 0.0))
         self._refresh_editor_info()
@@ -1064,15 +1074,21 @@ class EditorWindow(QWidget):
         if hasattr(self._timeline, "set_timeline_frames"):
             self._timeline.set_timeline_frames(frames, self._selected_timeline_frame_id)
         if hasattr(self._preview, "set_timeline_frames"):
-            self._preview.set_timeline_frames(frames)
+            self._preview.set_timeline_frames(frames, self._selected_timeline_frame_id)
+        if hasattr(self._editor, "set_timeline_frames"):
+            self._editor.set_timeline_frames(frames, self._selected_timeline_frame_id)
         selected = self._selected_timeline_frame()
         if selected and hasattr(self._editor, "set_selected_timeline_frame"):
             self._editor.set_selected_timeline_frame(
                 selected.id,
                 selected.kind,
+                selected.timestamp_ms,
                 selected.duration_ms,
                 selected.text,
                 selected.image_path,
+                selected.background_color,
+                selected.text_color,
+                selected.font_size,
             )
         elif hasattr(self._editor, "set_selected_timeline_frame"):
             self._editor.set_selected_timeline_frame("")
@@ -1094,8 +1110,8 @@ class EditorWindow(QWidget):
         self._session.timeline_frames = frames
         self._sync_timeline_frames(frame.id, save=True)
 
-    def _on_text_frame_add_requested(self) -> None:
-        insert_time = self._timeline_frame_insert_time()
+    def _on_text_frame_add_requested(self, timestamp_ms: float | None = None) -> None:
+        insert_time = self._timeline_frame_insert_time() if timestamp_ms is None else float(timestamp_ms)
         self._add_timeline_frame(
             TimelineFrame.create(
                 insert_time,
@@ -1104,8 +1120,9 @@ class EditorWindow(QWidget):
                 text="Add your title or note here",
             )
         )
+        self._preview.seek_to(insert_time)
 
-    def _on_image_frame_add_requested(self) -> None:
+    def _on_image_frame_add_requested(self, timestamp_ms: float | None = None) -> None:
         if not self._session:
             return
         path, _ = QFileDialog.getOpenFileName(
@@ -1116,29 +1133,52 @@ class EditorWindow(QWidget):
         )
         if not path:
             return
+        insert_time = self._timeline_frame_insert_time() if timestamp_ms is None else float(timestamp_ms)
         self._add_timeline_frame(
             TimelineFrame.create(
-                self._timeline_frame_insert_time(),
+                insert_time,
                 kind="image",
                 duration_ms=2500.0,
                 image_path=path,
             )
         )
+        self._preview.seek_to(insert_time)
 
     def _on_timeline_frame_selected(self, frame_id: str) -> None:
         self._selected_timeline_frame_id = frame_id
         self._sync_timeline_frames(frame_id, save=False)
+        frame = self._selected_timeline_frame()
+        if frame:
+            self._preview.seek_to(frame.timestamp_ms)
 
-    def _on_timeline_frame_changed(self, frame_id: str, duration_ms: float, text: str) -> None:
+    def _on_timeline_frame_changed(
+        self,
+        frame_id: str,
+        timestamp_ms: float,
+        duration_ms: float,
+        text: str,
+        background_color: str,
+        text_color: str,
+        font_size: int,
+    ) -> None:
         if not self._session or not self._session.timeline_frames:
             return
         frame = next((item for item in self._session.timeline_frames if item.id == frame_id), None)
         if not frame:
             return
+        duration = float(getattr(self._preview, "_video_duration_ms", self._session.duration) or self._session.duration)
+        old_timestamp = float(frame.timestamp_ms)
+        frame.timestamp_ms = max(0.0, min(float(timestamp_ms), duration))
         frame.duration_ms = max(250.0, min(float(duration_ms), 600000.0))
+        frame.background_color = background_color or "#111827"
+        frame.text_color = text_color or "#f9fafb"
+        frame.font_size = max(12, min(int(font_size or 54), 180))
         if frame.kind == "text":
             frame.text = text
+        if abs(frame.timestamp_ms - old_timestamp) > 0.5:
+            self._split_video_segment_for_insert(frame.timestamp_ms)
         self._sync_timeline_frames(frame_id, save=True)
+        self._preview.seek_to(frame.timestamp_ms)
 
     def _on_timeline_frame_delete_requested(self, frame_id: str) -> None:
         if not self._session or not self._session.timeline_frames:

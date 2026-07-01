@@ -323,6 +323,15 @@ def _wrap_text_for_width(text: str, font: ImageFont.ImageFont, max_width: int, d
     return lines
 
 
+def _clean_timeline_frame_text(text: str) -> str:
+    bidi_controls = {
+        "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",
+        "\u2066", "\u2067", "\u2068", "\u2069",
+        "\u200e", "\u200f",
+    }
+    return "".join(ch for ch in text if ch not in bidi_controls)
+
+
 def generate_timeline_frame_png(frame: TimelineFrame, w: int, h: int) -> str:
     """Generate a full-canvas PNG for an inserted text or picture frame."""
     bg = _parse_hex_color(frame.background_color, (17, 24, 39))
@@ -343,7 +352,7 @@ def generate_timeline_frame_png(frame: TimelineFrame, w: int, h: int) -> str:
         draw = ImageDraw.Draw(canvas)
         font = _load_frame_font(frame.font_size)
         text_color = _parse_hex_color(frame.text_color, (249, 250, 251))
-        text = frame.text or "Add your text"
+        text = _clean_timeline_frame_text(frame.text or "Add your text")
         max_width = int(w * 0.78)
         lines = _wrap_text_for_width(text, font, max_width, draw)
         line_boxes = [draw.textbbox((0, 0), line or " ", font=font) for line in lines]

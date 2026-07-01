@@ -5,7 +5,8 @@ from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QSize
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QSize, QEvent, QObject
+from PySide6.QtGui import QColor, QTextOption, QTextBlockFormat, QTextCursor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -21,12 +22,24 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QScrollArea,
     QDoubleSpinBox,
+    QSpinBox,
+    QColorDialog,
+    QAbstractSpinBox,
 )
 
 from .. import tokens as T
 from ..fluent_effects import apply_shadow, install_focus_ring
 from ..icon_loader import load_icon
-from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, ClickEffectPreset, CLICK_EFFECT_PRESETS, DEFAULT_CLICK_EFFECT
+from ..models import (
+    ZoomKeyframe,
+    MousePosition,
+    KeyEvent,
+    ClickEvent,
+    ClickEffectPreset,
+    CLICK_EFFECT_PRESETS,
+    DEFAULT_CLICK_EFFECT,
+    TimelineFrame,
+)
 from ..activity_analyzer import analyze_activity
 from ..backgrounds import (
     PRESETS, DEFAULT_PRESET, BackgroundPreset,
@@ -101,14 +114,20 @@ class _CollapsibleSection(QWidget):
         if subtitle:
             self._btn.setToolTip(subtitle)
         self._btn.setStyleSheet(
-            f"QPushButton#AccordionHeader {{ background: {T.BG_LAYER_2}; color: {T.FG_2};"
+            f"QPushButton#AccordionHeader {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 rgba(139, 92, 246, 0.20), stop:0.18 {T.BG_LAYER_3}, stop:1 {T.BG_LAYER_2});"
+            f"  color: {T.FG_2};"
             f"  font-size: {T.FONT_SIZE_CAPTION}px;"
             f"  font-weight: 650; border: 1px solid {T.STROKE_2};"
-            f"  border-left: 3px solid {T.BRAND_TRANSLUCENT_STRONG};"
+            f"  border-left: 3px solid {T.BRAND};"
             f"  border-radius: {T.RADIUS_MEDIUM}px;"
             f"  text-align: left;"
             f"  padding: 0 12px 0 10px; }}"
-            f"QPushButton#AccordionHeader:hover {{ background: {T.BG_LAYER_3}; color: {T.FG_PRIMARY};"
+            f"QPushButton#AccordionHeader:hover {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 rgba(139, 92, 246, 0.32), stop:0.24 {T.BG_LAYER_4}, stop:1 {T.BG_LAYER_3});"
+            f"  color: {T.FG_PRIMARY};"
             f"  border-color: {T.STROKE_1}; }}"
         )
         self._btn.clicked.connect(self._toggle)
@@ -117,7 +136,9 @@ class _CollapsibleSection(QWidget):
         self._body_shell = QFrame()
         self._body_shell.setObjectName("AccordionBody")
         self._body_shell.setStyleSheet(
-            f"QFrame#AccordionBody {{ background: {T.BG_LAYER_2};"
+            f"QFrame#AccordionBody {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            f"    stop:0 {T.BG_LAYER_3}, stop:1 {T.BG_LAYER_2});"
             f"  border-left: 1px solid {T.STROKE_2};"
             f"  border-right: 1px solid {T.STROKE_2};"
             f"  border-bottom: 1px solid {T.STROKE_2};"
@@ -176,6 +197,24 @@ class _CollapsibleSection(QWidget):
     def _update_text(self) -> None:
         arrow = "▸" if self._collapsed else "▾"
         self._btn.setText(f"{arrow}  {self._title}")
+
+
+class _WheelToScrollFilter(QObject):
+    """Route wheel gestures on option controls to the panel scroll bar."""
+
+    def __init__(self, scroll: QScrollArea, parent: QObject | None = None) -> None:
+        super().__init__(parent or scroll)
+        self._scroll = scroll
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        delta = event.angleDelta().y()
+        if delta:
+            bar = self._scroll.verticalScrollBar()
+            bar.setValue(bar.value() - delta)
+        event.accept()
+        return True
 
 
 class _AISettingsDialog(QDialog):
@@ -315,10 +354,12 @@ class EditorPanel(QWidget):
     segment_copy_requested = Signal()
     segment_paste_requested = Signal()
     segment_delete_requested = Signal()
-    text_frame_add_requested = Signal()
-    image_frame_add_requested = Signal()
-    timeline_frame_changed = Signal(str, float, str)  # frame id, duration ms, text
+    text_frame_add_requested = Signal(float)      # insert timestamp ms
+    image_frame_add_requested = Signal(float)     # insert timestamp ms
+    timeline_frame_changed = Signal(str, float, float, str, str, str, int)
+    # frame id, timestamp ms, duration ms, text, background, text color, font px
     timeline_frame_delete_requested = Signal(str)
+    timeline_frame_select_requested = Signal(str)
     highlight_add_requested = Signal(str)        # shape: "rect" or "circle"
     highlight_timing_changed = Signal(float, float)  # start/end ms for selected highlight
     highlight_delete_requested = Signal()
@@ -330,21 +371,24 @@ class EditorPanel(QWidget):
 
         self.setStyleSheet(f"""
             QWidget#EditorPanel {{
-                background-color: {T.BG_LAYER_1};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #18181f, stop:0.42 {T.BG_LAYER_1}, stop:1 #101014);
                 border-left: 1px solid {T.DIVIDER};
             }}
             QPushButton#CtrlBtn {{
-                background-color: {T.BG_LAYER_3};
-                border-radius: {T.RADIUS_SMALL}px;
-                border: 1px solid {T.STROKE_2};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {T.BG_LAYER_4}, stop:1 {T.BG_LAYER_3});
+                border-radius: {T.RADIUS_MEDIUM}px;
+                border: 1px solid rgba(255, 255, 255, 0.10);
                 color: {T.TEXT_PRIMARY};
                 padding: 0 {T.SPACE_MD}px;
                 font-size: {T.FONT_SIZE_BODY}px;
                 font-weight: {T.FONT_WEIGHT_MEDIUM};
             }}
             QPushButton#CtrlBtn:hover {{
-                background-color: {T.BG_LAYER_4};
-                border-color: {T.STROKE_1};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #45414f, stop:1 {T.BG_LAYER_4});
+                border-color: rgba(139, 92, 246, 0.58);
             }}
             QPushButton#CtrlBtn:pressed {{
                 background-color: {T.BG_LAYER_2};
@@ -355,10 +399,11 @@ class EditorPanel(QWidget):
                 background-color: {T.BG_LAYER_2};
             }}
             QComboBox#DepthCombo {{
-                border: 1px solid {T.STROKE_2};
-                border-radius: {T.RADIUS_SMALL}px;
+                border: 1px solid rgba(255, 255, 255, 0.11);
+                border-radius: {T.RADIUS_MEDIUM}px;
                 padding: 4px 8px;
-                background-color: {T.BG_LAYER_1};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #26262d, stop:1 #19191f);
                 color: {T.TEXT_PRIMARY};
                 font-size: {T.FONT_SIZE_BODY}px;
             }}
@@ -366,8 +411,70 @@ class EditorPanel(QWidget):
                 border: none;
             }}
             QComboBox#DepthCombo:hover {{
-                border-color: {T.STROKE_1};
+                border-color: rgba(139, 92, 246, 0.58);
                 background-color: {T.BG_LAYER_3};
+            }}
+            QDoubleSpinBox#DepthCombo,
+            QSpinBox#DepthCombo,
+            QLineEdit#DepthCombo {{
+                border: 1px solid rgba(255, 255, 255, 0.11);
+                border-radius: {T.RADIUS_MEDIUM}px;
+                padding: 4px 8px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #26262d, stop:1 #19191f);
+                color: {T.TEXT_PRIMARY};
+                font-size: {T.FONT_SIZE_BODY}px;
+            }}
+            QDoubleSpinBox#DepthCombo::up-button,
+            QDoubleSpinBox#DepthCombo::down-button,
+            QSpinBox#DepthCombo::up-button,
+            QSpinBox#DepthCombo::down-button {{
+                width: 22px;
+                border-left: 1px solid {T.STROKE_2};
+                background-color: {T.BG_LAYER_3};
+            }}
+            QDoubleSpinBox#DepthCombo::up-button:hover,
+            QDoubleSpinBox#DepthCombo::down-button:hover,
+            QSpinBox#DepthCombo::up-button:hover,
+            QSpinBox#DepthCombo::down-button:hover {{
+                background-color: {T.BG_LAYER_4};
+            }}
+            QPlainTextEdit#FrameTextEdit {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #24242b, stop:1 #17171d);
+                color: {T.TEXT_PRIMARY};
+                border: 1px solid rgba(255, 255, 255, 0.11);
+                border-radius: {T.RADIUS_MEDIUM}px;
+                padding: 8px;
+                font-size: {T.FONT_SIZE_BODY}px;
+                selection-background-color: {T.BRAND};
+            }}
+            QPushButton#ColorSwatch {{
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: {T.RADIUS_MEDIUM}px;
+                color: {T.TEXT_PRIMARY};
+                padding: 0 8px;
+                text-align: left;
+            }}
+            QPushButton#FramePill {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(139, 92, 246, 0.20), stop:1 {T.BG_LAYER_3});
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: {T.RADIUS_MEDIUM}px;
+                color: {T.TEXT_PRIMARY};
+                padding: 0 10px;
+                text-align: left;
+                font-size: {T.FONT_SIZE_CAPTION}px;
+            }}
+            QPushButton#FramePill:hover {{
+                background-color: {T.BG_LAYER_4};
+                border-color: rgba(139, 92, 246, 0.58);
+            }}
+            QPushButton#FramePill[active="true"] {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(139, 92, 246, 0.52), stop:1 rgba(59, 130, 246, 0.24));
+                border-color: {T.BRAND};
+                color: {T.FG_PRIMARY};
             }}
             QGroupBox {{
                 border: none;
@@ -390,7 +497,14 @@ class EditorPanel(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             f"QScrollArea {{ border: none; background: transparent; }}"
+            f"QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px 4px 2px; }}"
+            f"QScrollBar::handle:vertical {{ background: rgba(139, 92, 246, 0.34);"
+            f"  min-height: 28px; border-radius: 4px; }}"
+            f"QScrollBar::handle:vertical:hover {{ background: rgba(139, 92, 246, 0.56); }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+            f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}"
         )
+        self._settings_scroll = scroll
         scroll_content = QWidget()
         self._container = QVBoxLayout(scroll_content)
         self._container.setContentsMargins(T.SPACE_MD, T.SPACE_MD, T.SPACE_MD, T.SPACE_MD)
@@ -830,25 +944,51 @@ class EditorPanel(QWidget):
         frames_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
         frames_lay.setSpacing(T.SPACE_SM)
 
+        insert_label = QLabel("Insert at")
+        insert_label.setObjectName("Secondary")
+        frames_lay.addWidget(insert_label)
+
+        self._frame_timestamp_spin = QDoubleSpinBox()
+        self._frame_timestamp_spin.setObjectName("DepthCombo")
+        self._frame_timestamp_spin.setDecimals(2)
+        self._frame_timestamp_spin.setRange(0.0, 36000.0)
+        self._frame_timestamp_spin.setSuffix(" s")
+        self._frame_timestamp_spin.setFixedHeight(32)
+        self._frame_timestamp_spin.setSingleStep(0.25)
+        self._frame_timestamp_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
+        self._frame_timestamp_spin.valueChanged.connect(self._on_timeline_frame_edited)
+        frames_lay.addWidget(self._frame_timestamp_spin)
+
         add_frame_row = QHBoxLayout()
         add_frame_row.setSpacing(T.SPACE_XS)
-        self._btn_add_text_frame = QPushButton("Text frame")
-        self._btn_add_text_frame.setObjectName("CtrlBtn")
-        self._btn_add_text_frame.setFixedHeight(32)
-        self._btn_add_text_frame.clicked.connect(self.text_frame_add_requested.emit)
-        add_frame_row.addWidget(self._btn_add_text_frame, 1)
+        self._frame_kind_combo = QComboBox()
+        self._frame_kind_combo.setObjectName("DepthCombo")
+        self._frame_kind_combo.setFixedHeight(32)
+        self._frame_kind_combo.addItem("Text frame", "text")
+        self._frame_kind_combo.addItem("Picture frame", "image")
+        add_frame_row.addWidget(self._frame_kind_combo, 1)
 
-        self._btn_add_image_frame = QPushButton("Picture")
-        self._btn_add_image_frame.setObjectName("CtrlBtn")
-        self._btn_add_image_frame.setFixedHeight(32)
-        self._btn_add_image_frame.clicked.connect(self.image_frame_add_requested.emit)
-        add_frame_row.addWidget(self._btn_add_image_frame, 1)
+        self._btn_add_frame = QPushButton("Add frame")
+        self._btn_add_frame.setObjectName("CtrlBtn")
+        self._btn_add_frame.setFixedHeight(32)
+        self._btn_add_frame.clicked.connect(self._on_add_frame)
+        add_frame_row.addWidget(self._btn_add_frame, 1)
         frames_lay.addLayout(add_frame_row)
 
-        self._frame_status = QLabel("Insert a card after the selected range, or at the playhead.")
+        self._frame_status = QLabel("Choose an insert time, then add a text or picture frame.")
         self._frame_status.setObjectName("Secondary")
         self._frame_status.setWordWrap(True)
         frames_lay.addWidget(self._frame_status)
+
+        self._frame_list_label = QLabel("Existing frames")
+        self._frame_list_label.setObjectName("Secondary")
+        frames_lay.addWidget(self._frame_list_label)
+
+        self._frame_list_host = QWidget()
+        self._frame_list_layout = QVBoxLayout(self._frame_list_host)
+        self._frame_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._frame_list_layout.setSpacing(T.SPACE_XS)
+        frames_lay.addWidget(self._frame_list_host)
 
         duration_label = QLabel("Duration")
         duration_label.setObjectName("Secondary")
@@ -860,16 +1000,59 @@ class EditorPanel(QWidget):
         self._frame_duration_spin.setRange(0.25, 600.0)
         self._frame_duration_spin.setSuffix(" s")
         self._frame_duration_spin.setFixedHeight(30)
+        self._frame_duration_spin.setSingleStep(0.25)
+        self._frame_duration_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
         self._frame_duration_spin.setEnabled(False)
         self._frame_duration_spin.valueChanged.connect(self._on_timeline_frame_edited)
         frames_lay.addWidget(self._frame_duration_spin)
 
         self._frame_text_edit = QPlainTextEdit()
+        self._frame_text_edit.setObjectName("FrameTextEdit")
         self._frame_text_edit.setPlaceholderText("Text frame copy")
         self._frame_text_edit.setFixedHeight(92)
         self._frame_text_edit.setEnabled(False)
+        self._frame_text_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        text_option = QTextOption()
+        text_option.setTextDirection(Qt.LayoutDirection.LeftToRight)
+        text_option.setWrapMode(QTextOption.WrapMode.WordWrap)
+        self._frame_text_edit.document().setDefaultTextOption(text_option)
+        self._frame_text_edit.setTabChangesFocus(True)
         self._frame_text_edit.textChanged.connect(self._on_timeline_frame_edited)
         frames_lay.addWidget(self._frame_text_edit)
+
+        style_row = QHBoxLayout()
+        style_row.setSpacing(T.SPACE_XS)
+        self._frame_bg_button = QPushButton("Background")
+        self._frame_bg_button.setObjectName("ColorSwatch")
+        self._frame_bg_button.setFixedHeight(30)
+        self._frame_bg_button.setEnabled(False)
+        self._frame_bg_button.clicked.connect(lambda: self._choose_frame_color("background"))
+        style_row.addWidget(self._frame_bg_button, 1)
+
+        self._frame_text_color_button = QPushButton("Text")
+        self._frame_text_color_button.setObjectName("ColorSwatch")
+        self._frame_text_color_button.setFixedHeight(30)
+        self._frame_text_color_button.setEnabled(False)
+        self._frame_text_color_button.clicked.connect(lambda: self._choose_frame_color("text"))
+        style_row.addWidget(self._frame_text_color_button, 1)
+        frames_lay.addLayout(style_row)
+
+        font_row = QHBoxLayout()
+        font_row.setSpacing(T.SPACE_SM)
+        font_label = QLabel("Text size")
+        font_label.setObjectName("Secondary")
+        font_label.setFixedWidth(72)
+        font_row.addWidget(font_label)
+        self._frame_font_spin = QSpinBox()
+        self._frame_font_spin.setObjectName("DepthCombo")
+        self._frame_font_spin.setRange(12, 180)
+        self._frame_font_spin.setSuffix(" px")
+        self._frame_font_spin.setFixedHeight(30)
+        self._frame_font_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
+        self._frame_font_spin.setEnabled(False)
+        self._frame_font_spin.valueChanged.connect(self._on_timeline_frame_edited)
+        font_row.addWidget(self._frame_font_spin, 1)
+        frames_lay.addLayout(font_row)
 
         self._btn_delete_frame = QPushButton("Delete selected frame")
         self._btn_delete_frame.setObjectName("CtrlBtn")
@@ -879,11 +1062,15 @@ class EditorPanel(QWidget):
         frames_lay.addWidget(self._btn_delete_frame)
 
         self._selected_frame_id = ""
+        self._selected_frame_kind = ""
+        self._frame_background_color = "#111827"
+        self._frame_text_color = "#f9fafb"
+        self._normalizing_frame_text = False
         self._frame_section = _CollapsibleSection(
             "Frames",
             frames_body,
             collapsed=True,
-            icon_name="image",
+            icon_name="add",
             subtitle="Insert editable text cards or picture cards between recording ranges.",
         )
         self._container.addWidget(self._frame_section)
@@ -1001,14 +1188,18 @@ class EditorPanel(QWidget):
         bottom_bar = QFrame()
         bottom_bar.setObjectName("PanelFooter")
         bottom_bar.setStyleSheet(
-            f"QFrame#PanelFooter {{ background: {T.BG_LAYER_2};"
-            f"  border-top: 1px solid {T.STROKE_2}; }}"
-            f"QPushButton#FooterBtn {{ background-color: {T.BG_LAYER_3};"
-            f"  color: {T.FG_PRIMARY}; border: 1px solid {T.STROKE_2};"
-            f"  border-radius: {T.RADIUS_SMALL}px; padding: 0 {T.SPACE_SM}px;"
+            f"QFrame#PanelFooter {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            f"    stop:0 #24242b, stop:1 {T.BG_LAYER_2});"
+            f"  border-top: 1px solid rgba(255, 255, 255, 0.10); }}"
+            f"QPushButton#FooterBtn {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            f"    stop:0 {T.BG_LAYER_4}, stop:1 {T.BG_LAYER_3});"
+            f"  color: {T.FG_PRIMARY}; border: 1px solid rgba(255, 255, 255, 0.10);"
+            f"  border-radius: {T.RADIUS_MEDIUM}px; padding: 0 {T.SPACE_SM}px;"
             f"  font-size: {T.FONT_SIZE_CAPTION}px; font-weight: {T.FONT_WEIGHT_MEDIUM}; }}"
             f"QPushButton#FooterBtn:hover {{ background-color: {T.BG_LAYER_4};"
-            f"  border-color: {T.STROKE_1}; }}"
+            f"  border-color: rgba(139, 92, 246, 0.58); }}"
             f"QPushButton#FooterBtn:pressed {{ background-color: {T.BG_LAYER_1}; }}"
         )
         bottom_layout = QVBoxLayout(bottom_bar)
@@ -1075,8 +1266,19 @@ class EditorPanel(QWidget):
             install_focus_ring(child)
         # Avoid QGraphicsEffect on combo boxes; on Windows/PySide it can make
         # native popup lists appear to close or vanish between clicks.
+        self._install_option_scroll_guards()
 
     # ── position / depth controls ───────────────────────────────────
+
+    def _install_option_scroll_guards(self) -> None:
+        """Prevent passive panel scrolling from mutating combo/spin values."""
+        self._wheel_scroll_filter = _WheelToScrollFilter(self._settings_scroll, self)
+        for combo in self.findChildren(QComboBox):
+            combo.installEventFilter(self._wheel_scroll_filter)
+            combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        for spin in self.findChildren(QAbstractSpinBox):
+            spin.installEventFilter(self._wheel_scroll_filter)
+            spin.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _show_settings_menu(self) -> None:
         """Show settings popup menu from the cog button."""
@@ -1740,45 +1942,194 @@ class EditorPanel(QWidget):
     def _on_timeline_frame_edited(self) -> None:
         if not getattr(self, "_selected_frame_id", ""):
             return
+        if not getattr(self, "_normalizing_frame_text", False):
+            self._normalize_frame_text_document()
+        timestamp_ms = float(self._frame_timestamp_spin.value()) * 1000.0
         duration_ms = float(self._frame_duration_spin.value()) * 1000.0
-        text = self._frame_text_edit.toPlainText()
-        self.timeline_frame_changed.emit(self._selected_frame_id, duration_ms, text)
+        text = self._clean_frame_text(self._frame_text_edit.toPlainText())
+        self.timeline_frame_changed.emit(
+            self._selected_frame_id,
+            timestamp_ms,
+            duration_ms,
+            text,
+            self._frame_background_color,
+            self._frame_text_color,
+            int(self._frame_font_spin.value()),
+        )
+
+    def _on_add_frame(self) -> None:
+        if self._frame_kind_combo.currentData() == "image":
+            self._on_add_image_frame()
+        else:
+            self._on_add_text_frame()
+
+    def _on_add_text_frame(self) -> None:
+        self.text_frame_add_requested.emit(float(self._frame_timestamp_spin.value()) * 1000.0)
+
+    def _on_add_image_frame(self) -> None:
+        self.image_frame_add_requested.emit(float(self._frame_timestamp_spin.value()) * 1000.0)
+
+    def _clean_frame_text(self, text: str) -> str:
+        bidi_controls = {
+            "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",
+            "\u2066", "\u2067", "\u2068", "\u2069",
+            "\u200e", "\u200f",
+        }
+        return "".join(ch for ch in text if ch not in bidi_controls)
+
+    def _normalize_frame_text_document(self) -> None:
+        if getattr(self, "_normalizing_frame_text", False):
+            return
+        self._normalizing_frame_text = True
+        try:
+            self._normalize_frame_text_document_unchecked()
+        finally:
+            self._normalizing_frame_text = False
+
+    def _normalize_frame_text_document_unchecked(self) -> None:
+        doc = self._frame_text_edit.document()
+        option = doc.defaultTextOption()
+        option.setTextDirection(Qt.LayoutDirection.LeftToRight)
+        option.setWrapMode(QTextOption.WrapMode.WordWrap)
+        option.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        doc.setDefaultTextOption(option)
+
+        cursor = QTextCursor(doc)
+        cursor.select(QTextCursor.SelectionType.Document)
+        block_format = QTextBlockFormat()
+        block_format.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        block_format.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        cursor.mergeBlockFormat(block_format)
+        self._frame_text_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+
+    def _move_frame_text_cursor_to_end(self) -> None:
+        cursor = self._frame_text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self._frame_text_edit.setTextCursor(cursor)
+
+    def _set_color_button(self, button: QPushButton, color: str, label: str) -> None:
+        button.setText(label)
+        button.setStyleSheet(
+            f"QPushButton#ColorSwatch {{ background-color: {color};"
+            f" color: {T.TEXT_PRIMARY}; border: 1px solid {T.STROKE_2};"
+            f" border-radius: {T.RADIUS_SMALL}px; padding: 0 8px; text-align: left; }}"
+        )
+
+    def _choose_frame_color(self, target: str) -> None:
+        current = self._frame_background_color if target == "background" else self._frame_text_color
+        color = QColorDialog.getColor(QColor(current), self, "Choose frame color")
+        if not color.isValid():
+            return
+        if target == "background":
+            self._frame_background_color = color.name()
+            self._set_color_button(self._frame_bg_button, self._frame_background_color, "Background")
+        else:
+            self._frame_text_color = color.name()
+            self._set_color_button(self._frame_text_color_button, self._frame_text_color, "Text")
+        self._on_timeline_frame_edited()
 
     def _on_delete_timeline_frame(self) -> None:
         if self._selected_frame_id:
             self.timeline_frame_delete_requested.emit(self._selected_frame_id)
 
+    def _clear_frame_pills(self) -> None:
+        while self._frame_list_layout.count():
+            item = self._frame_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def set_timeline_frames(self, frames: list[TimelineFrame], selected_id: str = "") -> None:
+        """Render selectable pills for inserted text/picture frames."""
+        self._clear_frame_pills()
+        ordered = sorted(frames or [], key=lambda item: (float(item.timestamp_ms), item.id))
+        if not ordered:
+            empty = QLabel("No frames yet")
+            empty.setObjectName("Secondary")
+            self._frame_list_layout.addWidget(empty)
+            return
+
+        for index, frame in enumerate(ordered, start=1):
+            kind = "Picture" if frame.kind == "image" else "Text"
+            title = frame.image_path.split("\\")[-1].split("/")[-1] if frame.kind == "image" and frame.image_path else frame.text
+            title = (title or kind).strip().replace("\n", " ")
+            if len(title) > 26:
+                title = title[:23].rstrip() + "..."
+            button = QPushButton(f"{index}. {kind}  {_fmt(float(frame.timestamp_ms))}  {title}")
+            button.setObjectName("FramePill")
+            button.setProperty("active", frame.id == selected_id)
+            button.setFixedHeight(30)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda checked=False, fid=frame.id: self.timeline_frame_select_requested.emit(fid))
+            self._frame_list_layout.addWidget(button)
+
     def set_selected_timeline_frame(
         self,
         frame_id: str,
         kind: str = "",
+        timestamp_ms: float = 0.0,
         duration_ms: float = 0.0,
         text: str = "",
         image_path: str = "",
+        background_color: str = "#111827",
+        text_color: str = "#f9fafb",
+        font_size: int = 54,
     ) -> None:
         """Reflect selected inserted frame state in the Frames section."""
         has_selection = bool(frame_id)
         self._selected_frame_id = frame_id
+        self._selected_frame_kind = kind if has_selection else ""
+        self._frame_background_color = background_color or "#111827"
+        self._frame_text_color = text_color or "#f9fafb"
+        self._frame_timestamp_spin.blockSignals(True)
         self._frame_duration_spin.blockSignals(True)
         self._frame_text_edit.blockSignals(True)
+        self._frame_font_spin.blockSignals(True)
+        self._frame_timestamp_spin.setEnabled(True)
         self._frame_duration_spin.setEnabled(has_selection)
-        self._frame_text_edit.setEnabled(has_selection and kind == "text")
+        text_enabled = has_selection and kind == "text"
+        self._frame_text_edit.setEnabled(text_enabled)
+        self._frame_bg_button.setEnabled(has_selection)
+        self._frame_text_color_button.setEnabled(text_enabled)
+        self._frame_font_spin.setEnabled(text_enabled)
         self._btn_delete_frame.setEnabled(has_selection)
         if has_selection:
+            self._frame_timestamp_spin.setValue(max(0.0, float(timestamp_ms or 0.0) / 1000.0))
             self._frame_duration_spin.setValue(max(0.25, float(duration_ms or 2500.0) / 1000.0))
-            self._frame_text_edit.setPlainText(text or "")
+            self._frame_text_edit.setPlainText(self._clean_frame_text(text or ""))
+            self._normalize_frame_text_document()
+            self._move_frame_text_cursor_to_end()
+            self._frame_font_spin.setValue(max(12, min(int(font_size or 54), 180)))
+            self._set_color_button(self._frame_bg_button, self._frame_background_color, "Background")
+            self._set_color_button(self._frame_text_color_button, self._frame_text_color, "Text")
             if kind == "image":
                 name = image_path.split("\\")[-1].split("/")[-1] if image_path else "picture"
                 self._frame_status.setText(f"Selected picture frame: {name}")
             else:
-                self._frame_status.setText("Selected text frame. Edit the copy here.")
+                self._frame_status.setText("Selected text frame. Edit copy, timing, and style here.")
             self._frame_section.expand()
         else:
             self._frame_duration_spin.setValue(2.5)
             self._frame_text_edit.setPlainText("")
-            self._frame_status.setText("Insert a card after the selected range, or at the playhead.")
+            self._normalize_frame_text_document()
+            self._frame_font_spin.setValue(54)
+            self._set_color_button(self._frame_bg_button, self._frame_background_color, "Background")
+            self._set_color_button(self._frame_text_color_button, self._frame_text_color, "Text")
+            self._frame_status.setText("Choose an insert time, then add a text or picture frame.")
+        self._frame_timestamp_spin.blockSignals(False)
         self._frame_text_edit.blockSignals(False)
+        self._frame_font_spin.blockSignals(False)
         self._frame_duration_spin.blockSignals(False)
+
+    def set_frame_insert_timestamp(self, timestamp_ms: float, duration_ms: float = 0.0) -> None:
+        """Update the insert timestamp when no frame is actively selected."""
+        maximum = max(0.0, float(duration_ms or self._duration or 0.0)) / 1000.0
+        self._frame_timestamp_spin.setMaximum(max(1.0, maximum))
+        if getattr(self, "_selected_frame_id", ""):
+            return
+        self._frame_timestamp_spin.blockSignals(True)
+        self._frame_timestamp_spin.setValue(max(0.0, min(float(timestamp_ms or 0.0) / 1000.0, self._frame_timestamp_spin.maximum())))
+        self._frame_timestamp_spin.blockSignals(False)
 
     def set_range_actions_enabled(self, has_selection: bool, can_paste: bool = False) -> None:
         """Enable selected-range editing buttons from the editor window."""

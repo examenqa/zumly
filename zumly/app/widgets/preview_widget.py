@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, Signal, QPointF, QRectF
-from PySide6.QtGui import QImage, QPainter, QPainterPath, QColor, QFont, QPen
+from PySide6.QtGui import QImage, QPainter, QPainterPath, QColor, QFont, QPen, QFontMetrics
 from PySide6.QtWidgets import QWidget, QMenu
 
 from ..models import (
@@ -89,6 +89,7 @@ class PreviewWidget(QWidget):
         self._debug_keyframes: List[ZoomKeyframe] = []
         self._video_segments: List[VideoSegment] = []
         self._timeline_frames: List[TimelineFrame] = []
+        self._selected_timeline_frame_id: str = ""
 
         # background preset
         self._bg_preset = None  # None → use default
@@ -242,9 +243,21 @@ class PreviewWidget(QWidget):
             if jumped:
                 self.seek_to(snapped_ms)
 
-    def set_timeline_frames(self, frames: List[TimelineFrame] | None) -> None:
+    def set_timeline_frames(self, frames: List[TimelineFrame] | None, selected_id: str = "") -> None:
         """Provide inserted text/image cards for preview rendering."""
         self._timeline_frames = list(frames or [])
+        self._selected_timeline_frame_id = selected_id
+        if self._selected_timeline_frame_id and not any(
+            frame.id == self._selected_timeline_frame_id for frame in self._timeline_frames
+        ):
+            self._selected_timeline_frame_id = ""
+        self.update()
+
+    def select_timeline_frame(self, frame_id: str) -> None:
+        """Select a timeline frame for insertion-card preview."""
+        self._selected_timeline_frame_id = frame_id if any(
+            frame.id == frame_id for frame in self._timeline_frames
+        ) else ""
         self.update()
 
     def set_recording_mode(self, enabled: bool) -> None:
@@ -1096,10 +1109,15 @@ class PreviewWidget(QWidget):
         painter.end()
 
     def _active_timeline_frame(self) -> TimelineFrame | None:
-        for frame in sorted(self._timeline_frames, key=lambda item: (float(item.timestamp_ms), item.id)):
-            start = float(frame.timestamp_ms)
-            end = start + max(250.0, float(frame.duration_ms))
-            if start <= self._current_time_ms <= end:
+        if not self._selected_timeline_frame_id:
+            return None
+        for frame in self._timeline_frames:
+            if frame.id != self._selected_timeline_frame_id:
+                continue
+            # Inserted frames extend the output timeline; their duration does
+            # not consume source time. Show the selected card only at the
+            # insertion point so preview does not look like it deleted video.
+            if abs(float(frame.timestamp_ms) - float(self._current_time_ms)) <= 150.0:
                 return frame
         return None
 
@@ -1140,8 +1158,42 @@ class PreviewWidget(QWidget):
             color = QColor("#f9fafb")
         painter.setPen(color)
         rect = QRectF(canvas_x + canvas_w * 0.11, canvas_y + canvas_h * 0.20, canvas_w * 0.78, canvas_h * 0.60)
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, frame.text or "Add your text")
+        self._draw_frame_text_lines(painter, rect, frame.text or "Add your text")
         painter.restore()
+
+    def _draw_frame_text_lines(self, painter: QPainter, rect: QRectF, text: str) -> None:
+        metrics = QFontMetrics(painter.font())
+        max_width = max(1, int(rect.width()))
+        lines: list[str] = []
+        for paragraph in self._clean_frame_text(text).splitlines() or [""]:
+            words = paragraph.split()
+            if not words:
+                lines.append("")
+                continue
+            current = words[0]
+            for word in words[1:]:
+                candidate = f"{current} {word}"
+                if metrics.horizontalAdvance(candidate) <= max_width:
+                    current = candidate
+                else:
+                    lines.append(current)
+                    current = word
+            lines.append(current)
+        line_height = max(metrics.height(), 1)
+        total_height = len(lines) * line_height
+        y = rect.y() + max(0.0, (rect.height() - total_height) / 2.0)
+        for line in lines:
+            line_rect = QRectF(rect.x(), y, rect.width(), line_height)
+            painter.drawText(line_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, line)
+            y += line_height
+
+    def _clean_frame_text(self, text: str) -> str:
+        bidi_controls = {
+            "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",
+            "\u2066", "\u2067", "\u2068", "\u2069",
+            "\u200e", "\u200f",
+        }
+        return "".join(ch for ch in text if ch not in bidi_controls)
 
     def _source_point_to_widget(self, nx: float, ny: float) -> tuple[float, float]:
         cx, cy, W, H, scr_x, scr_y, scr_w, scr_h = self._screen_geometry()

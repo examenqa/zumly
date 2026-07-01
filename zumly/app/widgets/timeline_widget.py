@@ -171,6 +171,8 @@ class _TimelineTrack(QWidget):
     pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)   # timestamp ms — add zoom at this time
     add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover at this time
+    text_frame_requested_at = Signal(float)  # timestamp ms — insert text frame here
+    image_frame_requested_at = Signal(float)  # timestamp ms — insert image frame here
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete directly
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
@@ -591,6 +593,16 @@ class _TimelineTrack(QWidget):
             split_act.triggered.connect(
                 lambda checked=False, range_time=time_ms: self._handle_range_point(range_time)
             )
+            frame_text_act = menu.addAction("Add text frame here")
+            frame_text_act.setIcon(load_icon("add", color=T.FG_PRIMARY))
+            frame_text_act.triggered.connect(
+                lambda checked=False, t=time_ms: self.text_frame_requested_at.emit(t)
+            )
+            frame_image_act = menu.addAction("Add picture frame here")
+            frame_image_act.setIcon(load_icon("folder_open", color=T.FG_PRIMARY))
+            frame_image_act.triggered.connect(
+                lambda checked=False, t=time_ms: self.image_frame_requested_at.emit(t)
+            )
             if len(self.video_segments) > 1:
                 del_act = menu.addAction("Delete selected range")
                 del_act.setIcon(load_icon("delete", color=T.DANGER))
@@ -617,6 +629,16 @@ class _TimelineTrack(QWidget):
             act_vo.setIcon(load_icon("mic", color=T.FG_PRIMARY))
             act_vo.triggered.connect(
                 lambda: self.add_voiceover_requested.emit(time_ms)
+            )
+            act_text_frame = menu.addAction("  Add text frame here")
+            act_text_frame.setIcon(load_icon("add", color=T.FG_PRIMARY))
+            act_text_frame.triggered.connect(
+                lambda checked=False, t=time_ms: self.text_frame_requested_at.emit(t)
+            )
+            act_image_frame = menu.addAction("  Add picture frame here")
+            act_image_frame.setIcon(load_icon("folder_open", color=T.FG_PRIMARY))
+            act_image_frame.triggered.connect(
+                lambda checked=False, t=time_ms: self.image_frame_requested_at.emit(t)
             )
             menu.exec(self.mapToGlobal(pos))
 
@@ -1231,26 +1253,28 @@ class _TimelineTrack(QWidget):
         painter.setPen(QPen(QColor("#6c6890"), 1))
         painter.drawText(4, top + h - 3, "Frames")
 
-        for frame in sorted(self.timeline_frames, key=lambda item: (float(item.timestamp_ms), item.id)):
+        for index, frame in enumerate(sorted(self.timeline_frames, key=lambda item: (float(item.timestamp_ms), item.id)), start=1):
             sx = self._ms_to_x(frame.timestamp_ms)
-            ex = self._ms_to_x(frame.timestamp_ms + max(250.0, float(frame.duration_ms)))
-            frame_w = max(ex - sx, 10)
-            rect = QRectF(sx, top, frame_w, h)
+            frame_w = 58
+            rect_x = max(0.0, min(float(w - frame_w), sx - 8.0))
+            rect = QRectF(rect_x, top, frame_w, h)
             is_selected = frame.id == self._selected_frame_id
             if frame.kind == "image":
                 fill = QColor(59, 130, 246, 80 if is_selected else 48)
                 stroke = QColor("#60a5fa" if is_selected else "#3b82f6")
-                label = "Image"
+                label = f"Img {index}"
             else:
                 fill = QColor(168, 85, 247, 85 if is_selected else 50)
                 stroke = QColor("#c084fc" if is_selected else "#a855f7")
-                label = "Text"
+                label = f"Txt {index}"
+            painter.setPen(QPen(stroke, 1.5 if is_selected else 1.0))
+            painter.drawLine(int(sx), top - 3, int(sx), top + h + 3)
             painter.setBrush(QBrush(fill))
             painter.setPen(QPen(stroke, 2.0 if is_selected else 1.0))
             painter.drawRoundedRect(rect, 3, 3)
             painter.setPen(QPen(QColor("#f8fafc"), 1))
-            painter.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, label)
-            self._frame_rects.append((sx, frame_w, frame.id))
+            painter.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignCenter, label)
+            self._frame_rects.append((rect_x, frame_w, frame.id))
 
     def _timeline_frame_hit_test(self, mx: float, my: float) -> str:
         """Return the timeline frame id at (mx, my), or empty string."""
@@ -1869,6 +1893,8 @@ class TimelineWidget(QWidget):
     pan_point_clicked = Signal(str, str) # (pan kf id, segment start kf id)
     add_zoom_requested = Signal(float)  # timestamp ms — add zoom at this time
     add_voiceover_requested = Signal(float)  # timestamp ms — add voiceover here
+    text_frame_requested_at = Signal(float)  # timestamp ms — insert text frame here
+    image_frame_requested_at = Signal(float)  # timestamp ms — insert image frame here
     voiceover_clicked = Signal(str)       # voiceover segment id — edit
     voiceover_deleted = Signal(str)       # voiceover segment id — delete
     voiceover_moved = Signal(str, float)  # voiceover segment id, new timestamp ms
@@ -1943,6 +1969,8 @@ class TimelineWidget(QWidget):
         self._track.pan_point_clicked.connect(self.pan_point_clicked)
         self._track.add_zoom_requested.connect(self.add_zoom_requested)
         self._track.add_voiceover_requested.connect(self.add_voiceover_requested)
+        self._track.text_frame_requested_at.connect(self.text_frame_requested_at)
+        self._track.image_frame_requested_at.connect(self.image_frame_requested_at)
         self._track.voiceover_clicked.connect(self.voiceover_clicked)
         self._track.voiceover_deleted.connect(self.voiceover_deleted)
         self._track.voiceover_moved.connect(self.voiceover_moved)
