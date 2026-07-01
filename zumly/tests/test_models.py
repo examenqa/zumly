@@ -12,6 +12,7 @@ from app.models import (
     ZoomKeyframe,
     RecordingSession,
     VoiceoverSegment,
+    TimelineFrame,
     VideoSegment,
     Chapter,
     ClickEffectPreset,
@@ -593,6 +594,35 @@ class TestVideoSegment:
             )
 
 
+# ── TimelineFrame ───────────────────────────────────────────────────
+
+
+class TestTimelineFrame:
+    def test_text_frame_roundtrip(self) -> None:
+        frame = TimelineFrame.create(
+            1500.0,
+            kind="text",
+            duration_ms=3200.0,
+            text="Pause here",
+        )
+        loaded = TimelineFrame.from_dict(frame.to_dict())
+        assert loaded.id == frame.id
+        assert loaded.kind == "text"
+        assert loaded.timestamp_ms == 1500.0
+        assert loaded.duration_ms == 3200.0
+        assert loaded.text == "Pause here"
+
+    def test_image_frame_roundtrip(self) -> None:
+        frame = TimelineFrame.create(
+            2000.0,
+            kind="image",
+            image_path="C:/demo/picture.png",
+        )
+        loaded = TimelineFrame.from_dict(frame.to_dict())
+        assert loaded.kind == "image"
+        assert loaded.image_path == "C:/demo/picture.png"
+
+
 # ── RecordingSession + VideoSegments ─────────────────────────────────
 
 
@@ -626,6 +656,20 @@ class TestRecordingSessionVideoSegments:
         assert s2.video_segments[0].end_ms == 2500
         assert s2.video_segments[1].start_ms == 2500
         assert s2.video_segments[1].speed == 2.0
+
+    def test_json_roundtrip_timeline_frames(self) -> None:
+        frame = TimelineFrame.create(2500.0, kind="text", text="Checkpoint")
+        session = RecordingSession(
+            id="tf1", start_time=0, duration=5000,
+            mouse_track=[MousePosition(0, 0, 0)],
+            keyframes=[],
+            timeline_frames=[frame],
+        )
+        data = json.loads(session.to_json())
+        assert data["timelineFrames"][0]["id"] == frame.id
+        loaded = RecordingSession.from_json(session.to_json())
+        assert loaded.timeline_frames is not None
+        assert loaded.timeline_frames[0].text == "Checkpoint"
 
     def test_json_omits_video_segments_when_empty(self) -> None:
         session = RecordingSession(

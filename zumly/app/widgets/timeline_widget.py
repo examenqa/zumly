@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QToolTip,
 )
 
-from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment, VideoSegment, Chapter
+from ..models import ZoomKeyframe, MousePosition, KeyEvent, ClickEvent, VoiceoverSegment, TimelineFrame, VideoSegment, Chapter
 from ..utils import fmt_time as _fmt
 from ..icon_loader import load_icon
 from .. import tokens as T
@@ -178,6 +178,7 @@ class _TimelineTrack(QWidget):
     chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)  # video segment id — delete
     segment_selected = Signal(int)        # selected video segment index
+    timeline_frame_selected = Signal(str)  # timeline frame id
     split_requested = Signal(float)       # timestamp ms — add a range boundary here
     range_selection_requested = Signal(float, float)  # start/end ms — create a selected range
     trim_changed = Signal(float, float)  # (trim_start_ms, trim_end_ms)
@@ -210,6 +211,7 @@ class _TimelineTrack(QWidget):
         self.click_events: List[ClickEvent] = []
         self.voiceover_segments: List[VoiceoverSegment] = []
         self.video_segments: List[VideoSegment] = []
+        self.timeline_frames: List[TimelineFrame] = []
         self.trim_start_ms: float = 0.0
         self.trim_end_ms: float = 0.0  # 0 = no trim
         self.chapters: List[Chapter] = []
@@ -257,6 +259,10 @@ class _TimelineTrack(QWidget):
         self._video_seg_rects: List[tuple] = []
         self._video_seg_top: int = 0
         self._video_seg_h: int = 0
+        self._frame_rects: List[tuple] = []
+        self._frame_top: int = 0
+        self._frame_h: int = 0
+        self._selected_frame_id: str = ""
         # Voiceover selection
         self._selected_vo_id: str = ""          # voiceover segment id
         # Track mouse press position to distinguish click from drag
@@ -542,6 +548,28 @@ class _TimelineTrack(QWidget):
             )
             menu.exec(self.mapToGlobal(pos))
             return
+        # Check inserted text/image frame
+        frame_id = self._timeline_frame_hit_test(mx, my)
+        if frame_id:
+            self._selected_segment_id = ""
+            self._selected_click_idx = -1
+            self._selected_vo_id = ""
+            self._selected_video_seg_id = ""
+            self._selected_frame_id = frame_id
+            self.timeline_frame_selected.emit(frame_id)
+            self.update()
+            menu = QMenu(self)
+            menu.setStyleSheet(self._menu_style())
+            frame = next((item for item in self.timeline_frames if item.id == frame_id), None)
+            label = "Image frame" if frame and frame.kind == "image" else "Text frame"
+            header = menu.addAction(f"  {label}")
+            header.setEnabled(False)
+            menu.addSeparator()
+            edit_act = menu.addAction("Edit in panel")
+            edit_act.setIcon(load_icon("edit", color=T.FG_PRIMARY))
+            edit_act.triggered.connect(lambda checked=False, fid=frame_id: self.timeline_frame_selected.emit(fid))
+            menu.exec(self.mapToGlobal(pos))
+            return
         # Check video segment
         vs_id = self._video_seg_hit_test(mx, my)
         if vs_id:
@@ -643,6 +671,10 @@ class _TimelineTrack(QWidget):
             self._draw_video_segments(painter, w, self._video_seg_top, self._video_seg_h)
         else:
             self._video_seg_rects = []
+
+        self._frame_top = self._video_seg_top + self._video_seg_h + 2
+        self._frame_h = 16
+        self._draw_timeline_frames(painter, w, self._frame_top, self._frame_h)
 
         # chapter markers (small flags along the bottom)
         if self.chapters:
@@ -1186,6 +1218,51 @@ class _TimelineTrack(QWidget):
                 return seg_id
         return ""
 
+    def _draw_timeline_frames(self, painter: QPainter, w: int, top: int, h: int) -> None:
+        """Draw inserted text/image cards as timeline blocks."""
+        self._frame_rects = []
+        if self.duration <= 0 or not self.timeline_frames:
+            return
+
+        label_font = QFont()
+        label_font.setFamily("Segoe UI Variable")
+        label_font.setPixelSize(10)
+        painter.setFont(label_font)
+        painter.setPen(QPen(QColor("#6c6890"), 1))
+        painter.drawText(4, top + h - 3, "Frames")
+
+        for frame in sorted(self.timeline_frames, key=lambda item: (float(item.timestamp_ms), item.id)):
+            sx = self._ms_to_x(frame.timestamp_ms)
+            ex = self._ms_to_x(frame.timestamp_ms + max(250.0, float(frame.duration_ms)))
+            frame_w = max(ex - sx, 10)
+            rect = QRectF(sx, top, frame_w, h)
+            is_selected = frame.id == self._selected_frame_id
+            if frame.kind == "image":
+                fill = QColor(59, 130, 246, 80 if is_selected else 48)
+                stroke = QColor("#60a5fa" if is_selected else "#3b82f6")
+                label = "Image"
+            else:
+                fill = QColor(168, 85, 247, 85 if is_selected else 50)
+                stroke = QColor("#c084fc" if is_selected else "#a855f7")
+                label = "Text"
+            painter.setBrush(QBrush(fill))
+            painter.setPen(QPen(stroke, 2.0 if is_selected else 1.0))
+            painter.drawRoundedRect(rect, 3, 3)
+            painter.setPen(QPen(QColor("#f8fafc"), 1))
+            painter.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, label)
+            self._frame_rects.append((sx, frame_w, frame.id))
+
+    def _timeline_frame_hit_test(self, mx: float, my: float) -> str:
+        """Return the timeline frame id at (mx, my), or empty string."""
+        if not self._frame_rects:
+            return ""
+        if my < self._frame_top or my > self._frame_top + self._frame_h:
+            return ""
+        for sx, sw, frame_id in self._frame_rects:
+            if sx <= mx <= sx + sw:
+                return frame_id
+        return ""
+
     def _emit_video_segment_selected(self, seg_id: str) -> None:
         """Emit the selected segment index for the editor panel."""
         for idx, seg in enumerate(self.video_segments):
@@ -1429,6 +1506,16 @@ class _TimelineTrack(QWidget):
                 self._drag_body_offset = click_ms - seg.timestamp if seg else 0.0
                 self._press_pos = event.position()
                 self._drag_actually_moved = False
+                self.update()
+                return
+            frame_id = self._timeline_frame_hit_test(mx, my)
+            if frame_id:
+                self._selected_frame_id = frame_id
+                self._selected_vo_id = ""
+                self._selected_click_idx = -1
+                self._selected_segment_id = ""
+                self._selected_video_seg_id = ""
+                self.timeline_frame_selected.emit(frame_id)
                 self.update()
                 return
             # Clips row: click selects a kept range, drag creates a new selected range.
@@ -1788,6 +1875,7 @@ class TimelineWidget(QWidget):
     chapter_deleted = Signal(int)         # chapter timestamp ms — delete
     video_segment_deleted = Signal(str)   # video segment id — delete
     segment_selected = Signal(int)        # selected video segment index
+    timeline_frame_selected = Signal(str) # text/image frame id
     split_requested = Signal(float)       # timestamp ms — add a range boundary here
     range_selection_requested = Signal(float, float)  # start/end ms — create a selected range
     trim_changed = Signal(float, float) # (trim_start_ms, trim_end_ms)
@@ -1862,6 +1950,7 @@ class TimelineWidget(QWidget):
         self._track.chapter_deleted.connect(self.chapter_deleted)
         self._track.video_segment_deleted.connect(self.video_segment_deleted)
         self._track.segment_selected.connect(self.segment_selected)
+        self._track.timeline_frame_selected.connect(self.timeline_frame_selected)
         self._track.split_requested.connect(self.split_requested)
         self._track.range_selection_requested.connect(self.range_selection_requested)
         self._track.trim_changed.connect(self.trim_changed)
@@ -1941,6 +2030,7 @@ class TimelineWidget(QWidget):
         trim_end_ms: float = 0.0,
         voiceover_segments: List[VoiceoverSegment] | None = None,
         video_segments: List[VideoSegment] | None = None,
+        timeline_frames: List[TimelineFrame] | None = None,
     ) -> None:
         """Push new session data into the timeline and repaint."""
         self._track.duration = duration
@@ -1958,10 +2048,18 @@ class TimelineWidget(QWidget):
             self._track._update_spinner_timer()
         if video_segments is not None:
             self._track.video_segments = video_segments
+        if timeline_frames is not None:
+            self._track.timeline_frames = list(timeline_frames or [])
         self._time_display.set_times(current_time, duration)
         # Clamp view state after duration changes (scale may exceed new max)
         self._track._clamp_view()
         self._sync_scrollbar()
+        self._track.update()
+
+    def set_timeline_frames(self, frames: List[TimelineFrame], selected_id: str = "") -> None:
+        """Update inserted text/image frame blocks."""
+        self._track.timeline_frames = list(frames or [])
+        self._track._selected_frame_id = selected_id if any(frame.id == selected_id for frame in frames or []) else ""
         self._track.update()
 
     def set_video_segments(self, video_segments: List[VideoSegment], selected_index: int = -1) -> None:

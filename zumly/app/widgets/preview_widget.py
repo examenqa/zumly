@@ -27,7 +27,7 @@ from PySide6.QtWidgets import QWidget, QMenu
 from ..models import (
     MousePosition, ClickEvent, ZoomKeyframe,
     TextAnnotation, ArrowAnnotation, HighlightBox, AnnotationCollection,
-    VideoSegment,
+    TimelineFrame, VideoSegment,
 )
 from ..zoom_engine import speed_at_time
 from ..icon_loader import load_icon
@@ -88,6 +88,7 @@ class PreviewWidget(QWidget):
         self._debug_overlay: bool = False
         self._debug_keyframes: List[ZoomKeyframe] = []
         self._video_segments: List[VideoSegment] = []
+        self._timeline_frames: List[TimelineFrame] = []
 
         # background preset
         self._bg_preset = None  # None → use default
@@ -240,6 +241,11 @@ class PreviewWidget(QWidget):
             snapped_ms, jumped = self._snap_to_video_segment(self._playback_pos_ms)
             if jumped:
                 self.seek_to(snapped_ms)
+
+    def set_timeline_frames(self, frames: List[TimelineFrame] | None) -> None:
+        """Provide inserted text/image cards for preview rendering."""
+        self._timeline_frames = list(frames or [])
+        self.update()
 
     def set_recording_mode(self, enabled: bool) -> None:
         """Enable/disable recording overlay (blurred snapshot + indicator)."""
@@ -1076,6 +1082,10 @@ class PreviewWidget(QWidget):
         if self._highlights:
             self._draw_highlights(painter)
 
+        active_frame = self._active_timeline_frame()
+        if active_frame:
+            self._draw_timeline_frame(painter, active_frame)
+
         # Centroid-pick banner
         if self._centroid_pick_mode:
             self._draw_centroid_pick_banner(painter)
@@ -1084,6 +1094,54 @@ class PreviewWidget(QWidget):
             self._draw_highlight_pick_banner(painter)
 
         painter.end()
+
+    def _active_timeline_frame(self) -> TimelineFrame | None:
+        for frame in sorted(self._timeline_frames, key=lambda item: (float(item.timestamp_ms), item.id)):
+            start = float(frame.timestamp_ms)
+            end = start + max(250.0, float(frame.duration_ms))
+            if start <= self._current_time_ms <= end:
+                return frame
+        return None
+
+    def _draw_timeline_frame(self, painter: QPainter, frame: TimelineFrame) -> None:
+        canvas_x, canvas_y, canvas_w, canvas_h = self._canvas_rect()
+        painter.save()
+        bg = QColor(frame.background_color or "#111827")
+        if not bg.isValid():
+            bg = QColor("#111827")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRect(QRectF(canvas_x, canvas_y, canvas_w, canvas_h))
+
+        if frame.kind == "image" and frame.image_path:
+            img = QImage(frame.image_path)
+            if not img.isNull():
+                max_w = canvas_w * 0.92
+                max_h = canvas_h * 0.88
+                scale = min(max_w / max(img.width(), 1), max_h / max(img.height(), 1))
+                draw_w = img.width() * scale
+                draw_h = img.height() * scale
+                rect = QRectF(
+                    canvas_x + (canvas_w - draw_w) / 2,
+                    canvas_y + (canvas_h - draw_h) / 2,
+                    draw_w,
+                    draw_h,
+                )
+                painter.drawImage(rect, img)
+                painter.restore()
+                return
+
+        font = QFont("Segoe UI Variable")
+        font.setPixelSize(max(18, min(int(frame.font_size), 120)))
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        color = QColor(frame.text_color or "#f9fafb")
+        if not color.isValid():
+            color = QColor("#f9fafb")
+        painter.setPen(color)
+        rect = QRectF(canvas_x + canvas_w * 0.11, canvas_y + canvas_h * 0.20, canvas_w * 0.78, canvas_h * 0.60)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, frame.text or "Add your text")
+        painter.restore()
 
     def _source_point_to_widget(self, nx: float, ny: float) -> tuple[float, float]:
         cx, cy, W, H, scr_x, scr_y, scr_w, scr_h = self._screen_geometry()

@@ -13,7 +13,7 @@ deletions, voiceover removals, and keyframe edits.
 import copy
 from dataclasses import dataclass, field
 from typing import List, Tuple
-from .models import ClickEvent, HighlightBox, VideoSegment, VoiceoverSegment, ZoomKeyframe
+from .models import ClickEvent, HighlightBox, TimelineFrame, VideoSegment, VoiceoverSegment, ZoomKeyframe
 
 
 @dataclass
@@ -22,6 +22,7 @@ class _Snapshot:
     keyframes: List[ZoomKeyframe] = field(default_factory=list)
     click_events: List[ClickEvent] = field(default_factory=list)
     video_segments: List[VideoSegment] = field(default_factory=list)
+    timeline_frames: List[TimelineFrame] = field(default_factory=list)
     voiceover_segments: List[VoiceoverSegment] = field(default_factory=list)
     highlights: List[HighlightBox] = field(default_factory=list)
 
@@ -104,6 +105,7 @@ class ZoomEngine:
         self.keyframes: List[ZoomKeyframe] = []
         self.click_events: List[ClickEvent] = []
         self.video_segments: List[VideoSegment] = []
+        self.timeline_frames: List[TimelineFrame] = []
         self.voiceover_segments: List[VoiceoverSegment] = []
         self.highlights: List[HighlightBox] = []
         self.current_zoom: float = 1.0
@@ -126,6 +128,7 @@ class ZoomEngine:
             keyframes=copy.deepcopy(self.keyframes),
             click_events=copy.deepcopy(self.click_events),
             video_segments=copy.deepcopy(self.video_segments),
+            timeline_frames=copy.deepcopy(self.timeline_frames),
             voiceover_segments=copy.deepcopy(self.voiceover_segments),
             highlights=copy.deepcopy(self.highlights),
         )
@@ -150,6 +153,7 @@ class ZoomEngine:
         self.keyframes = snap.keyframes
         self.click_events = snap.click_events
         self.video_segments = snap.video_segments
+        self.timeline_frames = snap.timeline_frames
         self.voiceover_segments = snap.voiceover_segments
         self.highlights = snap.highlights
         return True
@@ -163,6 +167,7 @@ class ZoomEngine:
         self.keyframes = snap.keyframes
         self.click_events = snap.click_events
         self.video_segments = snap.video_segments
+        self.timeline_frames = snap.timeline_frames
         self.voiceover_segments = snap.voiceover_segments
         self.highlights = snap.highlights
         return True

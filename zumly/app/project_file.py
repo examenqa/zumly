@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 PROJ_EXT = ".fcproj"
 _JSON_NAME = "project.json"
 _VIDEO_NAME = "recording.mp4"
+_FRAME_IMAGE_DIR = "frame_images"
 
 
 def _annotation_count(annotations: Optional[AnnotationCollection]) -> int:
@@ -93,6 +94,17 @@ def save_project(
 
     # Build project JSON (session data + extras)
     data = json.loads(session.to_json())
+    frame_image_entries: list[tuple[str, str]] = []
+    if session.timeline_frames:
+        frames_json = data.get("timelineFrames", [])
+        for frame, frame_json in zip(session.timeline_frames, frames_json):
+            if frame.kind != "image" or not frame.image_path or not os.path.isfile(frame.image_path):
+                continue
+            _, ext = os.path.splitext(frame.image_path)
+            ext = ext if ext else ".png"
+            arc_name = f"{_FRAME_IMAGE_DIR}/{frame.id}{ext.lower()}"
+            frame_json["imagePath"] = arc_name
+            frame_image_entries.append((frame.image_path, arc_name))
     if session.key_events:
         logger.info(
             "Ignoring %d removed keystroke event(s) during project save",
@@ -127,8 +139,9 @@ def save_project(
         and any(s.audio_path and os.path.isfile(s.audio_path)
                 for s in session.voiceover_segments)
     )
+    has_frame_images = bool(frame_image_entries)
 
-    if metadata_only and os.path.isfile(output_path) and not has_vo_audio:
+    if metadata_only and os.path.isfile(output_path) and not has_vo_audio and not has_frame_images:
         t0 = time.perf_counter()
         if _fast_metadata_rewrite(output_path, json_str):
             logger.info(
@@ -155,6 +168,8 @@ def save_project(
                 if seg.audio_path and os.path.isfile(seg.audio_path):
                     arc_name = f"voiceover_{seg.id[:8]}.wav"
                     zf.write(seg.audio_path, arc_name)
+        for source_path, arc_name in frame_image_entries:
+            zf.write(source_path, arc_name)
         zf.writestr(_JSON_NAME, json_str)
 
     return output_path
@@ -333,6 +348,17 @@ def load_project(input_path: str) -> dict:
                     seg.audio_path = extracted
                     break
 
+    # Restore inserted picture frame image paths from extracted files.
+    if session.timeline_frames:
+        for frame in session.timeline_frames:
+            if frame.kind != "image" or not frame.image_path:
+                continue
+            normalized = frame.image_path.replace("\\", "/")
+            if normalized.startswith(f"{_FRAME_IMAGE_DIR}/"):
+                extracted = os.path.join(extract_dir, *normalized.split("/"))
+                if os.path.isfile(extracted):
+                    frame.image_path = extracted
+
     monitor_rect = data.get("monitorRect")
     actual_fps = data.get("actualFps", 30.0)
 
@@ -383,4 +409,3 @@ def load_project(input_path: str) -> dict:
         "keystroke_config": None,
         "annotations": None,
     }
-

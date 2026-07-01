@@ -262,6 +262,81 @@ class VideoSegment:
 
 
 @dataclass
+class TimelineFrame:
+    """A still text or image card inserted between video ranges."""
+
+    id: str
+    timestamp_ms: float
+    duration_ms: float = 2500.0
+    kind: str = "text"  # "text" | "image"
+    text: str = "Add your text"
+    image_path: str = ""
+    background_color: str = "#111827"
+    text_color: str = "#f9fafb"
+    font_size: int = 54
+
+    @staticmethod
+    def create(
+        timestamp_ms: float,
+        *,
+        kind: str = "text",
+        duration_ms: float = 2500.0,
+        text: str = "Add your text",
+        image_path: str = "",
+    ) -> "TimelineFrame":
+        frame_kind = kind if kind in ("text", "image") else "text"
+        return TimelineFrame(
+            id=str(uuid.uuid4()),
+            timestamp_ms=max(0.0, float(timestamp_ms)),
+            duration_ms=max(250.0, float(duration_ms)),
+            kind=frame_kind,
+            text=text,
+            image_path=image_path,
+        )
+
+    def to_dict(self) -> dict:
+        data = {
+            "id": self.id,
+            "timestampMs": self.timestamp_ms,
+            "durationMs": self.duration_ms,
+            "kind": self.kind,
+        }
+        if self.text:
+            data["text"] = self.text
+        if self.image_path:
+            data["imagePath"] = self.image_path
+        if self.background_color != "#111827":
+            data["backgroundColor"] = self.background_color
+        if self.text_color != "#f9fafb":
+            data["textColor"] = self.text_color
+        if self.font_size != 54:
+            data["fontSize"] = self.font_size
+        return data
+
+    @staticmethod
+    def from_dict(d: dict) -> "TimelineFrame":
+        try:
+            kind = d.get("kind", "text")
+            if kind not in ("text", "image"):
+                kind = "text"
+            duration_ms = float(d.get("durationMs", 2500.0))
+            duration_ms = max(250.0, min(duration_ms, 600000.0))
+            return TimelineFrame(
+                id=d["id"],
+                timestamp_ms=float(d["timestampMs"]),
+                duration_ms=duration_ms,
+                kind=kind,
+                text=d.get("text", "Add your text"),
+                image_path=d.get("imagePath", ""),
+                background_color=d.get("backgroundColor", "#111827"),
+                text_color=d.get("textColor", "#f9fafb"),
+                font_size=max(12, min(int(d.get("fontSize", 54)), 180)),
+            )
+        except KeyError as exc:
+            raise ValueError(f"TimelineFrame missing required field: {exc}") from exc
+
+
+@dataclass
 class RecordingSession:
     """Top-level container for everything captured in one recording.
 
@@ -283,6 +358,7 @@ class RecordingSession:
     trim_end_ms: float = 0.0  # 0 = no trim (use full duration)
     voiceover_segments: List["VoiceoverSegment"] | None = None
     video_segments: List["VideoSegment"] | None = None
+    timeline_frames: List["TimelineFrame"] | None = None
     chapters: List["Chapter"] | None = None
     highlights: List["HighlightBox"] | None = None
     
@@ -313,6 +389,8 @@ class RecordingSession:
             data["voiceoverSegments"] = [s.to_dict() for s in self.voiceover_segments]
         if self.video_segments:
             data["videoSegments"] = [s.to_dict() for s in self.video_segments]
+        if self.timeline_frames:
+            data["timelineFrames"] = [f.to_dict() for f in self.timeline_frames]
         if self.chapters:
             data["chapters"] = [c.to_dict() for c in self.chapters]
         if self.highlights:
@@ -368,6 +446,10 @@ class RecordingSession:
         video_segments = None
         if "videoSegments" in d:
             video_segments = [VideoSegment.from_dict(v) for v in d["videoSegments"]]
+
+        timeline_frames = None
+        if "timelineFrames" in d:
+            timeline_frames = [TimelineFrame.from_dict(v) for v in d["timelineFrames"]]
             
         chapters = None
         if "chapters" in d:
@@ -390,6 +472,7 @@ class RecordingSession:
             trim_end_ms=d.get("trimEndMs", 0.0),
             voiceover_segments=voiceover_segments,
             video_segments=video_segments,
+            timeline_frames=timeline_frames,
             chapters=chapters,
             highlights=highlights,
             background_id=d.get("backgroundId"),

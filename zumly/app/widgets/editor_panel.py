@@ -315,6 +315,10 @@ class EditorPanel(QWidget):
     segment_copy_requested = Signal()
     segment_paste_requested = Signal()
     segment_delete_requested = Signal()
+    text_frame_add_requested = Signal()
+    image_frame_add_requested = Signal()
+    timeline_frame_changed = Signal(str, float, str)  # frame id, duration ms, text
+    timeline_frame_delete_requested = Signal(str)
     highlight_add_requested = Signal(str)        # shape: "rect" or "circle"
     highlight_timing_changed = Signal(float, float)  # start/end ms for selected highlight
     highlight_delete_requested = Signal()
@@ -819,6 +823,70 @@ class EditorPanel(QWidget):
             subtitle="Cut, copy, delete, and retime selected ranges.",
         )
         self._container.addWidget(self._retiming_section)
+
+        # ── Inserted frames (collapsible) ──────────────────────────
+        frames_body = QWidget()
+        frames_lay = QVBoxLayout(frames_body)
+        frames_lay.setContentsMargins(T.SPACE_LG, T.SPACE_MD, T.SPACE_LG, T.SPACE_SM)
+        frames_lay.setSpacing(T.SPACE_SM)
+
+        add_frame_row = QHBoxLayout()
+        add_frame_row.setSpacing(T.SPACE_XS)
+        self._btn_add_text_frame = QPushButton("Text frame")
+        self._btn_add_text_frame.setObjectName("CtrlBtn")
+        self._btn_add_text_frame.setFixedHeight(32)
+        self._btn_add_text_frame.clicked.connect(self.text_frame_add_requested.emit)
+        add_frame_row.addWidget(self._btn_add_text_frame, 1)
+
+        self._btn_add_image_frame = QPushButton("Picture")
+        self._btn_add_image_frame.setObjectName("CtrlBtn")
+        self._btn_add_image_frame.setFixedHeight(32)
+        self._btn_add_image_frame.clicked.connect(self.image_frame_add_requested.emit)
+        add_frame_row.addWidget(self._btn_add_image_frame, 1)
+        frames_lay.addLayout(add_frame_row)
+
+        self._frame_status = QLabel("Insert a card after the selected range, or at the playhead.")
+        self._frame_status.setObjectName("Secondary")
+        self._frame_status.setWordWrap(True)
+        frames_lay.addWidget(self._frame_status)
+
+        duration_label = QLabel("Duration")
+        duration_label.setObjectName("Secondary")
+        frames_lay.addWidget(duration_label)
+
+        self._frame_duration_spin = QDoubleSpinBox()
+        self._frame_duration_spin.setObjectName("DepthCombo")
+        self._frame_duration_spin.setDecimals(2)
+        self._frame_duration_spin.setRange(0.25, 600.0)
+        self._frame_duration_spin.setSuffix(" s")
+        self._frame_duration_spin.setFixedHeight(30)
+        self._frame_duration_spin.setEnabled(False)
+        self._frame_duration_spin.valueChanged.connect(self._on_timeline_frame_edited)
+        frames_lay.addWidget(self._frame_duration_spin)
+
+        self._frame_text_edit = QPlainTextEdit()
+        self._frame_text_edit.setPlaceholderText("Text frame copy")
+        self._frame_text_edit.setFixedHeight(92)
+        self._frame_text_edit.setEnabled(False)
+        self._frame_text_edit.textChanged.connect(self._on_timeline_frame_edited)
+        frames_lay.addWidget(self._frame_text_edit)
+
+        self._btn_delete_frame = QPushButton("Delete selected frame")
+        self._btn_delete_frame.setObjectName("CtrlBtn")
+        self._btn_delete_frame.setFixedHeight(32)
+        self._btn_delete_frame.setEnabled(False)
+        self._btn_delete_frame.clicked.connect(self._on_delete_timeline_frame)
+        frames_lay.addWidget(self._btn_delete_frame)
+
+        self._selected_frame_id = ""
+        self._frame_section = _CollapsibleSection(
+            "Frames",
+            frames_body,
+            collapsed=True,
+            icon_name="image",
+            subtitle="Insert editable text cards or picture cards between recording ranges.",
+        )
+        self._container.addWidget(self._frame_section)
 
         # ── Highlights (collapsible) ────────────────────────────────
         highlight_body = QWidget()
@@ -1668,6 +1736,49 @@ class EditorPanel(QWidget):
             self._highlight_status.setText("Click the preview after choosing Place highlight.")
         for spin in (self._highlight_start_spin, self._highlight_end_spin):
             spin.blockSignals(False)
+
+    def _on_timeline_frame_edited(self) -> None:
+        if not getattr(self, "_selected_frame_id", ""):
+            return
+        duration_ms = float(self._frame_duration_spin.value()) * 1000.0
+        text = self._frame_text_edit.toPlainText()
+        self.timeline_frame_changed.emit(self._selected_frame_id, duration_ms, text)
+
+    def _on_delete_timeline_frame(self) -> None:
+        if self._selected_frame_id:
+            self.timeline_frame_delete_requested.emit(self._selected_frame_id)
+
+    def set_selected_timeline_frame(
+        self,
+        frame_id: str,
+        kind: str = "",
+        duration_ms: float = 0.0,
+        text: str = "",
+        image_path: str = "",
+    ) -> None:
+        """Reflect selected inserted frame state in the Frames section."""
+        has_selection = bool(frame_id)
+        self._selected_frame_id = frame_id
+        self._frame_duration_spin.blockSignals(True)
+        self._frame_text_edit.blockSignals(True)
+        self._frame_duration_spin.setEnabled(has_selection)
+        self._frame_text_edit.setEnabled(has_selection and kind == "text")
+        self._btn_delete_frame.setEnabled(has_selection)
+        if has_selection:
+            self._frame_duration_spin.setValue(max(0.25, float(duration_ms or 2500.0) / 1000.0))
+            self._frame_text_edit.setPlainText(text or "")
+            if kind == "image":
+                name = image_path.split("\\")[-1].split("/")[-1] if image_path else "picture"
+                self._frame_status.setText(f"Selected picture frame: {name}")
+            else:
+                self._frame_status.setText("Selected text frame. Edit the copy here.")
+            self._frame_section.expand()
+        else:
+            self._frame_duration_spin.setValue(2.5)
+            self._frame_text_edit.setPlainText("")
+            self._frame_status.setText("Insert a card after the selected range, or at the playhead.")
+        self._frame_text_edit.blockSignals(False)
+        self._frame_duration_spin.blockSignals(False)
 
     def set_range_actions_enabled(self, has_selection: bool, can_paste: bool = False) -> None:
         """Enable selected-range editing buttons from the editor window."""

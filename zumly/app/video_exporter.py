@@ -9,9 +9,9 @@ import bisect
 from dataclasses import dataclass, replace
 from typing import Any, List, Optional, Callable
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
-from .models import ZoomKeyframe, MousePosition, ClickEvent, HighlightBox, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, Chapter
+from .models import ZoomKeyframe, MousePosition, ClickEvent, HighlightBox, TimelineFrame, VideoSegment, VoiceoverSegment, ClickEffectPreset, DEFAULT_CLICK_EFFECT, Chapter
 from .backgrounds import BackgroundPreset, DEFAULT_PRESET
 from .frames import FramePreset, DEFAULT_FRAME
 from .utils import ffmpeg_exe as _ffmpeg_exe, subprocess_kwargs as _subprocess_kwargs
@@ -282,6 +282,82 @@ def generate_highlight_png(highlight: HighlightBox, w: int, h: int, geom: dict) 
     path = f.name
     f.close()
     img.save(path)
+    return path
+
+
+def _parse_hex_color(value: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+    text = (value or "").strip().lstrip("#")
+    if len(text) != 6:
+        return fallback
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError:
+        return fallback
+
+
+def _load_frame_font(size: int) -> ImageFont.ImageFont:
+    for font_name in ("segoeuib.ttf", "segoeui.ttf", "arial.ttf"):
+        try:
+            return ImageFont.truetype(font_name, size=max(12, int(size)))
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _wrap_text_for_width(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+    lines: list[str] = []
+    for paragraph in (text or "").splitlines() or [""]:
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
+def generate_timeline_frame_png(frame: TimelineFrame, w: int, h: int) -> str:
+    """Generate a full-canvas PNG for an inserted text or picture frame."""
+    bg = _parse_hex_color(frame.background_color, (17, 24, 39))
+    canvas = Image.new("RGBA", (w, h), bg + (255,))
+
+    if frame.kind == "image" and frame.image_path and os.path.isfile(frame.image_path):
+        try:
+            with Image.open(frame.image_path) as source:
+                source = source.convert("RGBA")
+                source.thumbnail((int(w * 0.92), int(h * 0.88)), Image.Resampling.LANCZOS)
+                x = (w - source.width) // 2
+                y = (h - source.height) // 2
+                canvas.alpha_composite(source, (x, y))
+        except Exception as exc:
+            logger.warning("Failed to render image frame %s: %s", frame.image_path, exc)
+
+    if frame.kind == "text" or not (frame.kind == "image" and frame.image_path and os.path.isfile(frame.image_path)):
+        draw = ImageDraw.Draw(canvas)
+        font = _load_frame_font(frame.font_size)
+        text_color = _parse_hex_color(frame.text_color, (249, 250, 251))
+        text = frame.text or "Add your text"
+        max_width = int(w * 0.78)
+        lines = _wrap_text_for_width(text, font, max_width, draw)
+        line_boxes = [draw.textbbox((0, 0), line or " ", font=font) for line in lines]
+        line_height = max((box[3] - box[1] for box in line_boxes), default=max(24, frame.font_size))
+        total_height = len(lines) * line_height + max(0, len(lines) - 1) * 12
+        y = max(40, (h - total_height) // 2)
+        for line, box in zip(lines, line_boxes):
+            width = box[2] - box[0]
+            x = (w - width) // 2
+            draw.text((x, y), line, font=font, fill=text_color + (255,))
+            y += line_height + 12
+
+    path = tempfile.NamedTemporaryFile(suffix="_timeline_frame.png", delete=False).name
+    canvas.save(path)
     return path
 
 
@@ -659,16 +735,17 @@ class VideoExporter:
         voiceover_segments: Optional[List[VoiceoverSegment]] = None,
         video_segments: Optional[List[VideoSegment]] = None,
         chapters: Optional[List[Chapter]] = None,
+        timeline_frames: Optional[List[TimelineFrame]] = None,
         highlights: Optional[List[HighlightBox]] = None,
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, frame_timestamps, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments, highlights),
+            args=(input_path, output_path, bg_preset, frame_preset, target_resolution, duration_ms, frame_timestamps, keyframes, mouse_track, click_events, click_preset, actual_fps, monitor_rect, video_segments, timeline_frames, highlights),
             daemon=True,
         )
         self._thread.start()
 
-    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, frame_timestamps: Optional[List[float]], keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]], highlights: Optional[List[HighlightBox]]):
+    def _run(self, input_path: str, output_path: str, bg_preset: BackgroundPreset, frame_preset: FramePreset, target_resolution: Optional[tuple[int, int]], duration_ms: float, frame_timestamps: Optional[List[float]], keyframes: List[ZoomKeyframe], mouse_track: Optional[List[MousePosition]], click_events: Optional[List[ClickEvent]], click_preset: Optional[ClickEffectPreset], actual_fps: float, monitor_rect: Optional[dict], video_segments: Optional[List[VideoSegment]], timeline_frames: Optional[List[TimelineFrame]], highlights: Optional[List[HighlightBox]]):
         temp_files = []
         try:
             if self._status_cb: self._status_cb("Starting export...")
@@ -760,6 +837,8 @@ class VideoExporter:
                 ((segment.end_ms - segment.start_ms) / 1000.0) / _segment_speed(segment)
                 for segment in segments
             )
+            ordered_frames = sorted(timeline_frames or [], key=lambda frame: (float(frame.timestamp_ms), frame.id))
+            output_total_sec += sum(max(float(frame.duration_ms), 250.0) / 1000.0 for frame in ordered_frames)
             has_speed_changes = any(abs(_segment_speed(segment) - 1.0) > 0.01 for segment in segments)
             has_timeline_edits = explicit_segments and (
                 len(segments) != 1
@@ -800,6 +879,13 @@ class VideoExporter:
                     highlight_img_paths.append(highlight_path)
                 local_highlight_assets.append(asset_rows)
 
+            frame_base_input = highlight_base_input + len(highlight_img_paths)
+            timeline_frame_img_paths: List[str] = []
+            for timeline_frame in ordered_frames:
+                frame_path = generate_timeline_frame_png(timeline_frame, out_w, out_h)
+                temp_files.append(frame_path)
+                timeline_frame_img_paths.append(frame_path)
+
             filter_lines = []
 
             if len(segments) > 1:
@@ -824,6 +910,8 @@ class VideoExporter:
 
             segment_outputs: List[str] = []
             cursor_node_index = 0
+            frame_node_index = 0
+            appended_frame_ids: set[str] = set()
             for seg_index, segment in enumerate(segments):
                 media_start_sec, media_end_sec, media_duration_sec = segment_media_bounds[seg_index]
                 session_duration_sec = max((segment.end_ms - segment.start_ms) / 1000.0, 0.001)
@@ -957,6 +1045,36 @@ class VideoExporter:
                 filter_lines.append(f"[{framed_node}]setpts={retime_scale:.8f}*PTS[{out_node}]")
                 segment_outputs.append(out_node)
 
+                for frame_idx, timeline_frame in enumerate(ordered_frames):
+                    if timeline_frame.id in appended_frame_ids:
+                        continue
+                    if float(timeline_frame.timestamp_ms) <= float(segment.end_ms) + 0.5:
+                        input_index = frame_base_input + frame_idx
+                        frame_out = f"tf{frame_node_index}out"
+                        frame_duration = max(float(timeline_frame.duration_ms), 250.0) / 1000.0
+                        filter_lines.append(
+                            f"[{input_index}:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+                            f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,"
+                            f"fps={src_fps},trim=duration={frame_duration:.6f},setpts=PTS-STARTPTS[{frame_out}]"
+                        )
+                        segment_outputs.append(frame_out)
+                        appended_frame_ids.add(timeline_frame.id)
+                        frame_node_index += 1
+
+            for frame_idx, timeline_frame in enumerate(ordered_frames):
+                if timeline_frame.id in appended_frame_ids:
+                    continue
+                input_index = frame_base_input + frame_idx
+                frame_out = f"tf{frame_node_index}out"
+                frame_duration = max(float(timeline_frame.duration_ms), 250.0) / 1000.0
+                filter_lines.append(
+                    f"[{input_index}:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+                    f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,"
+                    f"fps={src_fps},trim=duration={frame_duration:.6f},setpts=PTS-STARTPTS[{frame_out}]"
+                )
+                segment_outputs.append(frame_out)
+                frame_node_index += 1
+
             if len(segment_outputs) > 1:
                 concat_inputs = "".join(f"[{node}]" for node in segment_outputs)
                 filter_lines.append(f"{concat_inputs}concat=n={len(segment_outputs)}:v=1:a=0[out]")
@@ -987,6 +1105,8 @@ class VideoExporter:
                 cmd.extend(["-loop", "1", "-i", cursor_img_path])
             for highlight_path in highlight_img_paths:
                 cmd.extend(["-loop", "1", "-i", highlight_path])
+            for frame_path in timeline_frame_img_paths:
+                cmd.extend(["-loop", "1", "-i", frame_path])
                 
             cmd.extend([
                 "-filter_complex_script", graph_path,
