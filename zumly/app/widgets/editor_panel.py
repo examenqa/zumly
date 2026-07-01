@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QScrollArea,
+    QDoubleSpinBox,
 )
 
 from .. import tokens as T
@@ -210,8 +211,8 @@ class _AISettingsDialog(QDialog):
 
         info = QLabel(
             "Configure your Azure AI Foundry credentials.\n"
-            "Chat model is used for AI Smart Zoom.\n"
-            "Automated narration always runs on GPT-5.4 and feeds the normal voiceover flow.\n"
+            "Smart Zoom uses the chat model deployment.\n"
+            "Narration and chapters use the narration deployment.\n"
             "TTS uses Azure Speech Service with the same key."
         )
         info.setWordWrap(True)
@@ -234,6 +235,14 @@ class _AISettingsDialog(QDialog):
         self._chat_model.setPlaceholderText("e.g. gpt-4o-mini (Smart Zoom)")
         form.addRow("Chat Model:", self._chat_model)
 
+        self._narration_model = QLineEdit(current_settings.narration_model)
+        self._narration_model.setPlaceholderText("e.g. gpt-5.4")
+        form.addRow("Narration Model:", self._narration_model)
+
+        self._tts_voice = QLineEdit(current_settings.tts_voice)
+        self._tts_voice.setPlaceholderText("e.g. en-US-Ava:DragonHDLatestNeural")
+        form.addRow("TTS Voice:", self._tts_voice)
+
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
@@ -253,7 +262,8 @@ class _AISettingsDialog(QDialog):
             endpoint=self._endpoint.text().strip(),
             api_key=self._api_key.text().strip(),
             chat_model=self._chat_model.text().strip(),
-            narration_model="gpt-5.4",
+            narration_model=self._narration_model.text().strip() or "gpt-5.4",
+            tts_voice=self._tts_voice.text().strip() or "en-US-Ava:DragonHDLatestNeural",
         )
 
 
@@ -306,6 +316,8 @@ class EditorPanel(QWidget):
     segment_paste_requested = Signal()
     segment_delete_requested = Signal()
     highlight_add_requested = Signal(str)        # shape: "rect" or "circle"
+    highlight_timing_changed = Signal(float, float)  # start/end ms for selected highlight
+    highlight_delete_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -834,6 +846,40 @@ class EditorPanel(QWidget):
         self._btn_add_highlight.setFixedHeight(34)
         self._btn_add_highlight.clicked.connect(self._on_add_highlight)
         highlight_lay.addWidget(self._btn_add_highlight)
+
+        timing_label = QLabel("Selected highlight timing")
+        timing_label.setObjectName("Secondary")
+        highlight_lay.addWidget(timing_label)
+
+        timing_row = QHBoxLayout()
+        timing_row.setSpacing(T.SPACE_XS)
+        self._highlight_start_spin = QDoubleSpinBox()
+        self._highlight_start_spin.setObjectName("DepthCombo")
+        self._highlight_start_spin.setDecimals(2)
+        self._highlight_start_spin.setRange(0.0, 36000.0)
+        self._highlight_start_spin.setSuffix(" s")
+        self._highlight_start_spin.setFixedHeight(30)
+        self._highlight_start_spin.setEnabled(False)
+        self._highlight_start_spin.valueChanged.connect(self._on_highlight_timing_changed)
+        timing_row.addWidget(self._highlight_start_spin, 1)
+
+        self._highlight_end_spin = QDoubleSpinBox()
+        self._highlight_end_spin.setObjectName("DepthCombo")
+        self._highlight_end_spin.setDecimals(2)
+        self._highlight_end_spin.setRange(0.0, 36000.0)
+        self._highlight_end_spin.setSuffix(" s")
+        self._highlight_end_spin.setFixedHeight(30)
+        self._highlight_end_spin.setEnabled(False)
+        self._highlight_end_spin.valueChanged.connect(self._on_highlight_timing_changed)
+        timing_row.addWidget(self._highlight_end_spin, 1)
+        highlight_lay.addLayout(timing_row)
+
+        self._btn_delete_highlight = QPushButton("Delete selected highlight")
+        self._btn_delete_highlight.setObjectName("CtrlBtn")
+        self._btn_delete_highlight.setFixedHeight(32)
+        self._btn_delete_highlight.setEnabled(False)
+        self._btn_delete_highlight.clicked.connect(self.highlight_delete_requested.emit)
+        highlight_lay.addWidget(self._btn_delete_highlight)
 
         self._highlight_status = QLabel("Click the preview after choosing Place highlight.")
         self._highlight_status.setObjectName("Secondary")
@@ -1428,11 +1474,11 @@ class EditorPanel(QWidget):
 
         settings = QSettings("zumly", "zumly")
         current = AISettings(
-            endpoint=settings.value("ai/endpoint", ""),
-            api_key=unprotect(settings.value("ai/apiKey", "")),
-            chat_model=settings.value("ai/chatModel", ""),
-            narration_model=settings.value("ai/narrationModel", "gpt-5.4"),
-            tts_voice=settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural"),
+            endpoint=settings.value("ai/endpoint", "") or "",
+            api_key=unprotect(settings.value("ai/apiKey", "") or ""),
+            chat_model=settings.value("ai/chatModel", "") or "",
+            narration_model=settings.value("ai/narrationModel", "gpt-5.4") or "gpt-5.4",
+            tts_voice=settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural") or "en-US-Ava:DragonHDLatestNeural",
         )
 
         dlg = _AISettingsDialog(current, self)
@@ -1442,6 +1488,7 @@ class EditorPanel(QWidget):
             settings.setValue("ai/apiKey", protect(result.api_key))
             settings.setValue("ai/chatModel", result.chat_model)
             settings.setValue("ai/narrationModel", result.narration_model)
+            settings.setValue("ai/ttsVoice", result.tts_voice)
             self.ai_settings_changed.emit()
             logger.info("AI settings updated")
             # Load available TTS voices in the background
@@ -1589,6 +1636,38 @@ class EditorPanel(QWidget):
         self._highlight_section.expand()
         self._highlight_status.setText("Click the preview where the highlight should appear.")
         self.highlight_add_requested.emit(str(shape))
+
+    def _on_highlight_timing_changed(self) -> None:
+        start_ms = float(self._highlight_start_spin.value()) * 1000.0
+        end_ms = float(self._highlight_end_spin.value()) * 1000.0
+        if end_ms <= start_ms:
+            end_ms = start_ms + 250.0
+        self.highlight_timing_changed.emit(start_ms, end_ms)
+
+    def set_selected_highlight_timing(
+        self,
+        start_ms: float | None,
+        end_ms: float | None = None,
+        duration_ms: float = 0.0,
+    ) -> None:
+        """Reflect selected highlight timing in the Highlights section."""
+        has_selection = start_ms is not None and end_ms is not None
+        for spin in (self._highlight_start_spin, self._highlight_end_spin):
+            spin.blockSignals(True)
+            spin.setEnabled(has_selection)
+            spin.setMaximum(max(1.0, float(duration_ms or 0.0) / 1000.0))
+        self._btn_delete_highlight.setEnabled(has_selection)
+        if has_selection:
+            self._highlight_start_spin.setValue(max(0.0, float(start_ms) / 1000.0))
+            self._highlight_end_spin.setValue(max(0.0, float(end_ms) / 1000.0))
+            self._highlight_status.setText("Drag the highlight to move it, or drag a handle to resize it.")
+            self._highlight_section.expand()
+        else:
+            self._highlight_start_spin.setValue(0.0)
+            self._highlight_end_spin.setValue(0.0)
+            self._highlight_status.setText("Click the preview after choosing Place highlight.")
+        for spin in (self._highlight_start_spin, self._highlight_end_spin):
+            spin.blockSignals(False)
 
     def set_range_actions_enabled(self, has_selection: bool, can_paste: bool = False) -> None:
         """Enable selected-range editing buttons from the editor window."""

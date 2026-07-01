@@ -191,16 +191,24 @@ class EditorWindow(QWidget):
         self._editor.frame_changed.connect(self._on_frame_changed)
         self._editor.click_effect_changed.connect(self._on_click_effect_changed)
         self._editor.output_dimensions_changed.connect(self._on_output_dimensions_changed)
+        self._editor.ai_zoom_requested.connect(self._on_ai_zoom_requested)
+        self._editor.generate_narration_requested.connect(self._on_generate_narration_requested)
+        self._editor.generate_chapters_requested.connect(self._on_generate_chapters_requested)
         self._editor.segment_speed_changed.connect(self._on_segment_speed_changed)
         self._editor.segment_cut_requested.connect(self._on_segment_cut_requested)
         self._editor.segment_copy_requested.connect(self._on_segment_copy_requested)
         self._editor.segment_paste_requested.connect(self._on_segment_paste_requested)
         self._editor.segment_delete_requested.connect(self._on_segment_delete_requested)
         self._editor.highlight_add_requested.connect(self._on_highlight_add_requested)
+        self._editor.highlight_timing_changed.connect(self._on_highlight_timing_changed)
+        self._editor.highlight_delete_requested.connect(self._on_highlight_delete_requested)
         self._editor.undo_requested.connect(self._on_undo_requested)
         self._editor.redo_requested.connect(self._on_redo_requested)
         self._preview.play_pause_requested.connect(self._toggle_playback)
         self._preview.highlight_picked.connect(self._on_highlight_picked)
+        self._preview.highlight_selected.connect(self._on_highlight_selected)
+        self._preview.annotation_dragged.connect(self._on_annotation_dragged)
+        self._preview.highlight_resized.connect(self._on_highlight_resized)
         self._timeline.segment_selected.connect(self._on_segment_selected)
         self._timeline.split_requested.connect(self._on_split_requested)
         self._timeline.range_selection_requested.connect(self._on_range_selection_requested)
@@ -221,9 +229,12 @@ class EditorWindow(QWidget):
         self._selected_video_segment_index = -1
         self._video_segment_clipboard: VideoSegment | None = None
         self._pending_highlight_shape = "rect"
+        self._selected_highlight_id = ""
         self._timeline_drag_undo_pushed = False
         self._export_process: QProcess | None = None
         self._export_dialog: ExportProgressDialog | None = None
+        self._ai_worker = None
+        self._ai_task = ""
         
         self._load_project()
         
@@ -302,6 +313,7 @@ class EditorWindow(QWidget):
                 voiceover_segments=self._session.voiceover_segments if hasattr(self._session, 'voiceover_segments') else None,
                 video_segments=self._session.video_segments if hasattr(self._session, 'video_segments') else None
             )
+            self._timeline.chapters = self._session.chapters or []
             if self._session.video_segments:
                 self._sync_video_segments(0, save=False)
             self._refresh_editor_info()
@@ -383,7 +395,7 @@ class EditorWindow(QWidget):
             self._session.click_events,
         )
         self._refresh_zoom_timeline(save=False)
-        self._preview.set_highlights(self._session.highlights)
+        self._sync_highlights(save=False)
         self._sync_video_segments(self._selected_video_segment_index, save=False)
         self._refresh_editor_info()
         self._update_undo_redo_controls()
@@ -416,10 +428,183 @@ class EditorWindow(QWidget):
             voiceover_segments=self._session.voiceover_segments if hasattr(self._session, "voiceover_segments") else None,
             video_segments=self._session.video_segments if hasattr(self._session, "video_segments") else None,
         )
+        self._timeline.chapters = self._session.chapters or []
         self._on_playback_time_changed(getattr(self._preview, "_current_time_ms", 0.0))
         self._refresh_editor_info()
         if save:
             self._save_project()
+
+    def _load_ai_settings(self):
+        from PySide6.QtCore import QSettings
+        from ..ai_service import AISettings
+        from ..credentials import unprotect
+
+        settings = QSettings("zumly", "zumly")
+        return AISettings(
+            endpoint=settings.value("ai/endpoint", "") or "",
+            api_key=unprotect(settings.value("ai/apiKey", "") or ""),
+            chat_model=settings.value("ai/chatModel", "") or "",
+            narration_model=settings.value("ai/narrationModel", "gpt-5.4") or "gpt-5.4",
+            tts_voice=settings.value("ai/ttsVoice", "en-US-Ava:DragonHDLatestNeural") or "en-US-Ava:DragonHDLatestNeural",
+        )
+
+    def _base_ai_kwargs(self) -> dict:
+        if not self._session:
+            return {}
+        return {
+            "video_path": self._project_data.get("videoPath", ""),
+            "mouse_track": self._session.mouse_track or [],
+            "monitor_rect": self._project_data.get("monitorRect", {}),
+            "duration_ms": float(getattr(self._preview, "_video_duration_ms", self._session.duration) or self._session.duration),
+            "key_events": self._session.key_events,
+            "click_events": self._session.click_events,
+            "zoom_keyframes": self._session.keyframes or [],
+            "frame_timestamps": self._session.frame_timestamps,
+        }
+
+    def _start_ai_worker(self, task: str):
+        if not self._session:
+            return None
+        if self._ai_worker and self._ai_worker.isRunning():
+            self._set_ai_task_status(task, "Another AI task is already running.")
+            return None
+
+        from ..ai_service import AIWorker
+
+        worker = AIWorker(self)
+        worker.zoom_result.connect(self._on_ai_zoom_result)
+        worker.chapters_result.connect(self._on_ai_chapters_result)
+        worker.narration_result.connect(self._on_ai_narration_result)
+        worker.tts_result.connect(self._on_ai_tts_result)
+        worker.error.connect(self._on_ai_error)
+        worker.status.connect(self._on_ai_status)
+        worker.finished.connect(self._on_ai_finished)
+        self._ai_worker = worker
+        self._ai_task = task
+        self._editor.set_ai_busy(True)
+        return worker
+
+    def _set_ai_task_status(self, task: str, text: str) -> None:
+        if task == "zoom":
+            self._editor.set_ai_zoom_status(text)
+        elif task == "chapters":
+            self._editor.set_chapters_status(text)
+        elif task == "narration":
+            self._editor.set_narration_status(text)
+        elif task == "tts":
+            self._editor.set_voiceover_status(text)
+
+    def _on_ai_status(self, text: str) -> None:
+        self._set_ai_task_status(self._ai_task, text)
+        self._editor.set_ai_busy(True)
+
+    def _on_ai_error(self, task: str, message: str) -> None:
+        logger.error("AI %s failed: %s", task, message)
+        self._set_ai_task_status(task, f"AI {task} failed: {message}")
+
+    def _on_ai_finished(self) -> None:
+        if self._ai_worker:
+            self._ai_worker.deleteLater()
+        self._ai_worker = None
+        self._ai_task = ""
+        self._editor.set_ai_busy(False)
+
+    def _on_ai_zoom_requested(self, max_clusters: int, zoom_level: float, min_gap_ms: int) -> None:
+        settings = self._load_ai_settings()
+        if not settings.chat_configured:
+            self._editor.set_ai_zoom_status("Open AI Settings and add endpoint, key, and chat model.")
+            return
+        worker = self._start_ai_worker("zoom")
+        if not worker:
+            return
+        worker.run_zoom_analysis(
+            settings,
+            mouse_track=self._session.mouse_track or [],
+            monitor_rect=self._project_data.get("monitorRect", {}),
+            duration_ms=float(getattr(self._preview, "_video_duration_ms", self._session.duration) or self._session.duration),
+            key_events=self._session.key_events,
+            click_events=self._session.click_events,
+            max_clusters=max_clusters,
+            zoom_level=zoom_level,
+            min_gap_ms=min_gap_ms,
+        )
+
+    def _on_generate_chapters_requested(self) -> None:
+        settings = self._load_ai_settings()
+        if not settings.narration_configured:
+            self._editor.set_chapters_status("Open AI Settings and add endpoint, key, and narration model.")
+            return
+        worker = self._start_ai_worker("chapters")
+        if not worker:
+            return
+        worker.run_chapters(settings, **self._base_ai_kwargs())
+
+    def _on_generate_narration_requested(self, voice: str, guidance: str) -> None:
+        settings = self._load_ai_settings()
+        if not settings.narration_configured:
+            self._editor.set_narration_status("Open AI Settings and add endpoint, key, and narration model.")
+            return
+        worker = self._start_ai_worker("narration")
+        if not worker:
+            return
+        kwargs = self._base_ai_kwargs()
+        kwargs.update(
+            {
+                "voice": voice or settings.tts_voice,
+                "synthesize_audio": True,
+                "guidance_prompt": guidance,
+            }
+        )
+        worker.run_narration(settings, **kwargs)
+
+    def _on_ai_zoom_result(self, keyframes: list) -> None:
+        if not self._session:
+            return
+        self._push_undo_snapshot()
+        self._session.keyframes = list(keyframes or [])
+        self._refresh_zoom_timeline(save=True)
+        self._editor.set_ai_zoom_status(f"Generated {len(self._session.keyframes)} AI zoom keyframes.")
+
+    def _on_ai_chapters_result(self, chapters: list) -> None:
+        if not self._session:
+            return
+        manual = [chapter for chapter in (self._session.chapters or []) if not chapter.auto_detected]
+        generated = list(chapters or [])
+        merged = sorted(manual + generated, key=lambda chapter: chapter.timestamp_ms)
+        self._push_undo_snapshot()
+        self._session.chapters = merged
+        self._timeline.chapters = merged
+        self._save_project()
+        self._editor.set_chapters_status(f"Generated {len(generated)} AI chapters.")
+
+    def _on_ai_narration_result(self, result) -> None:
+        if not self._session:
+            return
+        from ..ai_service import replace_generated_narration_segments
+
+        generated = list(getattr(result, "voiceover_segments", []) or [])
+        self._push_undo_snapshot()
+        self._session.voiceover_segments = replace_generated_narration_segments(
+            self._session.voiceover_segments,
+            generated,
+        )
+        self._zoom_engine.voiceover_segments = self._session.voiceover_segments or []
+        self._refresh_zoom_timeline(save=False)
+        self._save_project()
+        script_path = getattr(result, "script_path", "")
+        suffix = f" Script: {script_path}" if script_path else ""
+        self._editor.set_narration_status(f"Generated {len(generated)} narration segments.{suffix}")
+
+    def _on_ai_tts_result(self, segment_id: str, audio_file_path: str) -> None:
+        if not self._session or not self._session.voiceover_segments:
+            return
+        for segment in self._session.voiceover_segments:
+            if segment.id == segment_id:
+                segment.audio_path = audio_file_path
+                break
+        self._refresh_zoom_timeline(save=False)
+        self._save_project()
+        self._editor.set_voiceover_status("Voiceover audio generated.")
 
     def _find_next_zoom_out_keyframe_index(self, start_index: int) -> int:
         if not self._session:
@@ -844,22 +1029,100 @@ class EditorWindow(QWidget):
 
         self._push_undo_snapshot()
         highlights = list(self._session.highlights or [])
-        highlights.append(
-            HighlightBox.create(
-                start_ms=start_ms,
-                end_ms=end_ms,
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-                shape=shape if shape in ("rect", "circle") else "rect",
-            )
+        highlight = HighlightBox.create(
+            start_ms=start_ms,
+            end_ms=end_ms,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            shape=shape if shape in ("rect", "circle") else "rect",
         )
+        highlights.append(highlight)
+        self._session.highlights = highlights
+        self._zoom_engine.highlights = highlights
+        self._selected_highlight_id = highlight.id
+        self._sync_highlights(save=False)
+        self._update_undo_redo_controls()
+        self._save_project()
+
+    def _selected_highlight(self) -> HighlightBox | None:
+        if not self._session or not self._session.highlights:
+            return None
+        selected_id = getattr(self, "_selected_highlight_id", "")
+        return next((hl for hl in self._session.highlights if hl.id == selected_id), None)
+
+    def _sync_highlights(self, save: bool = True) -> None:
+        if not self._session:
+            return
+        highlights = list(self._session.highlights or [])
         self._session.highlights = highlights
         self._zoom_engine.highlights = highlights
         self._preview.set_highlights(highlights)
-        self._update_undo_redo_controls()
-        self._save_project()
+        selected_id = getattr(self, "_selected_highlight_id", "")
+        if selected_id:
+            self._preview.select_highlight(selected_id)
+        selected = self._selected_highlight()
+        if selected and hasattr(self._editor, "set_selected_highlight_timing"):
+            self._editor.set_selected_highlight_timing(
+                selected.start_ms,
+                selected.end_ms,
+                getattr(self._preview, "_video_duration_ms", self._session.duration),
+            )
+        elif hasattr(self._editor, "set_selected_highlight_timing"):
+            self._editor.set_selected_highlight_timing(None)
+        if save:
+            self._save_project()
+
+    def _on_highlight_selected(self, highlight_id: str) -> None:
+        self._selected_highlight_id = highlight_id
+        self._sync_highlights(save=False)
+
+    def _on_annotation_dragged(self, annotation_type: str, annotation_id: str, new_x: float, new_y: float) -> None:
+        if annotation_type != "highlight" or not self._session or not self._session.highlights:
+            return
+        highlight = next((hl for hl in self._session.highlights if hl.id == annotation_id), None)
+        if not highlight:
+            return
+        self._selected_highlight_id = annotation_id
+        highlight.x = max(0.0, min(1.0 - float(highlight.width), float(new_x)))
+        highlight.y = max(0.0, min(1.0 - float(highlight.height), float(new_y)))
+        self._sync_highlights(save=True)
+
+    def _on_highlight_resized(self, highlight_id: str, x: float, y: float, width: float, height: float) -> None:
+        if not self._session or not self._session.highlights:
+            return
+        highlight = next((hl for hl in self._session.highlights if hl.id == highlight_id), None)
+        if not highlight:
+            return
+        self._selected_highlight_id = highlight_id
+        highlight.x = max(0.0, min(1.0, float(x)))
+        highlight.y = max(0.0, min(1.0, float(y)))
+        highlight.width = max(0.03, min(1.0 - highlight.x, float(width)))
+        highlight.height = max(0.03, min(1.0 - highlight.y, float(height)))
+        self._sync_highlights(save=True)
+
+    def _on_highlight_timing_changed(self, start_ms: float, end_ms: float) -> None:
+        highlight = self._selected_highlight()
+        if not highlight:
+            return
+        duration = float(getattr(self._preview, "_video_duration_ms", self._session.duration) or self._session.duration)
+        start = max(0.0, min(float(start_ms), max(duration - 1.0, 0.0)))
+        end = max(start + 250.0, min(float(end_ms), duration if duration > 0 else start + 250.0))
+        highlight.start_ms = start
+        highlight.end_ms = end
+        self._sync_highlights(save=True)
+
+    def _on_highlight_delete_requested(self) -> None:
+        if not self._session or not self._selected_highlight_id:
+            return
+        self._push_undo_snapshot()
+        self._session.highlights = [
+            hl for hl in (self._session.highlights or [])
+            if hl.id != self._selected_highlight_id
+        ]
+        self._selected_highlight_id = ""
+        self._sync_highlights(save=True)
 
     def _save_project(self):
         if not self._project_path or not self._session:

@@ -28,6 +28,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
@@ -1198,90 +1199,96 @@ def _extract_narration_frames(
     if not video_path or not os.path.isfile(video_path):
         raise ValueError("Narration generation requires a readable video file.")
 
-    try:
-        import cv2
-    except ImportError as exc:
-        raise RuntimeError(
-            "opencv-python-headless is required for narration frame extraction."
-        ) from exc
+    from .utils import ffmpeg_exe, subprocess_kwargs
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open video for narration sampling: {video_path}")
+    def _nearest_timestamp_ms(timestamp_ms: float) -> float:
+        if not frame_timestamps:
+            return max(0.0, min(float(timestamp_ms), max(duration_ms, 0.0)))
+        frames = [float(ts) for ts in frame_timestamps if ts is not None]
+        if not frames:
+            return max(0.0, min(float(timestamp_ms), max(duration_ms, 0.0)))
+        idx = bisect.bisect_left(frames, timestamp_ms)
+        candidates = []
+        if idx < len(frames):
+            candidates.append(frames[idx])
+        if idx > 0:
+            candidates.append(frames[idx - 1])
+        return min(candidates, key=lambda ts: abs(ts - timestamp_ms)) if candidates else timestamp_ms
 
-    try:
-        total_frames = int(max(0, cap.get(cv2.CAP_PROP_FRAME_COUNT)))
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        if total_frames <= 0:
-            raise RuntimeError("Video has no readable frames for narration generation.")
+    timestamped_plan: list[tuple[float, NarrationMoment]] = []
+    for moment in frame_plan:
+        sample_ms = round(_nearest_timestamp_ms(moment.timestamp_ms), 1)
+        if timestamped_plan and abs(timestamped_plan[-1][0] - sample_ms) < 1.0:
+            prev_ts, prev_moment = timestamped_plan[-1]
+            if prev_moment.label == "timeline sample" and moment.label != "timeline sample":
+                timestamped_plan[-1] = (prev_ts, moment)
+            continue
+        timestamped_plan.append((sample_ms, moment))
 
-        indexed_plan: list[tuple[int, NarrationMoment]] = []
-        for moment in frame_plan:
-            frame_idx = _resolve_frame_index(
-                moment.timestamp_ms,
-                total_frames,
-                duration_ms,
-                frame_timestamps,
-                fps,
+    extracted: list[ExtractedNarrationFrame] = []
+    ffmpeg = ffmpeg_exe()
+    for sample_ms, moment in timestamped_plan:
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{max(0.0, sample_ms) / 1000.0:.3f}",
+            "-i",
+            video_path,
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=960:960:force_original_aspect_ratio=decrease",
+            "-q:v",
+            "4",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=20,
+                **subprocess_kwargs(),
             )
-            if indexed_plan and indexed_plan[-1][0] == frame_idx:
-                prev_idx, prev_moment = indexed_plan[-1]
-                if prev_moment.label == "timeline sample" and moment.label != "timeline sample":
-                    indexed_plan[-1] = (prev_idx, moment)
-                continue
-            indexed_plan.append((frame_idx, moment))
-
-        extracted: list[ExtractedNarrationFrame] = []
-        for frame_idx, moment in indexed_plan:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                logger.warning(
-                    "Skipping narration frame at %s (frame %d)",
-                    _format_time_label(moment.timestamp_ms),
-                    frame_idx,
-                )
-                continue
-
-            height, width = frame.shape[:2]
-            max_dim = max(height, width)
-            if max_dim > 960:
-                scale = 960.0 / max_dim
-                frame = cv2.resize(
-                    frame,
-                    (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
-                    interpolation=cv2.INTER_AREA,
-                )
-
-            ok, encoded = cv2.imencode(
-                ".jpg",
-                frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), 82],
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Skipping narration frame at %s: FFmpeg timed out",
+                _format_time_label(moment.timestamp_ms),
             )
-            if not ok:
-                raise RuntimeError(
-                    f"Failed to encode narration frame at {moment.timestamp_ms:.0f}ms."
-                )
+            continue
 
-            data_url = (
-                "data:image/jpeg;base64,"
-                + base64.b64encode(encoded.tobytes()).decode("ascii")
+        if result.returncode != 0 or not result.stdout:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            logger.warning(
+                "Skipping narration frame at %s: %s",
+                _format_time_label(moment.timestamp_ms),
+                stderr or f"FFmpeg exited with {result.returncode}",
             )
-            extracted.append(
-                ExtractedNarrationFrame(
-                    timestamp_ms=moment.timestamp_ms,
-                    label=moment.label,
-                    reason=moment.reason,
-                    data_url=data_url,
-                )
+            continue
+
+        data_url = (
+            "data:image/jpeg;base64,"
+            + base64.b64encode(result.stdout).decode("ascii")
+        )
+        extracted.append(
+            ExtractedNarrationFrame(
+                timestamp_ms=moment.timestamp_ms,
+                label=moment.label,
+                reason=moment.reason,
+                data_url=data_url,
             )
+        )
 
-        if not extracted:
-            raise RuntimeError("Narration frame extraction produced no usable frames.")
+    if not extracted:
+        raise RuntimeError("Narration frame extraction produced no usable frames.")
 
-        return extracted
-    finally:
-        cap.release()
+    return extracted
 
 
 def _build_narration_user_content(

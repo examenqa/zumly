@@ -53,6 +53,10 @@ class PreviewWidget(QWidget):
     centroid_dragged = Signal(str, float, float)
     # Signal: (annotation_type, annotation_id, new_x, new_y) — emitted when annotation dragged
     annotation_dragged = Signal(str, str, float, float)
+    # Signal: (highlight_id, x, y, width, height) — emitted while resizing a highlight
+    highlight_resized = Signal(str, float, float, float, float)
+    # Signal: (highlight_id) — emitted when a highlight is selected in the preview
+    highlight_selected = Signal(str)
     # Signal: (pan_x, pan_y, shape) — emitted when highlight placement mode picks a region center
     highlight_picked = Signal(float, float, str)
     
@@ -114,6 +118,8 @@ class PreviewWidget(QWidget):
         self._annot_drag_id: str = ""       # annotation id being dragged
         self._annot_drag_offset_x: float = 0.0  # click offset from position
         self._annot_drag_offset_y: float = 0.0
+        self._highlight_drag_mode: str = ""  # "move" or "resize-*"
+        self._selected_highlight_id: str = ""
 
         # Enable mouse tracking for hover cursor changes
         self.setMouseTracking(True)
@@ -189,6 +195,17 @@ class PreviewWidget(QWidget):
     def set_highlights(self, highlights: List[HighlightBox] | None) -> None:
         """Set active spotlight highlights for preview rendering."""
         self._highlights = list(highlights or [])
+        if self._selected_highlight_id and not any(
+            hl.id == self._selected_highlight_id for hl in self._highlights
+        ):
+            self._selected_highlight_id = ""
+        self.update()
+
+    def select_highlight(self, highlight_id: str) -> None:
+        """Mark a highlight as selected so resize handles remain visible."""
+        self._selected_highlight_id = highlight_id if any(
+            hl.id == highlight_id for hl in self._highlights
+        ) else ""
         self.update()
 
     def set_keystroke_data(self, key_events: list, config) -> None:
@@ -308,11 +325,22 @@ class PreviewWidget(QWidget):
                 event.position().x(), event.position().y()
             )
             if hit:
-                self._annot_drag_type = hit[0]
+                hit_type = hit[0]
+                self._annot_drag_type = hit_type
                 self._annot_drag_id = hit[1]
                 self._annot_drag_offset_x = hit[2]
                 self._annot_drag_offset_y = hit[3]
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                if hit_type.startswith("highlight"):
+                    self._selected_highlight_id = hit[1]
+                    self.highlight_selected.emit(hit[1])
+                    if hit_type.startswith("highlight-resize-"):
+                        self._highlight_drag_mode = hit_type.replace("highlight-", "")
+                        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                    else:
+                        self._highlight_drag_mode = "move"
+                        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                else:
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 return
             self._play_toggle_press_pos = event.position()
         super().mousePressEvent(event)
@@ -334,11 +362,14 @@ class PreviewWidget(QWidget):
                 event.position().x(), event.position().y()
             )
             if pan_x >= 0:
-                new_x = max(0.0, min(1.0, pan_x - self._annot_drag_offset_x))
-                new_y = max(0.0, min(1.0, pan_y - self._annot_drag_offset_y))
-                self.annotation_dragged.emit(
-                    self._annot_drag_type, self._annot_drag_id, new_x, new_y
-                )
+                if self._highlight_drag_mode.startswith("resize"):
+                    self._resize_highlight_drag(self._annot_drag_id, self._highlight_drag_mode, pan_x, pan_y)
+                else:
+                    new_x = max(0.0, min(1.0, pan_x - self._annot_drag_offset_x))
+                    new_y = max(0.0, min(1.0, pan_y - self._annot_drag_offset_y))
+                    self.annotation_dragged.emit(
+                        self._annot_drag_type, self._annot_drag_id, new_x, new_y
+                    )
             return
         # Hover cursor: show open hand when over a centroid marker
         if self._debug_overlay and self._debug_keyframes:
@@ -352,12 +383,15 @@ class PreviewWidget(QWidget):
         # Hover cursor: show open hand when over a draggable annotation
         elif self._highlight_pick_shape:
             self.setCursor(Qt.CursorShape.CrossCursor)
-        elif self._annotations is not None:
+        elif self._annotations is not None or self._highlights:
             hit = self._annotation_hit_test(
                 event.position().x(), event.position().y()
             )
             if hit:
-                self.setCursor(Qt.CursorShape.OpenHandCursor)
+                if hit[0].startswith("highlight-resize-"):
+                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                else:
+                    self.setCursor(Qt.CursorShape.OpenHandCursor)
             elif not self._centroid_pick_mode:
                 self.unsetCursor()
         super().mouseMoveEvent(event)
@@ -381,6 +415,7 @@ class PreviewWidget(QWidget):
             self._annot_drag_id = ""
             self._annot_drag_offset_x = 0.0
             self._annot_drag_offset_y = 0.0
+            self._highlight_drag_mode = ""
             self.unsetCursor()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._play_toggle_press_pos is not None:
@@ -820,7 +855,7 @@ class PreviewWidget(QWidget):
 
         Check order: text (topmost) -> arrows -> highlights (bottommost).
         """
-        if self._annotations is None:
+        if self._annotations is None and not self._highlights:
             return None
 
         cx, cy, W, H, scr_x, scr_y, scr_w, scr_h = self._screen_geometry()
@@ -836,7 +871,7 @@ class PreviewWidget(QWidget):
         HIT_RADIUS_NORM = 10.0 / max(scr_w, 1)  # ~10px in normalized space
 
         # Text annotations (front layer -- checked first)
-        if self._annotations.texts:
+        if self._annotations and self._annotations.texts:
             for text_ann in reversed(self._annotations.texts):
                 if not (text_ann.start_ms <= t <= text_ann.end_ms):
                     continue
@@ -849,7 +884,7 @@ class PreviewWidget(QWidget):
                             nx - text_ann.x, ny - text_ann.y)
 
         # Arrow annotations (middle layer)
-        if self._annotations.arrows:
+        if self._annotations and self._annotations.arrows:
             for arrow in reversed(self._annotations.arrows):
                 if not (arrow.start_ms <= t <= arrow.end_ms):
                     continue
@@ -863,17 +898,77 @@ class PreviewWidget(QWidget):
                     return ("arrow", arrow.id,
                             nx - mid_x, ny - mid_y)
 
-        # Highlight annotations (back layer -- checked last)
-        if self._annotations.highlights:
-            for hl in reversed(self._annotations.highlights):
-                if not (hl.start_ms <= t <= hl.end_ms):
+        # Highlight annotations (back layer -- checked last).  Zumly keeps
+        # current spotlight highlights in _highlights, while legacy annotation
+        # bundles may also contain highlights.
+        highlights: List[HighlightBox] = []
+        if self._annotations and self._annotations.highlights:
+            highlights.extend(self._annotations.highlights)
+        highlights.extend(self._highlights)
+        if highlights:
+            handle_x = 12.0 / max(scr_w, 1)
+            handle_y = 12.0 / max(scr_h, 1)
+            for hl in reversed(highlights):
+                selected = hl.id == self._selected_highlight_id
+                visible = float(hl.start_ms) <= t <= float(hl.end_ms)
+                if not visible and not selected:
                     continue
-                if (hl.x <= nx <= hl.x + hl.width
-                        and hl.y <= ny <= hl.y + hl.height):
-                    return ("highlight", hl.id,
-                            nx - hl.x, ny - hl.y)
+                left = float(hl.x)
+                top = float(hl.y)
+                right = left + float(hl.width)
+                bottom = top + float(hl.height)
+                near_left = abs(nx - left) <= handle_x
+                near_right = abs(nx - right) <= handle_x
+                near_top = abs(ny - top) <= handle_y
+                near_bottom = abs(ny - bottom) <= handle_y
+                if selected:
+                    if near_right and near_bottom:
+                        return ("highlight-resize-se", hl.id, 0.0, 0.0)
+                    if near_left and near_bottom:
+                        return ("highlight-resize-sw", hl.id, 0.0, 0.0)
+                    if near_right and near_top:
+                        return ("highlight-resize-ne", hl.id, 0.0, 0.0)
+                    if near_left and near_top:
+                        return ("highlight-resize-nw", hl.id, 0.0, 0.0)
+                    if near_right and top <= ny <= bottom:
+                        return ("highlight-resize-e", hl.id, 0.0, 0.0)
+                    if near_left and top <= ny <= bottom:
+                        return ("highlight-resize-w", hl.id, 0.0, 0.0)
+                    if near_bottom and left <= nx <= right:
+                        return ("highlight-resize-s", hl.id, 0.0, 0.0)
+                    if near_top and left <= nx <= right:
+                        return ("highlight-resize-n", hl.id, 0.0, 0.0)
+                if left <= nx <= right and top <= ny <= bottom:
+                    return ("highlight", hl.id, nx - left, ny - top)
 
         return None
+
+    def _resize_highlight_drag(self, highlight_id: str, mode: str, pan_x: float, pan_y: float) -> None:
+        """Resize a selected highlight from a preview drag handle."""
+        highlight = next((hl for hl in self._highlights if hl.id == highlight_id), None)
+        if not highlight:
+            return
+
+        min_size = 0.03
+        left = float(highlight.x)
+        top = float(highlight.y)
+        right = left + float(highlight.width)
+        bottom = top + float(highlight.height)
+
+        if "w" in mode:
+            left = max(0.0, min(pan_x, right - min_size))
+        if "e" in mode:
+            right = min(1.0, max(pan_x, left + min_size))
+        if "n" in mode:
+            top = max(0.0, min(pan_y, bottom - min_size))
+        if "s" in mode:
+            bottom = min(1.0, max(pan_y, top + min_size))
+
+        new_x = max(0.0, min(1.0 - min_size, left))
+        new_y = max(0.0, min(1.0 - min_size, top))
+        new_w = max(min_size, min(1.0 - new_x, right - left))
+        new_h = max(min_size, min(1.0 - new_y, bottom - top))
+        self.highlight_resized.emit(highlight_id, new_x, new_y, new_w, new_h)
 
     @staticmethod
     def _point_to_segment_dist(
@@ -1008,6 +1103,7 @@ class PreviewWidget(QWidget):
         active = [
             hl for hl in self._highlights
             if float(hl.start_ms) <= self._current_time_ms <= float(hl.end_ms)
+            or hl.id == self._selected_highlight_id
         ]
         if not active:
             return
@@ -1036,12 +1132,30 @@ class PreviewWidget(QWidget):
 
             color = QColor(*hl.color)
             color.setAlpha(max(80, min(255, int(255 * max(0.1, min(1.0, hl.opacity))))))
-            painter.setPen(QPen(color, max(2, int(hl.border_width))))
+            selected = hl.id == self._selected_highlight_id
+            painter.setPen(QPen(color, max(3 if selected else 2, int(hl.border_width))))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             if getattr(hl, "shape", "rect") == "circle":
                 painter.drawEllipse(rect)
             else:
                 painter.drawRoundedRect(rect, 8, 8)
+            if selected:
+                self._draw_highlight_handles(painter, rect)
+
+    def _draw_highlight_handles(self, painter: QPainter, rect: QRectF) -> None:
+        """Draw resize handles for the selected preview highlight."""
+        handle = 8.0
+        points = [
+            rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight(),
+            QPointF(rect.center().x(), rect.top()),
+            QPointF(rect.center().x(), rect.bottom()),
+            QPointF(rect.left(), rect.center().y()),
+            QPointF(rect.right(), rect.center().y()),
+        ]
+        painter.setPen(QPen(QColor(T.BRAND), 1))
+        painter.setBrush(QColor(255, 255, 255, 235))
+        for point in points:
+            painter.drawRect(QRectF(point.x() - handle / 2, point.y() - handle / 2, handle, handle))
 
     def _draw_highlight_pick_banner(self, painter: QPainter) -> None:
         text = "Click the preview to place the highlight"
