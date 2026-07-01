@@ -1,10 +1,10 @@
 mss>=10.2.0,<11
 imageio-ffmpeg>=0.6.0,<0.7
 windows-capture>=2.0.0,<3
-numpy>=2.0.0,<3
+numpy>=2.5.0,<3
 opencv-python>=4.13.0.92,<5
 PySide6>=6.11.1,<7
-Pillow>=12.2.0,<13
+Pillow>=12.3.0,<13
 pystray>=0.19.5,<0.20
 azure-ai-inference>=1.0.0b9,<2
 azure-cognitiveservices-speech>=1.50.0,<2
